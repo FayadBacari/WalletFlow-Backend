@@ -1,0 +1,7 @@
+﻿services:
+  walletflow-backend:
+    image: walletflow-backend
+    build:
+      context: .
+      dockerfile: src/WalletFlow.Api/Dockerfile
+

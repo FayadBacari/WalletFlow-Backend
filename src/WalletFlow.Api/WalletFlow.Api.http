@@ -1,0 +1,7 @@
+@WalletFlow_Api_HostAddress = http://localhost:5150
+
+# Description OpenAPI de l'API (en développement seulement)
+GET {{WalletFlow_Api_HostAddress}}/openapi/v1.json
+Accept: application/json
+
+###
