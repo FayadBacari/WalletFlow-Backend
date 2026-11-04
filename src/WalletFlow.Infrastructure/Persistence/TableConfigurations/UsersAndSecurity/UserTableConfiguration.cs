@@ -28,14 +28,21 @@ public class UserTableConfiguration : IEntityTypeConfiguration<User>
         // inscription pourrait remplacer le mot de passe d'un compte confirmé au même instant.
         builderOfTheUserTableMapping.Property(nameof(User.IsEmailConfirmed)).HasColumnName("email_confirme").IsConcurrencyToken();
 
-
         builderOfTheUserTableMapping.Property(nameof(User.IsTwoFactorEnabled)).HasColumnName("double_auth_activee");
         builderOfTheUserTableMapping.Property(nameof(User.EncryptedTotpSecret)).HasColumnName("secret_totp_chiffre");
         builderOfTheUserTableMapping.Property(nameof(User.NotificationChannel)).HasColumnName("canal_notification")
             .HasConversion(NotificationChannelDatabaseCodes.ConverterBetweenNotificationChannelAndDatabaseCode);
-        builderOfTheUserTableMapping.Property(nameof(User.FailedLoginAttemptCount)).HasColumnName("nb_tentatives_echouees");
+
+        // Même contrôle pour les essais de connexion : sans lui, 100 requêtes simultanées liraient toutes
+        // « 0 essai » et écriraient toutes « 1 essai », et le compte ne se bloquerait jamais.
+        builderOfTheUserTableMapping.Property(nameof(User.FailedLoginAttemptCount)).HasColumnName("nb_tentatives_echouees").IsConcurrencyToken();
+
         builderOfTheUserTableMapping.Property(nameof(User.LockoutCount)).HasColumnName("nb_blocages");
-        builderOfTheUserTableMapping.Property(nameof(User.LockoutEndsAt)).HasColumnName("date_fin_blocage");
+
+        // La date de fin est contrôlée aussi : à chaque blocage, le compteur revient à 5. Une requête qui a lu
+        // le blocage précédent verrait le même compteur, et effacerait le nouveau blocage (vu dans une vraie course).
+        builderOfTheUserTableMapping.Property(nameof(User.LockoutEndsAt)).HasColumnName("date_fin_blocage").IsConcurrencyToken();
+
         builderOfTheUserTableMapping.Property(nameof(User.DeletionRequestedAt)).HasColumnName("date_demande_suppression");
     }
 }

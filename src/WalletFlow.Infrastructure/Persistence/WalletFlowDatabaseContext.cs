@@ -46,6 +46,22 @@ public class WalletFlowDatabaseContext : DbContext
     public DbSet<SupportRequest> SupportRequests => Set<SupportRequest>();
     public DbSet<SupportResponse> SupportResponses => Set<SupportResponse>();
 
+    // Enregistre les changements. Renvoie faux si une autre requête vient de modifier ou d'effacer les mêmes lignes :
+    // EF Core annule alors toute la transaction, et les objets sont oubliés pour pouvoir tout relire.
+    public async Task<bool> TryToSaveChangesUnlessAnotherRequestChangedTheSameRowsAsync()
+    {
+        try
+        {
+            await SaveChangesAsync();
+            return true;
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            ChangeTracker.Clear();
+            return false;
+        }
+    }
+
     // Applique la correspondance de chaque entité avec sa table (nom imposé par le framework).
     protected override void OnModelCreating(ModelBuilder builderOfTheCompleteDatabaseModel)
     {

@@ -5,6 +5,30 @@ namespace WalletFlow.Tests.Domain;
 // Vérifie les règles du mot de passe (GR Auth, SS §2).
 public class PasswordRulesTests
 {
+    // Tapé sur deux appareils différents, le même mot de passe donne le même résultat (SS §2).
+    [Fact]
+    public void ComposedAndDecomposedAccentsGiveTheSameNormalizedPassword()
+    {
+        var passwordTypedWithOneComposedAccent = "Mot-De-Passé-1";
+        var passwordTypedWithOneDecomposedAccent = "Mot-De-Passé-1";
+
+        Assert.NotEqual(passwordTypedWithOneComposedAccent, passwordTypedWithOneDecomposedAccent);
+        Assert.Equal(passwordTypedWithOneComposedAccent, PasswordRules.ConvertPasswordIntoItsNormalizedForm(passwordTypedWithOneDecomposedAccent));
+        Assert.Equal(passwordTypedWithOneComposedAccent, PasswordRules.ConvertPasswordIntoItsNormalizedForm(passwordTypedWithOneComposedAccent));
+    }
+
+    // .NET lève une erreur sur ces caractères : sans ce contrôle, ils provoqueraient une erreur 500 à la connexion.
+    [Theory]
+    [InlineData(0xFFFE)] // caractère interdit par Unicode
+    [InlineData(0xD800)] // moitié d'emoji seule
+    [InlineData(0xDC00)] // autre moitié d'emoji seule
+    public void TextThatCannotBeNormalizedIsKeptWithoutAnyError(int codeOfTheCharacterThatCannotBeNormalized)
+    {
+        var passwordTextThatCannotBeNormalized = "Abcdefghij1!" + (char)codeOfTheCharacterThatCannotBeNormalized;
+
+        Assert.Equal(passwordTextThatCannotBeNormalized, PasswordRules.ConvertPasswordIntoItsNormalizedForm(passwordTextThatCannotBeNormalized));
+    }
+
     [Theory]
     [InlineData("Abcdefghij1!")] // exactement 12 caractères
     [InlineData("Abcdefghij 1")] // une espace compte comme caractère spécial

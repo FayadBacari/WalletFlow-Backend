@@ -29,6 +29,19 @@ public class FakeUserAccountRepository : IUserAccountRepository
     // Simule une panne de la base pendant l'effacement des comptes non confirmés.
     public bool DatabaseIsDownDuringTheCleanup { get; set; } = false;
 
+    // Simule d'autres requêtes qui comptent leur essai juste avant l'enregistrement : chacune provoque un conflit.
+    public int NumberOfConflictsBeforeTheLoginCountersAreSaved { get; set; } = 0;
+
+    // Simule un compte effacé pendant la connexion : au-delà de ce nombre de recherches par identifiant, il n'existe plus.
+    public int? NumberOfSearchesByIdentifierBeforeTheAccountDisappears { get; set; } = null;
+
+    public int NumberOfSearchesByEmailAddress { get; private set; } = 0;
+    public int NumberOfLoginCountersSaved { get; private set; } = 0;
+
+    private short failedAttemptsReadBeforeTheSaveOfTheCounters = 0;
+    private short lockoutCountReadBeforeTheSaveOfTheCounters = 0;
+    private DateTime? lockoutEndReadBeforeTheSaveOfTheCounters = null;
+
     // Cherche en mémoire le compte qui utilise cette adresse.
     public Task<User?> FindUserAccountByEmailAddressAsync(string emailAddressInItsStoredForm)
     {
@@ -36,6 +49,8 @@ public class FakeUserAccountRepository : IUserAccountRepository
         {
             throw new InvalidOperationException(TechnicalDetailOfTheSimulatedDatabaseFailure);
         }
+
+        NumberOfSearchesByEmailAddress = NumberOfSearchesByEmailAddress + 1;
 
         foreach (var userAlreadyKeptInThisMemoryList in SavedUsers)
         {
@@ -51,15 +66,43 @@ public class FakeUserAccountRepository : IUserAccountRepository
     // Cherche en mémoire un compte par son identifiant.
     public Task<User?> FindUserAccountByIdentifierAsync(Guid identifierOfTheUserAccountToFind)
     {
+        if (NumberOfSearchesByIdentifierBeforeTheAccountDisappears == 0)
+        {
+            return Task.FromResult<User?>(null);
+        }
+
+        NumberOfSearchesByIdentifierBeforeTheAccountDisappears = NumberOfSearchesByIdentifierBeforeTheAccountDisappears - 1;
+
         foreach (var userAlreadyKeptInThisMemoryList in SavedUsers)
         {
             if (userAlreadyKeptInThisMemoryList.Id == identifierOfTheUserAccountToFind)
             {
+                failedAttemptsReadBeforeTheSaveOfTheCounters = userAlreadyKeptInThisMemoryList.FailedLoginAttemptCount;
+                lockoutCountReadBeforeTheSaveOfTheCounters = userAlreadyKeptInThisMemoryList.LockoutCount;
+                lockoutEndReadBeforeTheSaveOfTheCounters = userAlreadyKeptInThisMemoryList.LockoutEndsAt;
+
                 return Task.FromResult<User?>(userAlreadyKeptInThisMemoryList);
             }
         }
 
         return Task.FromResult<User?>(null);
+    }
+
+    // Comme la vraie base, un conflit annule ce que la requête voulait écrire : le compte repart des valeurs lues,
+    // plus l'essai compté par l'autre requête.
+    public Task<bool> TryToSaveLoginCountersOfThisAccountAsync(User accountWithItsNewLoginCounters)
+    {
+        if (NumberOfConflictsBeforeTheLoginCountersAreSaved > 0)
+        {
+            NumberOfConflictsBeforeTheLoginCountersAreSaved = NumberOfConflictsBeforeTheLoginCountersAreSaved - 1;
+            accountWithItsNewLoginCounters.FailedLoginAttemptCount = (short)(failedAttemptsReadBeforeTheSaveOfTheCounters + 1);
+            accountWithItsNewLoginCounters.LockoutCount = lockoutCountReadBeforeTheSaveOfTheCounters;
+            accountWithItsNewLoginCounters.LockoutEndsAt = lockoutEndReadBeforeTheSaveOfTheCounters;
+            return Task.FromResult(false);
+        }
+
+        NumberOfLoginCountersSaved = NumberOfLoginCountersSaved + 1;
+        return Task.FromResult(true);
     }
 
     // Cherche en mémoire un jeton de confirmation d'inscription par son empreinte.

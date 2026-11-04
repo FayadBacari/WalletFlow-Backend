@@ -1,8 +1,13 @@
+using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc.Authorization;
+using WalletFlow.Api.Authentication;
 using WalletFlow.Api.BackgroundTasks;
 using WalletFlow.Api.Configuration;
 using WalletFlow.Api.Middlewares;
 using WalletFlow.Application.Configuration;
 using WalletFlow.Application.UserAccounts;
+using WalletFlow.Application.UserSessions;
 using WalletFlow.Infrastructure;
 
 // Prépare l'application web de l'API WalletFlow.
@@ -44,17 +49,37 @@ builderOfTheWalletFlowWebApplication.Services.AddSingleton(
 builderOfTheWalletFlowWebApplication.Services.AddScoped<AccountRegistrationService>();
 builderOfTheWalletFlowWebApplication.Services.AddScoped<AccountConfirmationService>();
 builderOfTheWalletFlowWebApplication.Services.AddScoped<UnconfirmedAccountsCleanupService>();
+builderOfTheWalletFlowWebApplication.Services.AddScoped<AccountLoginService>();
+builderOfTheWalletFlowWebApplication.Services.AddScoped<UserSessionService>();
+builderOfTheWalletFlowWebApplication.Services.AddScoped<ExpiredUserSessionsCleanupService>();
 
-// Tâche de fond : efface chaque jour les comptes non confirmés dont le lien a expiré (GR Auth).
+// Tâches de fond : effacent chaque jour les comptes non confirmés dont le lien a expiré (GR Auth) et les sessions expirées.
 builderOfTheWalletFlowWebApplication.Services.AddHostedService<UnconfirmedAccountsCleanupBackgroundService>();
+builderOfTheWalletFlowWebApplication.Services.AddHostedService<ExpiredUserSessionsCleanupBackgroundService>();
 
 // Limites de débit des points d'entrée sensibles (SS §6).
 builderOfTheWalletFlowWebApplication.Services.AddWalletFlowRateLimitingToTheServices();
 
+// L'utilisateur est reconnu par son cookie de session, gardée côté serveur (SS §3).
+builderOfTheWalletFlowWebApplication.Services
+    .AddAuthentication(UserSessionAuthenticationHandler.NameOfTheUserSessionAuthenticationScheme)
+    .AddScheme<AuthenticationSchemeOptions, UserSessionAuthenticationHandler>(UserSessionAuthenticationHandler.NameOfTheUserSessionAuthenticationScheme, null);
+builderOfTheWalletFlowWebApplication.Services.AddAuthorization();
+
+// Jeton anti-CSRF fourni par ASP.NET Core (SS §6).
+builderOfTheWalletFlowWebApplication.Services.AddAntiforgery(AntiforgeryConfiguration.ApplyOptionsOfTheCsrfToken);
+
 // Les contrôleurs reçoivent les requêtes HTTP et appellent la couche Application.
 // Une requête refusée reçoit toujours le même format d'erreur, sans aucun nom interne du code (SS §10).
+// AddControllersWithViews plutôt que AddControllers : le filtre anti-CSRF d'ASP.NET Core en fait partie. L'API n'a aucune vue.
 builderOfTheWalletFlowWebApplication.Services
-    .AddControllers()
+    .AddControllersWithViews(optionsOfTheControllersOfTheApi =>
+    {
+        // Toute route demande une session et le jeton anti-CSRF, même si on oublie de le demander :
+        // une route publique doit le dire avec [AllowAnonymous] et [IgnoreAntiforgeryToken] (SS §4 et §6).
+        optionsOfTheControllersOfTheApi.Filters.Add(new AuthorizeFilter());
+        optionsOfTheControllersOfTheApi.Filters.Add(new AutoValidateAntiforgeryTokenAttribute());
+    })
     .ConfigureApiBehaviorOptions(optionsOfTheAutomaticControllerBehavior =>
     {
         optionsOfTheAutomaticControllerBehavior.InvalidModelStateResponseFactory = ApiErrorConfiguration.CreateAnswerForTheRefusedRequest;
@@ -107,8 +132,12 @@ walletFlowWebApplicationReadyToHandleRequests.UseStatusCodePages();
 // Redirige toute requête HTTP vers HTTPS (SS §7).
 walletFlowWebApplicationReadyToHandleRequests.UseHttpsRedirection();
 
-// Applique les limites de débit (SS §6).
+// Applique les limites de débit (SS §6), avant toute lecture de la base.
 walletFlowWebApplicationReadyToHandleRequests.UseRateLimiter();
+
+// Reconnaît l'utilisateur à partir de son cookie, puis applique le contrôle d'accès (SS §3 et §4).
+walletFlowWebApplicationReadyToHandleRequests.UseAuthentication();
+walletFlowWebApplicationReadyToHandleRequests.UseAuthorization();
 
 // Relie chaque route à son contrôleur.
 walletFlowWebApplicationReadyToHandleRequests.MapControllers();

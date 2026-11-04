@@ -63,6 +63,42 @@ public class RegistrationRequestSizeLimitTests
         Assert.Equal(HttpStatusCode.RequestEntityTooLarge, answerToTheRequestThatIsTooBig.StatusCode);
     }
 
+    // La route de connexion a la même limite : le mot de passe saisi n'arrive jamais au hachage s'il est géant.
+    [Fact]
+    public async Task LoginRequestBiggerThanTheLimitIsRefusedWithPayloadTooLarge()
+    {
+        using var apiStartedOnTheRealKestrelServer = new ApiFactoryRunningLikeInProduction();
+        apiStartedOnTheRealKestrelServer.UseKestrel();
+        var clientThatCallsTheRealKestrelServer = apiStartedOnTheRealKestrelServer.CreateClient();
+        var bodyBiggerThanTheRequestSizeLimit = "{\"email\":\"utilisateur@exemple.test\",\"password\":\"" + new string('a', 5000) + "\"}";
+
+        var answerToTheRequestThatIsTooBig = await clientThatCallsTheRealKestrelServer.PostAsync(
+            LoginRequestTestValues.AddressOfTheAccountLoginEndpoint,
+            new StringContent(bodyBiggerThanTheRequestSizeLimit, Encoding.UTF8, "application/json"));
+
+        Assert.Equal(HttpStatusCode.RequestEntityTooLarge, answerToTheRequestThatIsTooBig.StatusCode);
+        Assert.Empty(apiStartedOnTheRealKestrelServer.RepositoryThatKeepsSecurityEventsInMemory.SavedSecurityEvents);
+    }
+
+    // Le plus long mot de passe permis passe sur la route de connexion.
+    [Fact]
+    public async Task BiggestValidLoginRequestStaysUnderTheLimit()
+    {
+        using var apiStartedOnTheRealKestrelServer = new ApiFactoryRunningLikeInProduction();
+        apiStartedOnTheRealKestrelServer.UseKestrel();
+        var clientThatCallsTheRealKestrelServer = apiStartedOnTheRealKestrelServer.CreateClient();
+        var longestEmailAddressAllowedByTheRules = new string('a', 64) + "@" + new string('b', 63) + "." + new string('c', 63) + "." + new string('d', 58) + ".fr";
+        var longestValidPasswordWrittenWithEscapes = "Aa1!" + string.Concat(Enumerable.Repeat("\\ud83d\\ude00", 124));
+        var bodyOfTheBiggestValidRequest = "{\"email\":\"" + longestEmailAddressAllowedByTheRules + "\",\"password\":\"" + longestValidPasswordWrittenWithEscapes + "\"}";
+
+        var answerToTheBiggestValidRequest = await clientThatCallsTheRealKestrelServer.PostAsync(
+            LoginRequestTestValues.AddressOfTheAccountLoginEndpoint,
+            new StringContent(bodyOfTheBiggestValidRequest, Encoding.UTF8, "application/json"));
+
+        // Le compte n'existe pas : la requête a donc bien été lue jusqu'au bout, sans erreur de taille.
+        Assert.Equal(HttpStatusCode.Unauthorized, answerToTheBiggestValidRequest.StatusCode);
+    }
+
     // Le plus long jeton réel et le plus long mot de passe permis passent sur la route de confirmation.
     [Fact]
     public async Task BiggestValidConfirmationRequestStaysUnderTheLimit()

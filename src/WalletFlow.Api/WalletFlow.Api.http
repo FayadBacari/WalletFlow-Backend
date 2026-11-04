@@ -1,5 +1,8 @@
 @WalletFlow_Api_HostAddress = http://localhost:5150
 
+# Les cookies de connexion sont Secure : la connexion et les routes suivantes s'essaient avec le profil https.
+@WalletFlow_Api_SecureAddress = https://localhost:7078
+
 # Description OpenAPI de l'API (en développement seulement)
 GET {{WalletFlow_Api_HostAddress}}/openapi/v1.json
 Accept: application/json
@@ -25,5 +28,28 @@ Content-Type: application/json
   "token": "colle-ici-le-jeton-du-lien",
   "password": "Exemple-De-Mot-De-Passe-1"
 }
+
+###
+
+# Connexion (GR Auth) : la réponse écrit le cookie de session et le cookie d'appareil.
+POST {{WalletFlow_Api_SecureAddress}}/api/account/login
+Content-Type: application/json
+
+{
+  "email": "exemple@exemple.test",
+  "password": "Exemple-De-Mot-De-Passe-1"
+}
+
+###
+
+# Jeton anti-CSRF de l'utilisateur connecté, à joindre aux requêtes qui modifient des données (SS §6).
+GET {{WalletFlow_Api_SecureAddress}}/api/account/csrf-token
+Accept: application/json
+
+###
+
+# Déconnexion (GR Auth) : détruit la session côté serveur.
+POST {{WalletFlow_Api_SecureAddress}}/api/account/logout
+X-CSRF-TOKEN: colle-ici-le-jeton-anti-csrf
 
 ###

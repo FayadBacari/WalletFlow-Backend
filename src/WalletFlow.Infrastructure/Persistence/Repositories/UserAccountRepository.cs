@@ -89,7 +89,7 @@ public class UserAccountRepository : IUserAccountRepository
         databaseContextOfTheCurrentHttpRequest.EmailTokens.RemoveRange(oldTokensOfTheUnconfirmedAccount);
         databaseContextOfTheCurrentHttpRequest.EmailTokens.Add(newSignupConfirmationTokenOfTheAccount);
 
-        return await TryToSaveChangesUnlessAnotherRequestChangedTheSameRowsAsync();
+        return await databaseContextOfTheCurrentHttpRequest.TryToSaveChangesUnlessAnotherRequestChangedTheSameRowsAsync();
     }
 
     // Confirme le compte et marque son jeton comme utilisé, en une seule transaction SQL.
@@ -102,7 +102,15 @@ public class UserAccountRepository : IUserAccountRepository
         accountToConfirmInTheDatabase.IsEmailConfirmed = true;
         tokenUsedToConfirmTheAccount.UsedAt = dateOfTheConfirmationOfTheAccount;
 
-        return await TryToSaveChangesUnlessAnotherRequestChangedTheSameRowsAsync();
+        return await databaseContextOfTheCurrentHttpRequest.TryToSaveChangesUnlessAnotherRequestChangedTheSameRowsAsync();
+    }
+
+    // Enregistre les compteurs de connexion du compte : EF Core suit ce compte depuis sa lecture, et n'écrit que ce qui a changé.
+    // Le contrôle sur nb_tentatives_echouees et date_fin_blocage renvoie faux si une autre requête vient de les changer :
+    // aucun essai ne peut donc se perdre, et aucun blocage ne peut être effacé.
+    public async Task<bool> TryToSaveLoginCountersOfThisAccountAsync(User accountWithItsNewLoginCounters)
+    {
+        return await databaseContextOfTheCurrentHttpRequest.TryToSaveChangesUnlessAnotherRequestChangedTheSameRowsAsync();
     }
 
     // Efface les comptes non confirmés qui n'ont plus aucun lien valable, et renvoie leur nombre.
@@ -117,22 +125,6 @@ public class UserAccountRepository : IUserAccountRepository
                     && tokenAlreadySavedInTheDatabase.Type == EmailTokenType.SignupConfirmation
                     && tokenAlreadySavedInTheDatabase.ExpiresAt > currentDateUsedForTheCleanup))
             .ExecuteDeleteAsync();
-    }
-
-    // Enregistre les changements. Renvoie faux si une autre requête vient de modifier ou d'effacer les mêmes lignes :
-    // EF Core annule alors toute la transaction, et rien n'est enregistré.
-    private async Task<bool> TryToSaveChangesUnlessAnotherRequestChangedTheSameRowsAsync()
-    {
-        try
-        {
-            await databaseContextOfTheCurrentHttpRequest.SaveChangesAsync();
-            return true;
-        }
-        catch (DbUpdateConcurrencyException)
-        {
-            databaseContextOfTheCurrentHttpRequest.ChangeTracker.Clear();
-            return false;
-        }
     }
 
     // Renvoie vrai si l'erreur vient de la contrainte d'unicité de l'adresse e-mail.

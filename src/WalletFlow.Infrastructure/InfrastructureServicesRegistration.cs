@@ -3,6 +3,7 @@ using Microsoft.Extensions.DependencyInjection;
 using WalletFlow.Application.Emails;
 using WalletFlow.Application.Security;
 using WalletFlow.Application.UserAccounts;
+using WalletFlow.Application.UserSessions;
 using WalletFlow.Infrastructure.Emails;
 using WalletFlow.Infrastructure.Persistence;
 using WalletFlow.Infrastructure.Persistence.Repositories;
@@ -24,6 +25,8 @@ public static class InfrastructureServicesRegistration
         });
 
         servicesOfTheWalletFlowApplication.AddScoped<IUserAccountRepository, UserAccountRepository>();
+        servicesOfTheWalletFlowApplication.AddScoped<IUserSessionRepository, UserSessionRepository>();
+        servicesOfTheWalletFlowApplication.AddScoped<ISecurityEventRepository, SecurityEventRepository>();
 
         return servicesOfTheWalletFlowApplication;
     }

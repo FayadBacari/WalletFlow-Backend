@@ -32,6 +32,29 @@ public class AccountRegistrationServiceTests
             clockThatOnlyMovesWhenTestsAskIt);
     }
 
+    // Le mot de passe est normalisé avant le hachage : tapé sur un autre appareil, il donnera le même résultat (SS §2).
+    [Fact]
+    public async Task PasswordTypedWithDecomposedAccentIsHashedInItsNormalizedForm()
+    {
+        var serviceBeingTestedWithFakeTools = CreateRegistrationServiceWithFakeTools();
+
+        await serviceBeingTestedWithFakeTools.RegisterNewAccountForVisitorAsync(EmailAddressTypedByTheVisitorInTheseTests, "Mot-De-Passé-1");
+
+        Assert.Equal(FakePasswordHasher.PrefixOfTheFakePasswordHashes + "Mot-De-Passé-1", repositoryThatKeepsAccountsInMemory.SavedUsers[0].PasswordHash);
+    }
+
+    // Le mot de passe est normalisé avant les règles : 12 signes sans normalisation, mais 11 vrais caractères (SS §2).
+    [Fact]
+    public async Task PasswordLengthIsCountedAfterTheNormalization()
+    {
+        var serviceBeingTestedWithFakeTools = CreateRegistrationServiceWithFakeTools();
+
+        var resultOfTheVisitorAccountRegistration = await serviceBeingTestedWithFakeTools.RegisterNewAccountForVisitorAsync(EmailAddressTypedByTheVisitorInTheseTests, "Abcdefgh-1é");
+
+        Assert.False(resultOfTheVisitorAccountRegistration.IsAccepted);
+        Assert.Equal(AccountRegistrationService.ErrorMessageForPasswordBreakingTheRules, resultOfTheVisitorAccountRegistration.PasswordErrorMessage);
+    }
+
     // Ajoute à la fausse base un compte qui utilise déjà l'adresse de ces tests, avec son ancien jeton.
     private User AddExistingAccountToTheFakeDatabase(bool emailAddressOfTheAccountIsAlreadyConfirmed)
     {

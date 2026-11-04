@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
 using WalletFlow.Api.Configuration;
@@ -6,9 +7,12 @@ using WalletFlow.Application.UserAccounts;
 
 namespace WalletFlow.Api.Controllers;
 
-// Confirmation de l'adresse e-mail d'un nouveau compte (GR Auth).
+// Confirmation de l'adresse e-mail d'un nouveau compte (GR Auth). Cette route est appelée sans session :
+// elle n'a donc ni besoin d'être connecté, ni besoin du jeton anti-CSRF (SS §6).
 [ApiController]
 [Route("api/account")]
+[AllowAnonymous]
+[IgnoreAntiforgeryToken]
 public class AccountConfirmationController : ControllerBase
 {
     public const string MessageSentWhenTheAccountIsConfirmed = "Ton adresse e-mail est confirmée. Tu peux maintenant te connecter.";

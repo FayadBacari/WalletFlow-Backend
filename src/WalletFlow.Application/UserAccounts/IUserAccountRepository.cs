@@ -36,6 +36,10 @@ public interface IUserAccountRepository
         EmailToken tokenUsedToConfirmTheAccount,
         DateTime dateOfTheConfirmationOfTheAccount);
 
+    // Enregistre les compteurs de connexion du compte.
+    // Renvoie faux si une autre requête vient de changer ce compte : rien n'est alors modifié.
+    Task<bool> TryToSaveLoginCountersOfThisAccountAsync(User accountWithItsNewLoginCounters);
+
     // Efface les comptes non confirmés qui n'ont plus aucun lien valable, et renvoie leur nombre.
     Task<int> DeleteUnconfirmedAccountsWithExpiredLinkAsync(DateTime currentDateUsedForTheCleanup);
 }

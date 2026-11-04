@@ -30,7 +30,6 @@ public class AccountConfirmationService
     }
 
     // Confirme le compte si le lien est encore valable et si le mot de passe est le bon.
-    // Un mauvais mot de passe ne consomme pas le lien : le visiteur peut réessayer.
     public async Task<AccountConfirmationResult> ConfirmAccountWithLinkTokenAndPasswordAsync(
         string tokenReadInTheConfirmationLink,
         string passwordTypedOnTheConfirmationPage)
@@ -49,7 +48,19 @@ public class AccountConfirmationService
             return CreateResultForTheLinkNoLongerValid();
         }
 
-        if (!hasherOfThePasswordsChosenByVisitors.CheckThatPasswordMatchesItsSecureHash(passwordTypedOnTheConfirmationPage, accountThatOwnsTheConfirmationToken.PasswordHash))
+        return await CheckPasswordThenConfirmTheAccountAsync(accountThatOwnsTheConfirmationToken, tokenThatCanStillBeUsed, passwordTypedOnTheConfirmationPage, currentDateOfTheAccountConfirmation);
+    }
+
+    // Vérifie le mot de passe, puis confirme le compte. Un mauvais mot de passe ne consomme pas le lien.
+    private async Task<AccountConfirmationResult> CheckPasswordThenConfirmTheAccountAsync(
+        User accountThatOwnsTheConfirmationToken,
+        EmailToken tokenThatCanStillBeUsed,
+        string passwordTypedOnTheConfirmationPage,
+        DateTime currentDateOfTheAccountConfirmation)
+    {
+        var passwordWrittenInItsNormalizedForm = PasswordRules.ConvertPasswordIntoItsNormalizedForm(passwordTypedOnTheConfirmationPage);
+
+        if (!hasherOfThePasswordsChosenByVisitors.CheckThatPasswordMatchesItsSecureHash(passwordWrittenInItsNormalizedForm, accountThatOwnsTheConfirmationToken.PasswordHash))
         {
             return new AccountConfirmationResult { PasswordErrorMessage = ErrorMessageForWrongPasswordOnConfirmation };
         }

@@ -4,7 +4,9 @@ using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using WalletFlow.Application.Emails;
+using WalletFlow.Application.Security;
 using WalletFlow.Application.UserAccounts;
+using WalletFlow.Application.UserSessions;
 using WalletFlow.Tests.Fakes;
 
 namespace WalletFlow.Tests.Api;
@@ -13,9 +15,17 @@ namespace WalletFlow.Tests.Api;
 public class ApiFactoryWithFakeRepositoryAndEmails : WebApplicationFactory<Program>
 {
     public FakeUserAccountRepository RepositoryThatKeepsAccountsInMemory { get; } = new FakeUserAccountRepository();
+    public FakeSecurityEventRepository RepositoryThatKeepsSecurityEventsInMemory { get; } = new FakeSecurityEventRepository();
+    public FakeUserSessionRepository RepositoryThatKeepsSessionsInMemory { get; }
     public FakeEmailSender SenderThatKeepsTheEmailsInMemory { get; } = new FakeEmailSender();
     public FakeTimeProviderForTests ClockThatOnlyMovesWhenTestsAskIt { get; } = new FakeTimeProviderForTests();
     public LoggerProviderThatKeepsTheMessages LoggerThatKeepsTheMessagesInMemory { get; } = new LoggerProviderThatKeepsTheMessages();
+
+    // Relie le faux accès aux sessions au faux journal de sécurité.
+    public ApiFactoryWithFakeRepositoryAndEmails()
+    {
+        RepositoryThatKeepsSessionsInMemory = new FakeUserSessionRepository(RepositoryThatKeepsSecurityEventsInMemory);
+    }
 
     // Remplace les services avant le démarrage de l'API (nom imposé par le framework).
     protected override void ConfigureWebHost(IWebHostBuilder builderOfTheApiStartedForTheTests)
@@ -26,6 +36,8 @@ public class ApiFactoryWithFakeRepositoryAndEmails : WebApplicationFactory<Progr
         builderOfTheApiStartedForTheTests.ConfigureTestServices(servicesOfTheApiStartedForTheTests =>
         {
             servicesOfTheApiStartedForTheTests.AddSingleton<IUserAccountRepository>(RepositoryThatKeepsAccountsInMemory);
+            servicesOfTheApiStartedForTheTests.AddSingleton<IUserSessionRepository>(RepositoryThatKeepsSessionsInMemory);
+            servicesOfTheApiStartedForTheTests.AddSingleton<ISecurityEventRepository>(RepositoryThatKeepsSecurityEventsInMemory);
             servicesOfTheApiStartedForTheTests.AddSingleton<IEmailSender>(SenderThatKeepsTheEmailsInMemory);
             servicesOfTheApiStartedForTheTests.AddSingleton<TimeProvider>(ClockThatOnlyMovesWhenTestsAskIt);
             servicesOfTheApiStartedForTheTests.AddSingleton<ILoggerProvider>(LoggerThatKeepsTheMessagesInMemory);

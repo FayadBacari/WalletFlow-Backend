@@ -8,6 +8,17 @@ public static class RateLimitingConfiguration
 {
     public const string PolicyNameForSignupRequestsPerIpAddress = "inscription-par-adresse-ip";
     public const string PolicyNameForConfirmationAttemptsPerIpAddress = "confirmation-par-adresse-ip";
+    public const string PolicyNameForLoginAttemptsPerIpAddress = "connexion-par-adresse-ip";
+
+    // Connexion : 10 essais par minute et par adresse IP, en plus des 5 tentatives par compte.
+    public static FixedWindowRateLimiterOptions CreateOptionsOfTheLoginAttemptsLimit()
+    {
+        return new FixedWindowRateLimiterOptions
+        {
+            PermitLimit = 10,
+            Window = TimeSpan.FromMinutes(1)
+        };
+    }
 
     // Inscription : 5 par heure et par adresse IP.
     public static FixedWindowRateLimiterOptions CreateOptionsOfTheSignupRequestsLimit()
@@ -45,6 +56,11 @@ public static class RateLimitingConfiguration
                 RateLimitPartition.GetFixedWindowLimiter(
                     ReadIpAddressOfTheRequestToLimit(httpContextOfTheRequestToLimit),
                     ipAddressUsedAsThePartitionKey => CreateOptionsOfTheConfirmationAttemptsLimit()));
+
+            optionsOfTheRateLimitingToConfigure.AddPolicy(PolicyNameForLoginAttemptsPerIpAddress, httpContextOfTheRequestToLimit =>
+                RateLimitPartition.GetFixedWindowLimiter(
+                    ReadIpAddressOfTheRequestToLimit(httpContextOfTheRequestToLimit),
+                    ipAddressUsedAsThePartitionKey => CreateOptionsOfTheLoginAttemptsLimit()));
         });
 
         return servicesOfTheWalletFlowApplication;

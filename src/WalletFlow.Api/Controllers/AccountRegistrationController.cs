@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
 using WalletFlow.Api.Configuration;
@@ -6,9 +7,12 @@ using WalletFlow.Application.UserAccounts;
 
 namespace WalletFlow.Api.Controllers;
 
-// Inscription d'un visiteur (GR Auth).
+// Inscription d'un visiteur (GR Auth). Cette route est appelée sans session : elle n'a donc
+// ni besoin d'être connecté, ni besoin du jeton anti-CSRF (SS §6).
 [ApiController]
 [Route("api/account")]
+[AllowAnonymous]
+[IgnoreAntiforgeryToken]
 public class AccountRegistrationController : ControllerBase
 {
     // Le même message pour toute inscription acceptée, que l'adresse soit libre ou déjà utilisée (SS §2).

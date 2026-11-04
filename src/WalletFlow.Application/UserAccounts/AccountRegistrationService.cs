@@ -48,8 +48,9 @@ public class AccountRegistrationService
         string passwordChosenByTheVisitorToRegister)
     {
         var emailAddressInItsStoredForm = EmailAddressRules.ConvertEmailAddressIntoItsStoredForm(emailAddressTypedByTheVisitor);
+        var passwordWrittenInItsNormalizedForm = PasswordRules.ConvertPasswordIntoItsNormalizedForm(passwordChosenByTheVisitorToRegister);
 
-        var resultOfTheVisitorRequestValidation = CheckThatVisitorRequestRespectsTheRules(emailAddressInItsStoredForm, passwordChosenByTheVisitorToRegister);
+        var resultOfTheVisitorRequestValidation = CheckThatVisitorRequestRespectsTheRules(emailAddressInItsStoredForm, passwordWrittenInItsNormalizedForm);
         if (!resultOfTheVisitorRequestValidation.IsAccepted)
         {
             return resultOfTheVisitorRequestValidation;
@@ -63,7 +64,7 @@ public class AccountRegistrationService
 
         // Le mot de passe est haché dans tous les cas : sinon, une réponse plus rapide
         // révélerait que l'adresse est déjà utilisée.
-        var secureHashOfTheChosenPassword = hasherOfThePasswordsChosenByVisitors.ConvertPasswordIntoItsSecureHash(passwordChosenByTheVisitorToRegister);
+        var secureHashOfTheChosenPassword = hasherOfThePasswordsChosenByVisitors.ConvertPasswordIntoItsSecureHash(passwordWrittenInItsNormalizedForm);
 
         return await SaveAccountThenSendEmailToTheVisitorAsync(emailAddressInItsStoredForm, secureHashOfTheChosenPassword);
     }
@@ -146,7 +147,7 @@ public class AccountRegistrationService
     // Vérifie le format de l'adresse et les règles du mot de passe, côté serveur (SS §5).
     private static AccountRegistrationResult CheckThatVisitorRequestRespectsTheRules(
         string emailAddressInItsStoredForm,
-        string passwordChosenByTheVisitorToRegister)
+        string passwordWrittenInItsNormalizedForm)
     {
         string? errorMessageAboutTheEmailAddressFormat = null;
         string? errorMessageAboutTheChosenPassword = null;
@@ -156,7 +157,7 @@ public class AccountRegistrationService
             errorMessageAboutTheEmailAddressFormat = ErrorMessageForInvalidEmailAddressFormat;
         }
 
-        if (!PasswordRules.CheckThatPasswordRespectsAllTheRules(passwordChosenByTheVisitorToRegister))
+        if (!PasswordRules.CheckThatPasswordRespectsAllTheRules(passwordWrittenInItsNormalizedForm))
         {
             errorMessageAboutTheChosenPassword = ErrorMessageForPasswordBreakingTheRules;
         }
@@ -188,7 +189,7 @@ public class AccountRegistrationService
     {
         var emailWithTheSignupConfirmationLink = AccountRegistrationEmails.CreateSignupConfirmationEmailWithItsLink(
             emailAddressInItsStoredForm,
-            BuildSignupConfirmationLinkForEmailToken(generatedTokenForTheConfirmationLink.TokenToSendInTheEmailLink));
+            BuildSignupConfirmationLinkForEmailToken(generatedTokenForTheConfirmationLink.TokenGivenOnlyToTheVisitor));
 
         return await SendEmailToTheVisitorAsync(emailWithTheSignupConfirmationLink, identifierOfTheAccountToConfirm);
     }

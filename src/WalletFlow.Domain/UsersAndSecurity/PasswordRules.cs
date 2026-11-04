@@ -9,6 +9,21 @@ public static class PasswordRules
     public const int MinimumNumberOfCharactersInPassword = 12;
     public const int MaximumNumberOfCharactersInPassword = 128;
 
+    // Écrit le mot de passe en Unicode NFC, avant les règles et le hachage (SS §2) : tapé sur deux appareils
+    // différents, un « é » donne le même résultat. .NET refuse de normaliser un texte qui contient des
+    // caractères interdits : il est alors gardé tel quel, et il ne pourra ni être choisi ni correspondre à un compte.
+    public static string ConvertPasswordIntoItsNormalizedForm(string passwordTextTypedByTheVisitor)
+    {
+        try
+        {
+            return passwordTextTypedByTheVisitor.Normalize(NormalizationForm.FormC);
+        }
+        catch (ArgumentException)
+        {
+            return passwordTextTypedByTheVisitor;
+        }
+    }
+
     // Renvoie vrai si le mot de passe a la bonne longueur, aucun caractère invisible et les 4 types de caractères demandés.
     public static bool CheckThatPasswordRespectsAllTheRules(string passwordToCheckAgainstTheRules)
     {

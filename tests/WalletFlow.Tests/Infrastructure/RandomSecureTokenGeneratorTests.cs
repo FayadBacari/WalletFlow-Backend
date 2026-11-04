@@ -16,9 +16,9 @@ public class RandomSecureTokenGeneratorTests
     {
         var generatedSecureTokenBeingTestedHere = generatorBeingTestedWithRealRandomness.GenerateNewRandomSecureTokenWithItsHash();
 
-        var randomBytesInsideTheGeneratedToken = Base64Url.DecodeFromChars(generatedSecureTokenBeingTestedHere.TokenToSendInTheEmailLink);
+        var randomBytesInsideTheGeneratedToken = Base64Url.DecodeFromChars(generatedSecureTokenBeingTestedHere.TokenGivenOnlyToTheVisitor);
         Assert.True(randomBytesInsideTheGeneratedToken.Length * 8 >= 128);
-        Assert.Matches(new Regex("^[A-Za-z0-9_-]+$"), generatedSecureTokenBeingTestedHere.TokenToSendInTheEmailLink);
+        Assert.Matches(new Regex("^[A-Za-z0-9_-]+$"), generatedSecureTokenBeingTestedHere.TokenGivenOnlyToTheVisitor);
     }
 
     [Fact]
@@ -26,7 +26,7 @@ public class RandomSecureTokenGeneratorTests
     {
         var generatedSecureTokenBeingTestedHere = generatorBeingTestedWithRealRandomness.GenerateNewRandomSecureTokenWithItsHash();
 
-        var hashBytesComputedByThisTest = SHA256.HashData(Encoding.UTF8.GetBytes(generatedSecureTokenBeingTestedHere.TokenToSendInTheEmailLink));
+        var hashBytesComputedByThisTest = SHA256.HashData(Encoding.UTF8.GetBytes(generatedSecureTokenBeingTestedHere.TokenGivenOnlyToTheVisitor));
         Assert.Equal(Convert.ToHexStringLower(hashBytesComputedByThisTest), generatedSecureTokenBeingTestedHere.HashToStoreInTheDatabase);
 
         // La colonne empreinte_jeton contient exactement 64 caractères (MPD).
@@ -39,7 +39,7 @@ public class RandomSecureTokenGeneratorTests
     {
         var generatedSecureTokenBeingTestedHere = generatorBeingTestedWithRealRandomness.GenerateNewRandomSecureTokenWithItsHash();
 
-        var hashComputedFromTheTokenOfTheLink = generatorBeingTestedWithRealRandomness.ConvertSecureTokenIntoItsHash(generatedSecureTokenBeingTestedHere.TokenToSendInTheEmailLink);
+        var hashComputedFromTheTokenOfTheLink = generatorBeingTestedWithRealRandomness.ConvertSecureTokenIntoItsHash(generatedSecureTokenBeingTestedHere.TokenGivenOnlyToTheVisitor);
 
         Assert.Equal(generatedSecureTokenBeingTestedHere.HashToStoreInTheDatabase, hashComputedFromTheTokenOfTheLink);
     }
@@ -50,6 +50,6 @@ public class RandomSecureTokenGeneratorTests
         var firstGeneratedTokenBeingComparedHere = generatorBeingTestedWithRealRandomness.GenerateNewRandomSecureTokenWithItsHash();
         var secondGeneratedTokenBeingComparedHere = generatorBeingTestedWithRealRandomness.GenerateNewRandomSecureTokenWithItsHash();
 
-        Assert.NotEqual(firstGeneratedTokenBeingComparedHere.TokenToSendInTheEmailLink, secondGeneratedTokenBeingComparedHere.TokenToSendInTheEmailLink);
+        Assert.NotEqual(firstGeneratedTokenBeingComparedHere.TokenGivenOnlyToTheVisitor, secondGeneratedTokenBeingComparedHere.TokenGivenOnlyToTheVisitor);
     }
 }

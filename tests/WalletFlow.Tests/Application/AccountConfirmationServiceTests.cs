@@ -43,6 +43,20 @@ public class AccountConfirmationServiceTests
         return accountNotYetConfirmedInTheseTests;
     }
 
+    // Tapé sur deux appareils différents, le même mot de passe doit confirmer le compte (SS §2).
+    [Fact]
+    public async Task PasswordTypedWithDecomposedAccentConfirmsTheAccount()
+    {
+        var serviceBeingTestedWithFakeTools = CreateConfirmationServiceWithFakeTools();
+        var accountNotYetConfirmedInThisTest = AddUnconfirmedAccountToTheFakeDatabase();
+        accountNotYetConfirmedInThisTest.PasswordHash = FakePasswordHasher.PrefixOfTheFakePasswordHashes + "Mot-De-Passé-1";
+
+        var resultOfTheConfirmationOfTheAccount = await serviceBeingTestedWithFakeTools.ConfirmAccountWithLinkTokenAndPasswordAsync(
+            TokenOfTheConfirmationLinkInTheseTests, "Mot-De-Passé-1");
+
+        Assert.True(resultOfTheConfirmationOfTheAccount.IsConfirmed);
+    }
+
     [Fact]
     public async Task RightLinkAndRightPasswordConfirmTheAccountAndUseTheToken()
     {
