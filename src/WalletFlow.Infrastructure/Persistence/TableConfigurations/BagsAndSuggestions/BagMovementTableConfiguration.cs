@@ -25,12 +25,14 @@ public class BagMovementTableConfiguration : IEntityTypeConfiguration<BagMovemen
         // Quand un sac est supprimé, le mouvement garde l'autre sac (ON DELETE SET NULL).
         // Les mouvements avec l'argent disponible sont supprimés par le déclencheur
         // tg_sac_avant_suppression du script SQL.
+        // C'est la base qui fait tout : si EF Core vidait lui-même la clé d'un mouvement chargé en mémoire,
+        // la contrainte ck_mouvement_un_sac refuserait la suppression avant que le déclencheur n'agisse.
         builderOfTheBagMovementTableMapping.HasOne<Bag>().WithMany()
             .HasForeignKey(nameof(BagMovement.SourceBagId))
-            .OnDelete(DeleteBehavior.SetNull);
+            .OnDelete(DeleteBehavior.ClientNoAction);
         builderOfTheBagMovementTableMapping.HasOne<Bag>().WithMany()
             .HasForeignKey(nameof(BagMovement.DestinationBagId))
-            .OnDelete(DeleteBehavior.SetNull);
+            .OnDelete(DeleteBehavior.ClientNoAction);
 
         // Une suggestion acceptée crée au plus un mouvement. Si elle disparaît,
         // le mouvement reste dans l'historique du sac (ON DELETE SET NULL).

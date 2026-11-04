@@ -1,6 +1,12 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using WalletFlow.Application.Emails;
+using WalletFlow.Application.Security;
+using WalletFlow.Application.UserAccounts;
+using WalletFlow.Infrastructure.Emails;
 using WalletFlow.Infrastructure.Persistence;
+using WalletFlow.Infrastructure.Persistence.Repositories;
+using WalletFlow.Infrastructure.Security;
 
 namespace WalletFlow.Infrastructure;
 
@@ -16,6 +22,27 @@ public static class InfrastructureServicesRegistration
         {
             optionsOfTheDatabaseContextToConfigure.UseNpgsql(connectionStringOfTheWalletFlowDatabase);
         });
+
+        servicesOfTheWalletFlowApplication.AddScoped<IUserAccountRepository, UserAccountRepository>();
+
+        return servicesOfTheWalletFlowApplication;
+    }
+
+    // Ajoute le hachage des mots de passe et la création des jetons.
+    public static IServiceCollection AddWalletFlowSecurityToolsToTheServices(this IServiceCollection servicesOfTheWalletFlowApplication)
+    {
+        servicesOfTheWalletFlowApplication.AddSingleton<IPasswordHasher, LibsodiumPasswordHasher>();
+        servicesOfTheWalletFlowApplication.AddSingleton<ISecureTokenGenerator, RandomSecureTokenGenerator>();
+
+        return servicesOfTheWalletFlowApplication;
+    }
+
+    // Écrit les e-mails dans un dossier local, au lieu de les envoyer (développement seulement).
+    public static IServiceCollection AddEmailsWrittenToLocalFolderToTheServices(
+        this IServiceCollection servicesOfTheWalletFlowApplication,
+        string pathOfTheFolderThatReceivesTheEmails)
+    {
+        servicesOfTheWalletFlowApplication.AddSingleton<IEmailSender>(new LocalFolderEmailSender(pathOfTheFolderThatReceivesTheEmails));
 
         return servicesOfTheWalletFlowApplication;
     }

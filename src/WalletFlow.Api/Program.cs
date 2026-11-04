@@ -1,4 +1,7 @@
+using WalletFlow.Api.Configuration;
 using WalletFlow.Api.Middlewares;
+using WalletFlow.Application.Configuration;
+using WalletFlow.Application.UserAccounts;
 using WalletFlow.Infrastructure;
 
 // Prépare l'application web de l'API WalletFlow.
@@ -15,8 +18,38 @@ if (string.IsNullOrWhiteSpace(connectionStringOfTheWalletFlowDatabase))
 }
 builderOfTheWalletFlowWebApplication.Services.AddWalletFlowDatabaseAccessToTheServices(connectionStringOfTheWalletFlowDatabase);
 
+// Hachage des mots de passe et création des jetons (SS §2).
+builderOfTheWalletFlowWebApplication.Services.AddWalletFlowSecurityToolsToTheServices();
+
+// En développement, les e-mails sont écrits dans un dossier local. L'envoi réel sera branché
+// avant la mise en production : d'ici là, l'API refuse de démarrer sans ce réglage.
+var localEmailsFolderFromTheConfiguration = builderOfTheWalletFlowWebApplication.Configuration["LocalEmailsFolder"];
+if (string.IsNullOrWhiteSpace(localEmailsFolderFromTheConfiguration))
+{
+    throw new InvalidOperationException(
+        "Le réglage « LocalEmailsFolder » est absent : aucun moyen d'envoyer les e-mails n'est configuré.");
+}
+builderOfTheWalletFlowWebApplication.Services.AddEmailsWrittenToLocalFolderToTheServices(
+    Path.GetFullPath(Path.Combine(builderOfTheWalletFlowWebApplication.Environment.ContentRootPath, localEmailsFolderFromTheConfiguration)));
+
+// Adresse publique du site, qui sert à construire les liens envoyés par e-mail (SS §9).
+builderOfTheWalletFlowWebApplication.Services.AddSingleton(
+    new PublicWebsiteSettings(builderOfTheWalletFlowWebApplication.Configuration["PublicWebsiteAddress"]));
+
+// Cas d'utilisation de la couche Application.
+builderOfTheWalletFlowWebApplication.Services.AddScoped<AccountRegistrationService>();
+
+// Limites de débit des points d'entrée sensibles (SS §6).
+builderOfTheWalletFlowWebApplication.Services.AddWalletFlowRateLimitingToTheServices();
+
 // Les contrôleurs reçoivent les requêtes HTTP et appellent la couche Application.
-builderOfTheWalletFlowWebApplication.Services.AddControllers();
+// Une requête illisible reçoit un message générique, sans aucun nom interne du code (SS §10).
+builderOfTheWalletFlowWebApplication.Services
+    .AddControllers()
+    .AddJsonOptions(optionsOfTheJsonRequestBodiesFromVisitors =>
+    {
+        optionsOfTheJsonRequestBodiesFromVisitors.AllowInputFormatterExceptionMessages = false;
+    });
 
 // Décrit l'API au format OpenAPI (publié seulement en développement).
 builderOfTheWalletFlowWebApplication.Services.AddOpenApi();
@@ -42,7 +75,10 @@ if (walletFlowWebApplicationReadyToHandleRequests.Environment.IsDevelopment())
 else
 {
     // En production : des messages d'erreur génériques, et HSTS (SS §6 et §10).
-    walletFlowWebApplicationReadyToHandleRequests.UseExceptionHandler();
+    walletFlowWebApplicationReadyToHandleRequests.UseExceptionHandler(new ExceptionHandlerOptions
+    {
+        StatusCodeSelector = ErrorStatusCodeConfiguration.ChooseStatusCodeForTheCaughtException
+    });
     walletFlowWebApplicationReadyToHandleRequests.UseHsts();
 }
 
@@ -51,6 +87,9 @@ walletFlowWebApplicationReadyToHandleRequests.UseMiddleware<SecurityHeadersMiddl
 
 // Redirige toute requête HTTP vers HTTPS (SS §7).
 walletFlowWebApplicationReadyToHandleRequests.UseHttpsRedirection();
+
+// Applique les limites de débit (SS §6).
+walletFlowWebApplicationReadyToHandleRequests.UseRateLimiter();
 
 // Relie chaque route à son contrôleur.
 walletFlowWebApplicationReadyToHandleRequests.MapControllers();

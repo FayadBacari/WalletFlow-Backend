@@ -56,6 +56,12 @@ Le projet suit une Clean Architecture en 4 projets, plus un projet de tests :
 - Tu n'ajoutes aucun paquet NuGet, tu n'installes rien et tu ne fais aucun commit sans l'accord explicite de l'utilisateur. Quand tu as besoin d'un paquet, tu donnes son nom et son rôle, puis tu attends.
 - Une question de l'utilisateur est une question : tu y réponds, tu n'agis pas.
 - À la fin de chaque étape, `dotnet build` et `dotnet test` doivent passer. Tu donnes leur résultat réel, même s'il échoue.
+- Des tests verts et un style propre ne prouvent pas la qualité. Pour chaque étape, tu attaques ton propre code :
+  - au début, tu listes ce qui se passe si l'utilisateur échoue, abandonne ou recommence, et tu lui signales les trous des documents ;
+  - tu écris un test « ça échoue » pour chaque appel externe ;
+  - tu essaies chaque réglage par défaut d'une bibliothèque avec des entrées hostiles, au lieu de le croire sûr ;
+  - tu écris un test de la chaîne réelle par cas d'utilisation (vrais outils, vraie base, transaction annulée) ;
+  - à la fin, tu casses le code volontairement sur une copie, et tu donnes à l'utilisateur la liste de ce qu'aucun test ne voit.
 
 ## 5. Analyse de fin de session
 

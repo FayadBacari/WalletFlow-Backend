@@ -5,3 +5,14 @@ GET {{WalletFlow_Api_HostAddress}}/openapi/v1.json
 Accept: application/json
 
 ###
+
+# Inscription d'un visiteur (GR Auth). En développement, l'e-mail arrive dans le dossier .local-emails.
+POST {{WalletFlow_Api_HostAddress}}/api/account/register
+Content-Type: application/json
+
+{
+  "email": "exemple@exemple.test",
+  "password": "Exemple-De-Mot-De-Passe-1"
+}
+
+###
