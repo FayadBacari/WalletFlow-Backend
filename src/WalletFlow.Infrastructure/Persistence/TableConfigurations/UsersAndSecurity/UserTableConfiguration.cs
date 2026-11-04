@@ -23,7 +23,12 @@ public class UserTableConfiguration : IEntityTypeConfiguration<User>
         builderOfTheUserTableMapping.Property(nameof(User.FirstName)).HasColumnName("prenom_utilisateur");
         builderOfTheUserTableMapping.Property(nameof(User.Role)).HasColumnName("role_utilisateur")
             .HasConversion(UserRoleDatabaseCodes.ConverterBetweenUserRoleAndDatabaseCode);
-        builderOfTheUserTableMapping.Property(nameof(User.IsEmailConfirmed)).HasColumnName("email_confirme");
+
+        // Chaque mise à jour vérifie que cette valeur n'a pas changé entre-temps. Sans ce contrôle, une nouvelle
+        // inscription pourrait remplacer le mot de passe d'un compte confirmé au même instant.
+        builderOfTheUserTableMapping.Property(nameof(User.IsEmailConfirmed)).HasColumnName("email_confirme").IsConcurrencyToken();
+
+
         builderOfTheUserTableMapping.Property(nameof(User.IsTwoFactorEnabled)).HasColumnName("double_auth_activee");
         builderOfTheUserTableMapping.Property(nameof(User.EncryptedTotpSecret)).HasColumnName("secret_totp_chiffre");
         builderOfTheUserTableMapping.Property(nameof(User.NotificationChannel)).HasColumnName("canal_notification")

@@ -17,6 +17,23 @@ public class LocalFolderEmailSender : IEmailSender
     // Écrit l'e-mail dans un nouveau fichier, dont le nom commence par sa date.
     public async Task SendEmailToItsRecipientAsync(EmailMessageToSend emailMessageToSendToItsRecipient)
     {
+        try
+        {
+            await WriteEmailInNewFileOfTheFolderAsync(emailMessageToSendToItsRecipient);
+        }
+        catch (IOException technicalErrorRaisedWhileWritingTheFile)
+        {
+            throw new EmailCouldNotBeSentException(technicalErrorRaisedWhileWritingTheFile);
+        }
+        catch (UnauthorizedAccessException technicalErrorRaisedWhileWritingTheFile)
+        {
+            throw new EmailCouldNotBeSentException(technicalErrorRaisedWhileWritingTheFile);
+        }
+    }
+
+    // Crée le dossier s'il n'existe pas, puis y écrit l'e-mail.
+    private async Task WriteEmailInNewFileOfTheFolderAsync(EmailMessageToSend emailMessageToSendToItsRecipient)
+    {
         Directory.CreateDirectory(pathOfTheFolderThatReceivesTheEmails);
 
         var nameOfTheFileCreatedForThisEmail = DateTime.UtcNow.ToString("yyyyMMdd-HHmmss-fff") + "-" + Guid.NewGuid() + ".txt";

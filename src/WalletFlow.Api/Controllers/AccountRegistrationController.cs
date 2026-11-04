@@ -1,5 +1,4 @@
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.AspNetCore.Mvc.ModelBinding;
 using Microsoft.AspNetCore.RateLimiting;
 using WalletFlow.Api.Configuration;
 using WalletFlow.Api.Contracts;
@@ -16,29 +15,28 @@ public class AccountRegistrationController : ControllerBase
     public const string MessageSentForEveryAcceptedRegistration =
         "Un e-mail vient d'être envoyé à cette adresse pour finaliser l'inscription.";
 
-    // La plus longue adresse et le plus long mot de passe permis tiennent dans cette taille,
-    // même si chaque caractère est écrit en \uXXXX dans le JSON.
-    private const long MaximumNumberOfBytesInRegistrationRequest = 4096;
+    public const string MessageShownWhenTheEmailCouldNotBeSent = "L'e-mail n'a pas pu partir. Réessaie dans quelques minutes.";
 
     private readonly AccountRegistrationService serviceThatRegistersTheNewUserAccounts;
+    private readonly ILogger<AccountRegistrationController> loggerOfTheAccountRegistrationTechnicalProblems;
 
-    // Reçoit le cas d'utilisation de l'inscription.
-    public AccountRegistrationController(AccountRegistrationService serviceThatRegistersTheNewUserAccounts)
+    // Reçoit le cas d'utilisation de l'inscription et le journal technique.
+    public AccountRegistrationController(
+        AccountRegistrationService serviceThatRegistersTheNewUserAccounts,
+        ILogger<AccountRegistrationController> loggerOfTheAccountRegistrationTechnicalProblems)
     {
         this.serviceThatRegistersTheNewUserAccounts = serviceThatRegistersTheNewUserAccounts;
+        this.loggerOfTheAccountRegistrationTechnicalProblems = loggerOfTheAccountRegistrationTechnicalProblems;
     }
 
     // POST api/account/register : crée un compte et envoie un e-mail de confirmation.
-    // Le paramètre est déclaré nullable pour qu'ASP.NET Core ne cite pas son nom dans l'erreur d'une requête
-    // illisible (SS §10). Il n'est jamais null ici : Disallow refuse une requête vide ou « null » avant cette fonction.
     [HttpPost("register")]
     [EnableRateLimiting(RateLimitingConfiguration.PolicyNameForSignupRequestsPerIpAddress)]
-    [RequestSizeLimit(MaximumNumberOfBytesInRegistrationRequest)]
-    public async Task<IActionResult> RegisterNewAccountFromVisitorRequest(
-        [FromBody(EmptyBodyBehavior = EmptyBodyBehavior.Disallow)] RegisterAccountRequest? requestSentByTheVisitorToRegister)
+    [RequestSizeLimit(RequestSizeConfiguration.MaximumNumberOfBytesInOneAccountRequest)]
+    public async Task<IActionResult> RegisterNewAccountFromVisitorRequest(RegisterAccountRequest requestSentByTheVisitorToRegister)
     {
         var resultOfTheVisitorAccountRegistration = await serviceThatRegistersTheNewUserAccounts.RegisterNewAccountForVisitorAsync(
-            requestSentByTheVisitorToRegister!.Email,
+            requestSentByTheVisitorToRegister.Email,
             requestSentByTheVisitorToRegister.Password);
 
         if (resultOfTheVisitorAccountRegistration.IsAccepted)
@@ -46,6 +44,33 @@ public class AccountRegistrationController : ControllerBase
             return Ok(new MessageResponse(MessageSentForEveryAcceptedRegistration));
         }
 
+        if (resultOfTheVisitorAccountRegistration.TooManyRequestsForThisEmailAddress)
+        {
+            return StatusCode(StatusCodes.Status429TooManyRequests);
+        }
+
+        if (resultOfTheVisitorAccountRegistration.EmailCouldNotBeSent)
+        {
+            return CreateAnswerForTheEmailThatCouldNotBeSent(resultOfTheVisitorAccountRegistration);
+        }
+
+        return CreateAnswerForTheRequestBreakingTheRules(resultOfTheVisitorAccountRegistration);
+    }
+
+    // Note la panne dans le journal, et invite le visiteur à réessayer.
+    // Le journal désigne l'utilisateur par son identifiant, jamais par son adresse (SS §7).
+    private ObjectResult CreateAnswerForTheEmailThatCouldNotBeSent(AccountRegistrationResult resultOfTheVisitorAccountRegistration)
+    {
+        loggerOfTheAccountRegistrationTechnicalProblems.LogError(
+            "L'e-mail d'inscription n'a pas pu partir pour l'utilisateur {IdentifiantUtilisateur}.",
+            resultOfTheVisitorAccountRegistration.UserIdentifierForTheTechnicalLog);
+
+        return Problem(statusCode: StatusCodes.Status503ServiceUnavailable, title: MessageShownWhenTheEmailCouldNotBeSent);
+    }
+
+    // Donne le message de chaque champ refusé.
+    private ActionResult CreateAnswerForTheRequestBreakingTheRules(AccountRegistrationResult resultOfTheVisitorAccountRegistration)
+    {
         if (resultOfTheVisitorAccountRegistration.EmailAddressErrorMessage != null)
         {
             ModelState.AddModelError(nameof(RegisterAccountRequest.Email), resultOfTheVisitorAccountRegistration.EmailAddressErrorMessage);
@@ -56,6 +81,6 @@ public class AccountRegistrationController : ControllerBase
             ModelState.AddModelError(nameof(RegisterAccountRequest.Password), resultOfTheVisitorAccountRegistration.PasswordErrorMessage);
         }
 
-        return ValidationProblem(ModelState);
+        return ValidationProblem();
     }
 }

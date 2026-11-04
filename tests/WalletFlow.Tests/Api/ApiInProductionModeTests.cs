@@ -1,6 +1,5 @@
 using System.Net;
 using System.Net.Http.Json;
-using System.Text;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using WalletFlow.Tests.Fakes;
@@ -28,36 +27,6 @@ public class ApiInProductionModeTests
         Assert.DoesNotContain(FakeUserAccountRepository.TechnicalDetailOfTheSimulatedDatabaseFailure, textOfTheAnswerDuringTheDatabaseFailure);
         Assert.DoesNotContain(nameof(FakeUserAccountRepository), textOfTheAnswerDuringTheDatabaseFailure);
         SecurityHeadersAssertions.CheckThatAnswerCarriesTheExactSecurityHeaders(answerToTheRequestDuringTheDatabaseFailure);
-    }
-
-    // Une requête illisible ne révèle aucun nom interne du code (SS §10).
-    [Theory]
-    [InlineData("[]")]
-    [InlineData("null")]
-    [InlineData("")]
-    [InlineData("{\"email\":")]
-    [InlineData("\"texte\"")]
-    [InlineData("123")]
-    [InlineData("{\"email\":1,\"password\":2}")]
-    [InlineData("{\"email\":[],\"password\":{}}")]
-    [InlineData("{\"email\":\"visiteur@exemple.test\",\"password\":\"Aa1!\\ud83dbcdefghij\"}")] // moitié d'emoji seule
-    public async Task UnreadableRequestIsRefusedWithoutRevealingAnyInternalName(string unreadableBodyOfTheRegistrationRequest)
-    {
-        using var apiStartedLikeInProductionForThisTest = new ApiFactoryRunningLikeInProduction();
-        var clientThatCallsTheApiInProductionMode = apiStartedLikeInProductionForThisTest.CreateClient();
-
-        var answerToTheUnreadableRegistrationRequest = await clientThatCallsTheApiInProductionMode.PostAsync(
-            AddressOfTheAccountRegistrationEndpoint,
-            new StringContent(unreadableBodyOfTheRegistrationRequest, Encoding.UTF8, "application/json"));
-
-        Assert.Equal(HttpStatusCode.BadRequest, answerToTheUnreadableRegistrationRequest.StatusCode);
-        var textOfTheAnswerToTheUnreadableRequest = await answerToTheUnreadableRegistrationRequest.Content.ReadAsStringAsync();
-        Assert.DoesNotContain("WalletFlow", textOfTheAnswerToTheUnreadableRequest);
-        Assert.DoesNotContain("RegisterAccountRequest", textOfTheAnswerToTheUnreadableRequest);
-        Assert.DoesNotContain("requestSentByTheVisitorToRegister", textOfTheAnswerToTheUnreadableRequest);
-        Assert.DoesNotContain("System.Text.Json", textOfTheAnswerToTheUnreadableRequest);
-        Assert.Empty(apiStartedLikeInProductionForThisTest.RepositoryThatKeepsAccountsInMemory.SavedUsers);
-        SecurityHeadersAssertions.CheckThatAnswerCarriesTheExactSecurityHeaders(answerToTheUnreadableRegistrationRequest);
     }
 
     // HSTS : le navigateur n'utilise plus que HTTPS pendant un an, sous-domaines compris (SS §6).

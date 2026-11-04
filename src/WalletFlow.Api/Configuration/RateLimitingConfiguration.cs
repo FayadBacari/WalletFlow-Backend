@@ -7,6 +7,7 @@ namespace WalletFlow.Api.Configuration;
 public static class RateLimitingConfiguration
 {
     public const string PolicyNameForSignupRequestsPerIpAddress = "inscription-par-adresse-ip";
+    public const string PolicyNameForConfirmationAttemptsPerIpAddress = "confirmation-par-adresse-ip";
 
     // Inscription : 5 par heure et par adresse IP.
     public static FixedWindowRateLimiterOptions CreateOptionsOfTheSignupRequestsLimit()
@@ -14,6 +15,16 @@ public static class RateLimitingConfiguration
         return new FixedWindowRateLimiterOptions
         {
             PermitLimit = 5,
+            Window = TimeSpan.FromHours(1)
+        };
+    }
+
+    // Confirmation de l'inscription : 10 essais par heure et par adresse IP.
+    public static FixedWindowRateLimiterOptions CreateOptionsOfTheConfirmationAttemptsLimit()
+    {
+        return new FixedWindowRateLimiterOptions
+        {
+            PermitLimit = 10,
             Window = TimeSpan.FromHours(1)
         };
     }
@@ -26,14 +37,22 @@ public static class RateLimitingConfiguration
             optionsOfTheRateLimitingToConfigure.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
 
             optionsOfTheRateLimitingToConfigure.AddPolicy(PolicyNameForSignupRequestsPerIpAddress, httpContextOfTheRequestToLimit =>
-            {
-                var ipAddressOfTheRequestToLimit = httpContextOfTheRequestToLimit.Connection.RemoteIpAddress?.ToString() ?? "adresse-inconnue";
+                RateLimitPartition.GetFixedWindowLimiter(
+                    ReadIpAddressOfTheRequestToLimit(httpContextOfTheRequestToLimit),
+                    ipAddressUsedAsThePartitionKey => CreateOptionsOfTheSignupRequestsLimit()));
 
-                return RateLimitPartition.GetFixedWindowLimiter(ipAddressOfTheRequestToLimit, ipAddressUsedAsThePartitionKey =>
-                    CreateOptionsOfTheSignupRequestsLimit());
-            });
+            optionsOfTheRateLimitingToConfigure.AddPolicy(PolicyNameForConfirmationAttemptsPerIpAddress, httpContextOfTheRequestToLimit =>
+                RateLimitPartition.GetFixedWindowLimiter(
+                    ReadIpAddressOfTheRequestToLimit(httpContextOfTheRequestToLimit),
+                    ipAddressUsedAsThePartitionKey => CreateOptionsOfTheConfirmationAttemptsLimit()));
         });
 
         return servicesOfTheWalletFlowApplication;
+    }
+
+    // Donne l'adresse IP qui sert de compteur à une requête.
+    private static string ReadIpAddressOfTheRequestToLimit(HttpContext httpContextOfTheRequestToLimit)
+    {
+        return httpContextOfTheRequestToLimit.Connection.RemoteIpAddress?.ToString() ?? "adresse-inconnue";
     }
 }

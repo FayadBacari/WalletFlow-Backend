@@ -13,4 +13,15 @@ public class FakeSecureTokenGenerator : ISecureTokenGenerator
     {
         return new GeneratedSecureToken(TokenAlwaysReturnedByThisFakeGenerator, HashAlwaysReturnedByThisFakeGenerator);
     }
+
+    // Donne l'empreinte du faux jeton, ou une autre empreinte pour tout autre jeton.
+    public string ConvertSecureTokenIntoItsHash(string tokenToConvertIntoItsHash)
+    {
+        if (tokenToConvertIntoItsHash == TokenAlwaysReturnedByThisFakeGenerator)
+        {
+            return HashAlwaysReturnedByThisFakeGenerator;
+        }
+
+        return "autre-empreinte-de-" + tokenToConvertIntoItsHash;
+    }
 }

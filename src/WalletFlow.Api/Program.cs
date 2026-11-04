@@ -1,3 +1,4 @@
+using WalletFlow.Api.BackgroundTasks;
 using WalletFlow.Api.Configuration;
 using WalletFlow.Api.Middlewares;
 using WalletFlow.Application.Configuration;
@@ -18,7 +19,10 @@ if (string.IsNullOrWhiteSpace(connectionStringOfTheWalletFlowDatabase))
 }
 builderOfTheWalletFlowWebApplication.Services.AddWalletFlowDatabaseAccessToTheServices(connectionStringOfTheWalletFlowDatabase);
 
-// Hachage des mots de passe et création des jetons (SS §2).
+// L'horloge de l'application : les tests peuvent la remplacer pour vérifier les durées sans attendre.
+builderOfTheWalletFlowWebApplication.Services.AddSingleton(TimeProvider.System);
+
+// Hachage des mots de passe, création des jetons et limite par adresse e-mail (SS §2 et §6).
 builderOfTheWalletFlowWebApplication.Services.AddWalletFlowSecurityToolsToTheServices();
 
 // En développement, les e-mails sont écrits dans un dossier local. L'envoi réel sera branché
@@ -38,14 +42,23 @@ builderOfTheWalletFlowWebApplication.Services.AddSingleton(
 
 // Cas d'utilisation de la couche Application.
 builderOfTheWalletFlowWebApplication.Services.AddScoped<AccountRegistrationService>();
+builderOfTheWalletFlowWebApplication.Services.AddScoped<AccountConfirmationService>();
+builderOfTheWalletFlowWebApplication.Services.AddScoped<UnconfirmedAccountsCleanupService>();
+
+// Tâche de fond : efface chaque jour les comptes non confirmés dont le lien a expiré (GR Auth).
+builderOfTheWalletFlowWebApplication.Services.AddHostedService<UnconfirmedAccountsCleanupBackgroundService>();
 
 // Limites de débit des points d'entrée sensibles (SS §6).
 builderOfTheWalletFlowWebApplication.Services.AddWalletFlowRateLimitingToTheServices();
 
 // Les contrôleurs reçoivent les requêtes HTTP et appellent la couche Application.
-// Une requête illisible reçoit un message générique, sans aucun nom interne du code (SS §10).
+// Une requête refusée reçoit toujours le même format d'erreur, sans aucun nom interne du code (SS §10).
 builderOfTheWalletFlowWebApplication.Services
     .AddControllers()
+    .ConfigureApiBehaviorOptions(optionsOfTheAutomaticControllerBehavior =>
+    {
+        optionsOfTheAutomaticControllerBehavior.InvalidModelStateResponseFactory = ApiErrorConfiguration.CreateAnswerForTheRefusedRequest;
+    })
     .AddJsonOptions(optionsOfTheJsonRequestBodiesFromVisitors =>
     {
         optionsOfTheJsonRequestBodiesFromVisitors.AllowInputFormatterExceptionMessages = false;
@@ -54,8 +67,11 @@ builderOfTheWalletFlowWebApplication.Services
 // Décrit l'API au format OpenAPI (publié seulement en développement).
 builderOfTheWalletFlowWebApplication.Services.AddOpenApi();
 
-// Les erreurs sont renvoyées au format « problem details », sans détail technique (SS §10).
-builderOfTheWalletFlowWebApplication.Services.AddProblemDetails();
+// Les erreurs sont renvoyées au format « problem details », en français et sans détail technique (SS §10).
+builderOfTheWalletFlowWebApplication.Services.AddProblemDetails(optionsOfTheProblemDetailsAnswers =>
+{
+    optionsOfTheProblemDetailsAnswers.CustomizeProblemDetails = ApiErrorConfiguration.TranslateTheTitleOfTheProblemIntoFrench;
+});
 
 // HSTS : le navigateur n'utilise plus que HTTPS pendant un an, sous-domaines compris (SS §6).
 builderOfTheWalletFlowWebApplication.Services.AddHsts(optionsOfTheStrictTransportSecurityHeader =>
@@ -84,6 +100,9 @@ else
 
 // Ajoute les en-têtes de sécurité à chaque réponse (SS §6).
 walletFlowWebApplicationReadyToHandleRequests.UseMiddleware<SecurityHeadersMiddleware>();
+
+// Donne le même format aux erreurs sans contenu, comme une adresse inconnue ou le dépassement d'une limite.
+walletFlowWebApplicationReadyToHandleRequests.UseStatusCodePages();
 
 // Redirige toute requête HTTP vers HTTPS (SS §7).
 walletFlowWebApplicationReadyToHandleRequests.UseHttpsRedirection();

@@ -13,7 +13,7 @@ public static class AccountRegistrationEmails
         var bodyOfTheSignupConfirmationEmail = $"""
             Bonjour,
 
-            Pour activer ton compte WalletFlow, ouvre ce lien puis clique sur le bouton de confirmation :
+            Pour activer ton compte WalletFlow, ouvre ce lien puis saisis le mot de passe choisi à l'inscription :
             {signupConfirmationLinkForTheRecipient}
 
             Ce lien est valable 24 heures et ne sert qu'une seule fois.

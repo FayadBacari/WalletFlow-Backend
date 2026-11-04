@@ -16,3 +16,14 @@ Content-Type: application/json
 }
 
 ###
+
+# Confirmation de l'adresse (GR Auth) : le jeton se lit après « #token= » dans le lien de l'e-mail.
+POST {{WalletFlow_Api_HostAddress}}/api/account/confirm-email
+Content-Type: application/json
+
+{
+  "token": "colle-ici-le-jeton-du-lien",
+  "password": "Exemple-De-Mot-De-Passe-1"
+}
+
+###

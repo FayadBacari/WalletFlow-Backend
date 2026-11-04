@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
+using WalletFlow.Api.Controllers;
 using WalletFlow.Api.Configuration;
 using WalletFlow.Application.UserAccounts;
 using WalletFlow.Domain.UsersAndSecurity;
@@ -12,28 +13,126 @@ namespace WalletFlow.Tests.Api;
 // Vérifie la route d'inscription de bout en bout : validation, réponse, limite de débit, en-têtes.
 public class AccountRegistrationEndpointTests
 {
+    // Crée un client dont les requêtes viennent de cette adresse IP.
+    private static HttpClient CreateClientCallingFromThisIpAddress(ApiFactoryWithFakeRepositoryAndEmails apiStartedInMemoryForThisTest, string ipAddressOfTheVisitorForThisTest)
+    {
+        var clientCallingFromThisIpAddress = apiStartedInMemoryForThisTest.CreateClient();
+        clientCallingFromThisIpAddress.DefaultRequestHeaders.Add(StartupFilterThatReadsTheVisitorAddress.NameOfTheHeaderGivingTheVisitorAddress, ipAddressOfTheVisitorForThisTest);
+
+        return clientCallingFromThisIpAddress;
+    }
+
+    // La réponse est la même dans les trois états de l'adresse : seul l'e-mail change (SS §2).
     [Fact]
-    public async Task AnswerIsIdenticalWhetherTheAddressIsFreeOrAlreadyUsed()
+    public async Task AnswerIsIdenticalWhetherTheAddressIsFreeUnconfirmedOrConfirmed()
     {
         using var apiStartedInMemoryForThisTest = new ApiFactoryWithFakeRepositoryAndEmails();
         var clientThatCallsTheApiInMemory = apiStartedInMemoryForThisTest.CreateClient();
-        var requestSentTwiceWithTheSameAddress = new { email = "visiteur@exemple.test", password = ValidPasswordChosenInTheseTests };
+        var requestSentThreeTimesWithTheSameAddress = new { email = "visiteur@exemple.test", password = ValidPasswordChosenInTheseTests };
 
-        var answerForTheAddressStillFree = await clientThatCallsTheApiInMemory.PostAsJsonAsync(AddressOfTheAccountRegistrationEndpoint, requestSentTwiceWithTheSameAddress);
-        var answerForTheAddressAlreadyUsed = await clientThatCallsTheApiInMemory.PostAsJsonAsync(AddressOfTheAccountRegistrationEndpoint, requestSentTwiceWithTheSameAddress);
+        var answerForTheAddressStillFree = await clientThatCallsTheApiInMemory.PostAsJsonAsync(AddressOfTheAccountRegistrationEndpoint, requestSentThreeTimesWithTheSameAddress);
+        var answerForTheAddressNotYetConfirmed = await clientThatCallsTheApiInMemory.PostAsJsonAsync(AddressOfTheAccountRegistrationEndpoint, requestSentThreeTimesWithTheSameAddress);
+        apiStartedInMemoryForThisTest.RepositoryThatKeepsAccountsInMemory.SavedUsers[0].IsEmailConfirmed = true;
+        var answerForTheAddressAlreadyConfirmed = await clientThatCallsTheApiInMemory.PostAsJsonAsync(AddressOfTheAccountRegistrationEndpoint, requestSentThreeTimesWithTheSameAddress);
 
         Assert.Equal(HttpStatusCode.OK, answerForTheAddressStillFree.StatusCode);
-        Assert.Equal(HttpStatusCode.OK, answerForTheAddressAlreadyUsed.StatusCode);
-        Assert.Equal(
-            await answerForTheAddressStillFree.Content.ReadAsStringAsync(),
-            await answerForTheAddressAlreadyUsed.Content.ReadAsStringAsync());
+        Assert.Equal(HttpStatusCode.OK, answerForTheAddressNotYetConfirmed.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, answerForTheAddressAlreadyConfirmed.StatusCode);
+        var textOfTheAnswerForTheFreeAddress = await answerForTheAddressStillFree.Content.ReadAsStringAsync();
+        Assert.Equal(textOfTheAnswerForTheFreeAddress, await answerForTheAddressNotYetConfirmed.Content.ReadAsStringAsync());
+        Assert.Equal(textOfTheAnswerForTheFreeAddress, await answerForTheAddressAlreadyConfirmed.Content.ReadAsStringAsync());
 
-        // Seul l'e-mail change : un lien de confirmation, puis un simple avertissement.
+        // Seul l'e-mail change : un lien de confirmation, un nouveau lien, puis un simple avertissement.
         Assert.Single(apiStartedInMemoryForThisTest.RepositoryThatKeepsAccountsInMemory.SavedUsers);
         var emailsSentToTheVisitorAddress = apiStartedInMemoryForThisTest.SenderThatKeepsTheEmailsInMemory.SentEmails;
-        Assert.Equal(2, emailsSentToTheVisitorAddress.Count);
+        Assert.Equal(3, emailsSentToTheVisitorAddress.Count);
         Assert.Contains("confirm-email#token=", emailsSentToTheVisitorAddress[0].Body);
-        Assert.DoesNotContain("confirm-email", emailsSentToTheVisitorAddress[1].Body);
+        Assert.Contains("confirm-email#token=", emailsSentToTheVisitorAddress[1].Body);
+        Assert.DoesNotContain("confirm-email", emailsSentToTheVisitorAddress[2].Body);
+    }
+
+    // SS §6 : 3 inscriptions par heure pour une même adresse e-mail, même depuis plusieurs adresses IP.
+    [Fact]
+    public async Task FourthRegistrationOfTheSameAddressIsRefusedEvenFromAnotherIpAddress()
+    {
+        using var apiStartedInMemoryForThisTest = new ApiFactoryWithFakeRepositoryAndEmails();
+        var requestSentByEveryVisitorOfThisTest = new { email = "victime@exemple.test", password = ValidPasswordChosenInTheseTests };
+
+        for (var numberOfTheRegistrationBeingSent = 1; numberOfTheRegistrationBeingSent <= 3; numberOfTheRegistrationBeingSent++)
+        {
+            var clientSendingTheAllowedRegistrationRequest = CreateClientCallingFromThisIpAddress(apiStartedInMemoryForThisTest, "203.0.113." + numberOfTheRegistrationBeingSent);
+            var answerToTheAllowedRegistrationRequest = await clientSendingTheAllowedRegistrationRequest.PostAsJsonAsync(AddressOfTheAccountRegistrationEndpoint, requestSentByEveryVisitorOfThisTest);
+            Assert.Equal(HttpStatusCode.OK, answerToTheAllowedRegistrationRequest.StatusCode);
+        }
+
+        var clientSendingTheFourthRegistrationRequest = CreateClientCallingFromThisIpAddress(apiStartedInMemoryForThisTest, "203.0.113.4");
+        var answerToTheFourthRegistrationRequest = await clientSendingTheFourthRegistrationRequest.PostAsJsonAsync(AddressOfTheAccountRegistrationEndpoint, requestSentByEveryVisitorOfThisTest);
+
+        Assert.Equal(HttpStatusCode.TooManyRequests, answerToTheFourthRegistrationRequest.StatusCode);
+        Assert.Equal(3, apiStartedInMemoryForThisTest.SenderThatKeepsTheEmailsInMemory.SentEmails.Count);
+        SecurityHeadersAssertions.CheckThatAnswerCarriesTheExactSecurityHeaders(answerToTheFourthRegistrationRequest);
+
+        // Une heure plus tard, l'adresse est de nouveau acceptée.
+        apiStartedInMemoryForThisTest.ClockThatOnlyMovesWhenTestsAskIt.MoveFakeClockForwardByThisDuration(TimeSpan.FromHours(1));
+        var clientSendingTheLaterRegistrationRequest = CreateClientCallingFromThisIpAddress(apiStartedInMemoryForThisTest, "203.0.113.5");
+        var answerToTheLaterRegistrationRequest = await clientSendingTheLaterRegistrationRequest.PostAsJsonAsync(AddressOfTheAccountRegistrationEndpoint, requestSentByEveryVisitorOfThisTest);
+        Assert.Equal(HttpStatusCode.OK, answerToTheLaterRegistrationRequest.StatusCode);
+    }
+
+    // GR Auth : si l'e-mail ne part pas, le visiteur est invité à réessayer, sans aucun détail technique.
+    [Fact]
+    public async Task EmailFailureGivesClearErrorAndTheNextRegistrationSendsNewLink()
+    {
+        using var apiStartedLikeInProductionForThisTest = new ApiFactoryRunningLikeInProduction();
+        var clientThatCallsTheApiInProductionMode = apiStartedLikeInProductionForThisTest.CreateClient();
+        var requestSentTwiceWithTheSameAddress = new { email = "visiteur@exemple.test", password = ValidPasswordChosenInTheseTests };
+        apiStartedLikeInProductionForThisTest.SenderThatKeepsTheEmailsInMemory.EveryEmailFailsDuringThisTest = true;
+
+        var answerDuringTheSimulatedEmailFailure = await clientThatCallsTheApiInProductionMode.PostAsJsonAsync(AddressOfTheAccountRegistrationEndpoint, requestSentTwiceWithTheSameAddress);
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, answerDuringTheSimulatedEmailFailure.StatusCode);
+        var textOfTheAnswerDuringTheEmailFailure = await answerDuringTheSimulatedEmailFailure.Content.ReadAsStringAsync();
+        var jsonDocumentOfTheEmailFailure = JsonDocument.Parse(textOfTheAnswerDuringTheEmailFailure);
+        Assert.Equal(AccountRegistrationController.MessageShownWhenTheEmailCouldNotBeSent, jsonDocumentOfTheEmailFailure.RootElement.GetProperty("title").GetString());
+        Assert.DoesNotContain("panne simulée", textOfTheAnswerDuringTheEmailFailure);
+        Assert.DoesNotContain("visiteur@exemple.test", textOfTheAnswerDuringTheEmailFailure);
+        SecurityHeadersAssertions.CheckThatAnswerCarriesTheExactSecurityHeaders(answerDuringTheSimulatedEmailFailure);
+
+        // Le journal désigne l'utilisateur par son identifiant, jamais par son adresse (SS §7).
+        var userSavedDuringTheEmailFailure = Assert.Single(apiStartedLikeInProductionForThisTest.RepositoryThatKeepsAccountsInMemory.SavedUsers);
+        var completeTextOfTheTechnicalLog = string.Join("\n", apiStartedLikeInProductionForThisTest.LoggerThatKeepsTheMessagesInMemory.MessagesWrittenInTheLog);
+        Assert.Contains(userSavedDuringTheEmailFailure.Id.ToString(), completeTextOfTheTechnicalLog);
+
+        apiStartedLikeInProductionForThisTest.SenderThatKeepsTheEmailsInMemory.EveryEmailFailsDuringThisTest = false;
+        var answerAfterTheEndOfEmailFailure = await clientThatCallsTheApiInProductionMode.PostAsJsonAsync(AddressOfTheAccountRegistrationEndpoint, requestSentTwiceWithTheSameAddress);
+
+        Assert.Equal(HttpStatusCode.OK, answerAfterTheEndOfEmailFailure.StatusCode);
+        Assert.Contains("confirm-email#token=", Assert.Single(apiStartedLikeInProductionForThisTest.SenderThatKeepsTheEmailsInMemory.SentEmails).Body);
+    }
+
+    // SS §7 : même au niveau le plus détaillé, le journal ne contient ni adresse, ni mot de passe, ni jeton.
+    [Fact]
+    public async Task TechnicalLogNeverContainsAddressPasswordOrToken()
+    {
+        using var apiLoggingEverythingForThisTest = new ApiFactoryLoggingEverything();
+        var clientThatCallsTheApiInMemory = apiLoggingEverythingForThisTest.CreateClient();
+        var requestSentWithTheSameAddress = new { email = "visiteur-du-journal@exemple.test", password = ValidPasswordChosenInTheseTests };
+
+        await clientThatCallsTheApiInMemory.PostAsJsonAsync(AddressOfTheAccountRegistrationEndpoint, requestSentWithTheSameAddress);
+        var tokenOfTheEmailConfirmationLink = ReadTokenWrittenInTheConfirmationLink(apiLoggingEverythingForThisTest.SenderThatKeepsTheEmailsInMemory.SentEmails[0].Body);
+        await clientThatCallsTheApiInMemory.PostAsJsonAsync(AddressOfTheAccountConfirmationEndpoint, new { token = tokenOfTheEmailConfirmationLink, password = "Autre-Mot-De-Passe-2" });
+        await clientThatCallsTheApiInMemory.PostAsJsonAsync(AddressOfTheAccountConfirmationEndpoint, new { token = tokenOfTheEmailConfirmationLink, password = ValidPasswordChosenInTheseTests });
+        apiLoggingEverythingForThisTest.SenderThatKeepsTheEmailsInMemory.EveryEmailFailsDuringThisTest = true;
+        await clientThatCallsTheApiInMemory.PostAsJsonAsync(AddressOfTheAccountRegistrationEndpoint, requestSentWithTheSameAddress);
+
+        var messagesWrittenInTheTechnicalLog = apiLoggingEverythingForThisTest.LoggerThatKeepsTheMessagesInMemory.MessagesWrittenInTheLog;
+        Assert.Contains(messagesWrittenInTheTechnicalLog, messageWrittenInTheTechnicalLog => messageWrittenInTheTechnicalLog.StartsWith("Debug"));
+
+        var completeTextOfTheTechnicalLog = string.Join("\n", messagesWrittenInTheTechnicalLog);
+        Assert.DoesNotContain("visiteur-du-journal@exemple.test", completeTextOfTheTechnicalLog);
+        Assert.DoesNotContain(ValidPasswordChosenInTheseTests, completeTextOfTheTechnicalLog);
+        Assert.DoesNotContain("Autre-Mot-De-Passe-2", completeTextOfTheTechnicalLog);
+        Assert.DoesNotContain(tokenOfTheEmailConfirmationLink, completeTextOfTheTechnicalLog);
     }
 
     [Fact]
@@ -128,19 +227,22 @@ public class AccountRegistrationEndpointTests
     public async Task VisitorFromAnotherAddressIsNotBlockedByTheLimitOfTheFirstOne()
     {
         using var apiStartedInMemoryForThisTest = new ApiFactoryWithFakeRepositoryAndEmails();
-        var clientCallingFromTheFirstAddress = apiStartedInMemoryForThisTest.CreateClient();
-        clientCallingFromTheFirstAddress.DefaultRequestHeaders.Add(StartupFilterThatReadsTheVisitorAddress.NameOfTheHeaderGivingTheVisitorAddress, "203.0.113.1");
-        var clientCallingFromTheSecondAddress = apiStartedInMemoryForThisTest.CreateClient();
-        clientCallingFromTheSecondAddress.DefaultRequestHeaders.Add(StartupFilterThatReadsTheVisitorAddress.NameOfTheHeaderGivingTheVisitorAddress, "203.0.113.2");
-        var requestSentByBothVisitorsOfThisTest = new { email = "visiteur@exemple.test", password = ValidPasswordChosenInTheseTests };
+        var clientCallingFromTheFirstAddress = CreateClientCallingFromThisIpAddress(apiStartedInMemoryForThisTest, "203.0.113.1");
+        var clientCallingFromTheSecondAddress = CreateClientCallingFromThisIpAddress(apiStartedInMemoryForThisTest, "203.0.113.2");
 
         for (var numberOfTheRegistrationBeingSent = 1; numberOfTheRegistrationBeingSent <= 5; numberOfTheRegistrationBeingSent++)
         {
-            await clientCallingFromTheFirstAddress.PostAsJsonAsync(AddressOfTheAccountRegistrationEndpoint, requestSentByBothVisitorsOfThisTest);
+            await clientCallingFromTheFirstAddress.PostAsJsonAsync(
+                AddressOfTheAccountRegistrationEndpoint,
+                new { email = "visiteur" + numberOfTheRegistrationBeingSent + "@exemple.test", password = ValidPasswordChosenInTheseTests });
         }
 
-        var sixthAnswerToTheFirstAddress = await clientCallingFromTheFirstAddress.PostAsJsonAsync(AddressOfTheAccountRegistrationEndpoint, requestSentByBothVisitorsOfThisTest);
-        var firstAnswerToTheSecondAddress = await clientCallingFromTheSecondAddress.PostAsJsonAsync(AddressOfTheAccountRegistrationEndpoint, requestSentByBothVisitorsOfThisTest);
+        var sixthAnswerToTheFirstAddress = await clientCallingFromTheFirstAddress.PostAsJsonAsync(
+            AddressOfTheAccountRegistrationEndpoint,
+            new { email = "visiteur6@exemple.test", password = ValidPasswordChosenInTheseTests });
+        var firstAnswerToTheSecondAddress = await clientCallingFromTheSecondAddress.PostAsJsonAsync(
+            AddressOfTheAccountRegistrationEndpoint,
+            new { email = "visiteur7@exemple.test", password = ValidPasswordChosenInTheseTests });
 
         Assert.Equal(HttpStatusCode.TooManyRequests, sixthAnswerToTheFirstAddress.StatusCode);
         Assert.Equal(HttpStatusCode.OK, firstAnswerToTheSecondAddress.StatusCode);

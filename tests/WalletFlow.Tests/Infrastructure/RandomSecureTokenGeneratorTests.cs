@@ -33,6 +33,17 @@ public class RandomSecureTokenGeneratorTests
         Assert.Equal(64, generatedSecureTokenBeingTestedHere.HashToStoreInTheDatabase.Length);
     }
 
+    // Le jeton reçu dans le lien doit redonner l'empreinte enregistrée : sinon, aucun lien ne marcherait.
+    [Fact]
+    public void TokenReceivedInTheLinkGivesBackTheStoredHash()
+    {
+        var generatedSecureTokenBeingTestedHere = generatorBeingTestedWithRealRandomness.GenerateNewRandomSecureTokenWithItsHash();
+
+        var hashComputedFromTheTokenOfTheLink = generatorBeingTestedWithRealRandomness.ConvertSecureTokenIntoItsHash(generatedSecureTokenBeingTestedHere.TokenToSendInTheEmailLink);
+
+        Assert.Equal(generatedSecureTokenBeingTestedHere.HashToStoreInTheDatabase, hashComputedFromTheTokenOfTheLink);
+    }
+
     [Fact]
     public void TwoGeneratedTokensAreAlwaysDifferentFromEachOther()
     {

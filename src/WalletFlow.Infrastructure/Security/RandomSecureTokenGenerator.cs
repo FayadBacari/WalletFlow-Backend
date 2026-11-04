@@ -17,9 +17,14 @@ public class RandomSecureTokenGenerator : ISecureTokenGenerator
         var randomBytesOfTheNewSecureToken = RandomNumberGenerator.GetBytes(NumberOfRandomBytesInSecureToken);
         var tokenToSendInTheEmailLink = Base64Url.EncodeToString(randomBytesOfTheNewSecureToken);
 
-        var hashBytesOfTheNewSecureToken = SHA256.HashData(Encoding.UTF8.GetBytes(tokenToSendInTheEmailLink));
-        var hashToStoreInTheDatabaseColumn = Convert.ToHexStringLower(hashBytesOfTheNewSecureToken);
+        return new GeneratedSecureToken(tokenToSendInTheEmailLink, ConvertSecureTokenIntoItsHash(tokenToSendInTheEmailLink));
+    }
 
-        return new GeneratedSecureToken(tokenToSendInTheEmailLink, hashToStoreInTheDatabaseColumn);
+    // Calcule l'empreinte SHA-256 d'un jeton, telle qu'elle est enregistrée en base.
+    public string ConvertSecureTokenIntoItsHash(string tokenToConvertIntoItsHash)
+    {
+        var hashBytesOfTheSecureToken = SHA256.HashData(Encoding.UTF8.GetBytes(tokenToConvertIntoItsHash));
+
+        return Convert.ToHexStringLower(hashBytesOfTheSecureToken);
     }
 }

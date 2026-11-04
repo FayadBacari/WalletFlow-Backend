@@ -2,17 +2,20 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using WalletFlow.Application.Emails;
 using WalletFlow.Application.UserAccounts;
 using WalletFlow.Tests.Fakes;
 
 namespace WalletFlow.Tests.Api;
 
-// Lance la vraie API en mémoire pour les tests. Seuls la base et l'envoi des e-mails sont remplacés.
+// Lance la vraie API en mémoire pour les tests. Seuls la base, l'envoi des e-mails et l'horloge sont remplacés.
 public class ApiFactoryWithFakeRepositoryAndEmails : WebApplicationFactory<Program>
 {
     public FakeUserAccountRepository RepositoryThatKeepsAccountsInMemory { get; } = new FakeUserAccountRepository();
     public FakeEmailSender SenderThatKeepsTheEmailsInMemory { get; } = new FakeEmailSender();
+    public FakeTimeProviderForTests ClockThatOnlyMovesWhenTestsAskIt { get; } = new FakeTimeProviderForTests();
+    public LoggerProviderThatKeepsTheMessages LoggerThatKeepsTheMessagesInMemory { get; } = new LoggerProviderThatKeepsTheMessages();
 
     // Remplace les services avant le démarrage de l'API (nom imposé par le framework).
     protected override void ConfigureWebHost(IWebHostBuilder builderOfTheApiStartedForTheTests)
@@ -24,6 +27,8 @@ public class ApiFactoryWithFakeRepositoryAndEmails : WebApplicationFactory<Progr
         {
             servicesOfTheApiStartedForTheTests.AddSingleton<IUserAccountRepository>(RepositoryThatKeepsAccountsInMemory);
             servicesOfTheApiStartedForTheTests.AddSingleton<IEmailSender>(SenderThatKeepsTheEmailsInMemory);
+            servicesOfTheApiStartedForTheTests.AddSingleton<TimeProvider>(ClockThatOnlyMovesWhenTestsAskIt);
+            servicesOfTheApiStartedForTheTests.AddSingleton<ILoggerProvider>(LoggerThatKeepsTheMessagesInMemory);
             servicesOfTheApiStartedForTheTests.AddSingleton<IStartupFilter, StartupFilterThatReadsTheVisitorAddress>();
         });
     }

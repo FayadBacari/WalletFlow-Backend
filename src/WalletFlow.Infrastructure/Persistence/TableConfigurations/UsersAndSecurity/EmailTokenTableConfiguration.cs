@@ -19,7 +19,11 @@ public class EmailTokenTableConfiguration : IEntityTypeConfiguration<EmailToken>
 
         builderOfTheEmailTokenTableMapping.Property(nameof(EmailToken.Type)).HasColumnName("type_jeton")
             .HasConversion(EmailTokenTypeDatabaseCodes.ConverterBetweenEmailTokenTypeAndDatabaseCode);
-        builderOfTheEmailTokenTableMapping.Property(nameof(EmailToken.TokenHash)).HasColumnName("empreinte_jeton");
+
+        // Le type est précisé pour que la recherche d'un jeton utilise l'index unique de la colonne :
+        // sans lui, EF Core envoie du texte, et PostgreSQL parcourt toute la table.
+        builderOfTheEmailTokenTableMapping.Property(nameof(EmailToken.TokenHash)).HasColumnName("empreinte_jeton").HasColumnType("char(64)");
+
         builderOfTheEmailTokenTableMapping.Property(nameof(EmailToken.ExpiresAt)).HasColumnName("date_expiration_jeton");
         builderOfTheEmailTokenTableMapping.Property(nameof(EmailToken.UsedAt)).HasColumnName("date_utilisation_jeton");
         builderOfTheEmailTokenTableMapping.Property(nameof(EmailToken.NewEmail)).HasColumnName("nouvel_email");

@@ -28,11 +28,12 @@ public static class InfrastructureServicesRegistration
         return servicesOfTheWalletFlowApplication;
     }
 
-    // Ajoute le hachage des mots de passe et la création des jetons.
+    // Ajoute le hachage des mots de passe, la création des jetons et la limite par adresse e-mail.
     public static IServiceCollection AddWalletFlowSecurityToolsToTheServices(this IServiceCollection servicesOfTheWalletFlowApplication)
     {
         servicesOfTheWalletFlowApplication.AddSingleton<IPasswordHasher, LibsodiumPasswordHasher>();
         servicesOfTheWalletFlowApplication.AddSingleton<ISecureTokenGenerator, RandomSecureTokenGenerator>();
+        servicesOfTheWalletFlowApplication.AddSingleton<IEmailAddressRequestLimiter, InMemoryEmailAddressRequestLimiter>();
 
         return servicesOfTheWalletFlowApplication;
     }

@@ -5,4 +5,7 @@ public interface ISecureTokenGenerator
 {
     // Tire au hasard un nouveau jeton et calcule son empreinte.
     GeneratedSecureToken GenerateNewRandomSecureTokenWithItsHash();
+
+    // Calcule l'empreinte d'un jeton reçu dans un lien, pour le retrouver en base.
+    string ConvertSecureTokenIntoItsHash(string tokenToConvertIntoItsHash);
 }
