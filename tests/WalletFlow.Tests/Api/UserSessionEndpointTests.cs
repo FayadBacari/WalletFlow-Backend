@@ -8,9 +8,12 @@ using Microsoft.Net.Http.Headers;
 using WalletFlow.Api.Authentication;
 using WalletFlow.Api.Configuration;
 using WalletFlow.Api.Controllers;
+using WalletFlow.Application.AccountRecovery;
 using WalletFlow.Application.Security;
 using WalletFlow.Application.UserSessions;
+using WalletFlow.Infrastructure.Emails;
 using WalletFlow.Infrastructure.Persistence.Repositories;
+using WalletFlow.Infrastructure.Security;
 using static WalletFlow.Tests.Api.LoginRequestTestValues;
 using static WalletFlow.Tests.Api.RegistrationRequestTestValues;
 
@@ -426,6 +429,12 @@ public class UserSessionEndpointTests
         Assert.NotNull(scopeOfTheRealServicesOfTheApi.ServiceProvider.GetRequiredService<AccountLoginService>());
         Assert.NotNull(scopeOfTheRealServicesOfTheApi.ServiceProvider.GetRequiredService<UserSessionService>());
         Assert.NotNull(scopeOfTheRealServicesOfTheApi.ServiceProvider.GetRequiredService<ExpiredUserSessionsCleanupService>());
+        Assert.NotNull(scopeOfTheRealServicesOfTheApi.ServiceProvider.GetRequiredService<PasswordRecoveryRequestService>());
+        Assert.NotNull(scopeOfTheRealServicesOfTheApi.ServiceProvider.GetRequiredService<PasswordResetService>());
+        Assert.NotNull(scopeOfTheRealServicesOfTheApi.ServiceProvider.GetRequiredService<AccountUnlockService>());
+        Assert.NotNull(scopeOfTheRealServicesOfTheApi.ServiceProvider.GetRequiredService<BackgroundEmailRequestProcessingService>());
+        Assert.IsType<InMemoryBackgroundEmailRequestQueue>(scopeOfTheRealServicesOfTheApi.ServiceProvider.GetRequiredService<IBackgroundEmailRequestQueue>());
+        Assert.IsType<InMemoryPasswordRecoveryRequestLimiter>(scopeOfTheRealServicesOfTheApi.ServiceProvider.GetRequiredService<IPasswordRecoveryRequestLimiter>());
     }
 
     // Le nom de l'en-tête est un contrat avec le site : il ne doit pas changer sans qu'on le voie.
@@ -457,20 +466,20 @@ public class UserSessionEndpointTests
 
     // Ajouter une route publique doit être un choix conscient : ce test oblige à la déclarer ici.
     [Fact]
-    public void OnlyTheThreeExpectedRoutesCanBeCalledWithoutSession()
+    public void OnlyTheSixExpectedRoutesCanBeCalledWithoutSession()
     {
         using var apiStartedInMemoryForThisTest = new ApiFactoryWithFakeRepositoryAndEmails();
-        var routesExpectedToBePublicInTheApi = new List<string> { "api/account/confirm-email", "api/account/login", "api/account/register" };
+        var routesExpectedToBePublicInTheApi = new List<string> { "api/account/confirm-email", "api/account/forgot-password", "api/account/login", "api/account/register", "api/account/reset-password", "api/account/unlock" };
 
         Assert.Equal(routesExpectedToBePublicInTheApi, ListRoutesCarryingThisAttribute<Microsoft.AspNetCore.Authorization.IAllowAnonymous>(apiStartedInMemoryForThisTest));
     }
 
     // SS §6 : seules les routes appelées sans session n'ont pas besoin du jeton anti-CSRF.
     [Fact]
-    public void OnlyTheThreeExpectedRoutesIgnoreTheCsrfToken()
+    public void OnlyTheSixExpectedRoutesIgnoreTheCsrfToken()
     {
         using var apiStartedInMemoryForThisTest = new ApiFactoryWithFakeRepositoryAndEmails();
-        var routesExpectedToBePublicInTheApi = new List<string> { "api/account/confirm-email", "api/account/login", "api/account/register" };
+        var routesExpectedToBePublicInTheApi = new List<string> { "api/account/confirm-email", "api/account/forgot-password", "api/account/login", "api/account/register", "api/account/reset-password", "api/account/unlock" };
 
         Assert.Equal(routesExpectedToBePublicInTheApi, ListRoutesCarryingThisAttribute<IgnoreAntiforgeryTokenAttribute>(apiStartedInMemoryForThisTest));
     }

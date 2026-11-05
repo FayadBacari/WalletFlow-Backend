@@ -6,6 +6,10 @@ public static class AccountLockoutRules
     public const short MaximumNumberOfFailedLoginAttempts = 5;
     public const short MaximumNumberOfLockoutsCountedOnOneAccount = 8;
 
+    // Un conflit veut dire qu'une autre requête a réussi à écrire. Le compte se bloque au bout de 5 essais :
+    // 10 passages suffisent donc largement. Au-delà, la demande est refusée, jamais acceptée sans contrôle.
+    public const int MaximumNumberOfTriesWhileOtherRequestsChangeTheAccount = 10;
+
     public static readonly TimeSpan DurationOfTheFirstLockoutOfAnAccount = TimeSpan.FromMinutes(15);
     public static readonly TimeSpan MaximumDurationOfOneLockoutOfAnAccount = TimeSpan.FromHours(24);
 
@@ -60,6 +64,14 @@ public static class AccountLockoutRules
         }
 
         return durationOfTheLockoutBeingCalculated;
+    }
+
+    // Termine le blocage en cours et redonne ses 5 essais au compte : lien de déblocage ou récupération réussie (GR Auth).
+    // Le nombre de blocages ne change pas : il ne repart à zéro qu'après une connexion réussie.
+    public static void RemoveCurrentLockoutOfThisAccount(User accountThatIsGettingUnlockedNow)
+    {
+        accountThatIsGettingUnlockedNow.FailedLoginAttemptCount = 0;
+        accountThatIsGettingUnlockedNow.LockoutEndsAt = null;
     }
 
     // Remet tout à zéro après une connexion réussie (GR Auth).

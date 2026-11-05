@@ -35,6 +35,17 @@ public class FakeUserAccountRepository : IUserAccountRepository
     // Simule un compte effacé pendant la connexion : au-delà de ce nombre de recherches par identifiant, il n'existe plus.
     public int? NumberOfSearchesByIdentifierBeforeTheAccountDisappears { get; set; } = null;
 
+    // Simule d'autres requêtes qui changent le compte juste avant l'enregistrement d'un nouveau mot de passe ou d'un déblocage.
+    public int NumberOfConflictsBeforeTheLinkIsUsed { get; set; } = 0;
+
+    // Simule une autre requête qui utilise le même lien juste avant l'enregistrement.
+    public bool LinkIsUsedByAnotherRequestJustBeforeTheSave { get; set; } = false;
+
+    // Simule une panne de la base au moment de lire un lien.
+    public bool DatabaseIsDownWhenReadingTheLinks { get; set; } = false;
+
+    public List<SecurityEvent> SecurityEventsSavedWithTheLinks { get; } = new List<SecurityEvent>();
+
     public int NumberOfSearchesByEmailAddress { get; private set; } = 0;
     public int NumberOfLoginCountersSaved { get; private set; } = 0;
 
@@ -105,13 +116,85 @@ public class FakeUserAccountRepository : IUserAccountRepository
         return Task.FromResult(true);
     }
 
-    // Cherche en mémoire un jeton de confirmation d'inscription par son empreinte.
-    public Task<EmailToken?> FindSignupConfirmationTokenByItsHashAsync(string hashOfTheTokenFromTheLink)
+    // Garde le nouveau jeton en mémoire, et retire l'ancien du même type et du même compte.
+    public Task ReplaceEmailTokenOfThisTypeForThisAccountAsync(EmailToken newEmailTokenOfTheAccount)
     {
+        SavedEmailTokens.RemoveAll(tokenAlreadyKeptInThisMemoryList =>
+            tokenAlreadyKeptInThisMemoryList.UserId == newEmailTokenOfTheAccount.UserId
+            && tokenAlreadyKeptInThisMemoryList.Type == newEmailTokenOfTheAccount.Type);
+        SavedEmailTokens.Add(newEmailTokenOfTheAccount);
+
+        return Task.CompletedTask;
+    }
+
+    // Garde le nouveau mot de passe et marque le jeton comme utilisé, sauf si un conflit est simulé.
+    public Task<bool> TryToSaveNewPasswordAndUseItsTokenAsync(
+        User accountThatReceivesTheNewPassword,
+        EmailToken tokenUsedToChangeThePassword,
+        string secureHashOfTheNewPassword,
+        DateTime dateOfThePasswordChangeOfTheAccount,
+        SecurityEvent securityEventOfThePasswordChange)
+    {
+        if (CheckThatConflictIsSimulatedForThisLink(tokenUsedToChangeThePassword, dateOfThePasswordChangeOfTheAccount))
+        {
+            return Task.FromResult(false);
+        }
+
+        accountThatReceivesTheNewPassword.PasswordHash = secureHashOfTheNewPassword;
+        tokenUsedToChangeThePassword.UsedAt = dateOfThePasswordChangeOfTheAccount;
+        SecurityEventsSavedWithTheLinks.Add(securityEventOfThePasswordChange);
+
+        return Task.FromResult(true);
+    }
+
+    // Marque le jeton comme utilisé, sauf si un conflit est simulé.
+    public Task<bool> TryToUnlockAccountAndUseItsTokenAsync(
+        User accountJustUnlockedByTheLink,
+        EmailToken tokenUsedToUnlockTheAccount,
+        DateTime dateOfTheAccountUnlockByTheLink,
+        SecurityEvent securityEventOfTheAccountUnlock)
+    {
+        if (CheckThatConflictIsSimulatedForThisLink(tokenUsedToUnlockTheAccount, dateOfTheAccountUnlockByTheLink))
+        {
+            return Task.FromResult(false);
+        }
+
+        tokenUsedToUnlockTheAccount.UsedAt = dateOfTheAccountUnlockByTheLink;
+        SecurityEventsSavedWithTheLinks.Add(securityEventOfTheAccountUnlock);
+
+        return Task.FromResult(true);
+    }
+
+    // Renvoie vrai si un conflit est simulé pour cet enregistrement.
+    private bool CheckThatConflictIsSimulatedForThisLink(EmailToken tokenOfTheLinkBeingUsedNow, DateTime dateOfTheCurrentUseOfTheLink)
+    {
+        if (LinkIsUsedByAnotherRequestJustBeforeTheSave)
+        {
+            tokenOfTheLinkBeingUsedNow.UsedAt = dateOfTheCurrentUseOfTheLink;
+            return true;
+        }
+
+        if (NumberOfConflictsBeforeTheLinkIsUsed > 0)
+        {
+            NumberOfConflictsBeforeTheLinkIsUsed = NumberOfConflictsBeforeTheLinkIsUsed - 1;
+            return true;
+        }
+
+        return false;
+    }
+
+    // Cherche en mémoire un jeton de ce type par son empreinte.
+    public Task<EmailToken?> FindEmailTokenOfThisTypeByItsHashAsync(string hashOfTheTokenFromTheLink, EmailTokenType typeOfTheTokenToFindNow)
+    {
+        if (DatabaseIsDownWhenReadingTheLinks)
+        {
+            throw new InvalidOperationException(TechnicalDetailOfTheSimulatedDatabaseFailure);
+        }
+
         foreach (var tokenAlreadyKeptInThisMemoryList in SavedEmailTokens)
         {
             if (tokenAlreadyKeptInThisMemoryList.TokenHash == hashOfTheTokenFromTheLink
-                && tokenAlreadyKeptInThisMemoryList.Type == EmailTokenType.SignupConfirmation)
+                && tokenAlreadyKeptInThisMemoryList.Type == typeOfTheTokenToFindNow)
             {
                 return Task.FromResult<EmailToken?>(tokenAlreadyKeptInThisMemoryList);
             }

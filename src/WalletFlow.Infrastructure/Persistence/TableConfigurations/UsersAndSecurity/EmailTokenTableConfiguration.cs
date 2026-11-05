@@ -25,7 +25,10 @@ public class EmailTokenTableConfiguration : IEntityTypeConfiguration<EmailToken>
         builderOfTheEmailTokenTableMapping.Property(nameof(EmailToken.TokenHash)).HasColumnName("empreinte_jeton").HasColumnType("char(64)");
 
         builderOfTheEmailTokenTableMapping.Property(nameof(EmailToken.ExpiresAt)).HasColumnName("date_expiration_jeton");
-        builderOfTheEmailTokenTableMapping.Property(nameof(EmailToken.UsedAt)).HasColumnName("date_utilisation_jeton");
+
+        // L'usage unique est contrôlé en base : deux clics simultanés sur le même lien ne peuvent pas réussir tous les deux.
+        builderOfTheEmailTokenTableMapping.Property(nameof(EmailToken.UsedAt)).HasColumnName("date_utilisation_jeton").IsConcurrencyToken();
+
         builderOfTheEmailTokenTableMapping.Property(nameof(EmailToken.NewEmail)).HasColumnName("nouvel_email");
         builderOfTheEmailTokenTableMapping.Property(nameof(EmailToken.UserId)).HasColumnName("id_utilisateur");
 

@@ -341,9 +341,9 @@ public class UserAccountRepositoryTests
             tokenSearchedInTheDatabaseTable.UserId == accountSavedInDatabaseByThisTest.Id
             && tokenSearchedInTheDatabaseTable.Type == EmailTokenType.SignupConfirmation);
 
-        Assert.Null(await repositoryBeingTestedOnTheRealDatabase.FindSignupConfirmationTokenByItsHashAsync(passwordRecoveryTokenOfTheAccount.TokenHash));
-        Assert.NotNull(await repositoryBeingTestedOnTheRealDatabase.FindSignupConfirmationTokenByItsHashAsync(signupConfirmationTokenOfTheAccount.TokenHash));
-        Assert.Null(await repositoryBeingTestedOnTheRealDatabase.FindSignupConfirmationTokenByItsHashAsync(new string('f', 64)));
+        Assert.Null(await repositoryBeingTestedOnTheRealDatabase.FindEmailTokenOfThisTypeByItsHashAsync(passwordRecoveryTokenOfTheAccount.TokenHash, EmailTokenType.SignupConfirmation));
+        Assert.NotNull(await repositoryBeingTestedOnTheRealDatabase.FindEmailTokenOfThisTypeByItsHashAsync(signupConfirmationTokenOfTheAccount.TokenHash, EmailTokenType.SignupConfirmation));
+        Assert.Null(await repositoryBeingTestedOnTheRealDatabase.FindEmailTokenOfThisTypeByItsHashAsync(new string('f', 64), EmailTokenType.SignupConfirmation));
     }
 
     // La recherche d'un jeton doit utiliser l'index unique de sa colonne : sinon, chaque clic sur un lien parcourt toute la table.

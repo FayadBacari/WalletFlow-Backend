@@ -26,6 +26,9 @@ public interface IUserSessionRepository
     // Détruit une session. Ne fait rien si elle n'existe plus.
     Task DeleteUserSessionByItsHashAsync(string hashOfTheTokenOfTheSession);
 
+    // Détruit toutes les sessions d'un compte, après une récupération de mot de passe (SS §3).
+    Task DeleteAllUserSessionsOfThisAccountAsync(Guid identifierOfTheAccountToDisconnectEverywhere);
+
     // Efface les sessions sans activité depuis cette date, et renvoie leur nombre.
     Task<int> DeleteUserSessionsInactiveSinceThisDateAsync(DateTime oldestDateOfActivityStillAccepted);
 }

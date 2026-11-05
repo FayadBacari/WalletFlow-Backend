@@ -1,3 +1,4 @@
+using WalletFlow.Application.AccountRecovery;
 using WalletFlow.Application.Security;
 using WalletFlow.Application.UserAccounts;
 using WalletFlow.Domain.UsersAndSecurity;
@@ -12,13 +13,10 @@ public class AccountLoginService
     public const string ErrorMessageForEmailAddressNotConfirmed =
         "Ton adresse e-mail n'est pas encore confirmée. Ouvre le lien reçu par e-mail, ou inscris-toi à nouveau pour en recevoir un autre.";
 
-    // Un conflit veut dire qu'une autre requête a réussi à écrire. Le compte se bloque au bout de 5 essais :
-    // 10 passages suffisent donc largement. Au-delà, la connexion est refusée, jamais acceptée sans contrôle.
-    private const int MaximumNumberOfTriesToSaveTheLoginOfOneAccount = 10;
-
     private readonly IUserAccountRepository repositoryOfTheUserAccountsInDatabase;
     private readonly IUserSessionRepository repositoryOfTheUserSessionsInDatabase;
     private readonly ISecurityEventRepository repositoryOfTheSecurityEventsInDatabase;
+    private readonly IBackgroundEmailRequestQueue queueOfTheEmailsToPrepareInTheBackground;
     private readonly IPasswordHasher hasherOfThePasswordsTypedByVisitors;
     private readonly ISecureTokenGenerator generatorOfTheSecureRandomTokens;
     private readonly TimeProvider clockThatGivesTheCurrentDateAndTime;
@@ -28,6 +26,7 @@ public class AccountLoginService
         IUserAccountRepository repositoryOfTheUserAccountsInDatabase,
         IUserSessionRepository repositoryOfTheUserSessionsInDatabase,
         ISecurityEventRepository repositoryOfTheSecurityEventsInDatabase,
+        IBackgroundEmailRequestQueue queueOfTheEmailsToPrepareInTheBackground,
         IPasswordHasher hasherOfThePasswordsTypedByVisitors,
         ISecureTokenGenerator generatorOfTheSecureRandomTokens,
         TimeProvider clockThatGivesTheCurrentDateAndTime)
@@ -35,6 +34,7 @@ public class AccountLoginService
         this.repositoryOfTheUserAccountsInDatabase = repositoryOfTheUserAccountsInDatabase;
         this.repositoryOfTheUserSessionsInDatabase = repositoryOfTheUserSessionsInDatabase;
         this.repositoryOfTheSecurityEventsInDatabase = repositoryOfTheSecurityEventsInDatabase;
+        this.queueOfTheEmailsToPrepareInTheBackground = queueOfTheEmailsToPrepareInTheBackground;
         this.hasherOfThePasswordsTypedByVisitors = hasherOfThePasswordsTypedByVisitors;
         this.generatorOfTheSecureRandomTokens = generatorOfTheSecureRandomTokens;
         this.clockThatGivesTheCurrentDateAndTime = clockThatGivesTheCurrentDateAndTime;
@@ -100,15 +100,16 @@ public class AccountLoginService
         string passwordWrittenInItsNormalizedForm,
         LoginAttemptFromVisitor loginAttemptReceivedFromTheVisitor)
     {
+        var secureHashOfThePasswordJustChecked = accountWithEmailAddressAlreadyConfirmed.PasswordHash;
         var resultOfTheCountOfThisAttempt = await TryToCountThisLoginAttemptAsync(accountWithEmailAddressAlreadyConfirmed.Id);
-        var passwordIsTheOneOfTheAccount = hasherOfThePasswordsTypedByVisitors.CheckThatPasswordMatchesItsSecureHash(passwordWrittenInItsNormalizedForm, accountWithEmailAddressAlreadyConfirmed.PasswordHash);
+        var passwordIsTheOneOfTheAccount = hasherOfThePasswordsTypedByVisitors.CheckThatPasswordMatchesItsSecureHash(passwordWrittenInItsNormalizedForm, secureHashOfThePasswordJustChecked);
 
         if (resultOfTheCountOfThisAttempt == ResultOfTheCountOfOneLoginAttempt.AttemptRefused || !passwordIsTheOneOfTheAccount)
         {
             return await RefuseAttemptOnConfirmedAccountAsync(accountWithEmailAddressAlreadyConfirmed.Id, resultOfTheCountOfThisAttempt, loginAttemptReceivedFromTheVisitor);
         }
 
-        return await OpenNewSessionForThisAccountAsync(accountWithEmailAddressAlreadyConfirmed.Id, loginAttemptReceivedFromTheVisitor);
+        return await OpenNewSessionForThisAccountAsync(accountWithEmailAddressAlreadyConfirmed.Id, secureHashOfThePasswordJustChecked, loginAttemptReceivedFromTheVisitor);
     }
 
     // Compte l'essai en base. Si une autre requête a changé le compte entre-temps, relit le compte et recommence :
@@ -117,7 +118,7 @@ public class AccountLoginService
     {
         var dateOfThisLoginAttemptOfTheVisitor = clockThatGivesTheCurrentDateAndTime.GetUtcNow().UtcDateTime;
 
-        for (var numberOfTheTryBeingDone = 1; numberOfTheTryBeingDone <= MaximumNumberOfTriesToSaveTheLoginOfOneAccount; numberOfTheTryBeingDone++)
+        for (var numberOfTheTryBeingDone = 1; numberOfTheTryBeingDone <= AccountLockoutRules.MaximumNumberOfTriesWhileOtherRequestsChangeTheAccount; numberOfTheTryBeingDone++)
         {
             var accountReadBeforeCountingTheAttempt = await repositoryOfTheUserAccountsInDatabase.FindUserAccountByIdentifierAsync(identifierOfTheAccountLoggingIn);
 
@@ -140,8 +141,9 @@ public class AccountLoginService
         return ResultOfTheCountOfOneLoginAttempt.AttemptRefused;
     }
 
-    // Note le refus dans le journal, et le blocage si c'est cet essai qui l'a déclenché :
-    // une seule requête peut l'avoir déclenché, le blocage n'est donc noté qu'une fois.
+    // Note le refus dans le journal, et le blocage si c'est cet essai qui l'a déclenché : une seule requête
+    // peut l'avoir déclenché, le blocage n'est donc noté qu'une fois, et un seul e-mail de déblocage part (SS §2).
+    // Cet e-mail part en arrière-plan : le temps de réponse ne révèle donc pas que le compte existe.
     private async Task<AccountLoginResult> RefuseAttemptOnConfirmedAccountAsync(
         Guid identifierOfTheAccountAlreadyConfirmed,
         ResultOfTheCountOfOneLoginAttempt resultOfTheCountOfThisAttempt,
@@ -150,19 +152,30 @@ public class AccountLoginService
         if (resultOfTheCountOfThisAttempt == ResultOfTheCountOfOneLoginAttempt.AttemptCountedAndAccountLocked)
         {
             await SaveSecurityEventOfThisLoginAttemptAsync(SecurityEventType.Lockout, SecurityEventResult.Success, identifierOfTheAccountAlreadyConfirmed, loginAttemptReceivedFromTheVisitor);
+
+            queueOfTheEmailsToPrepareInTheBackground.AddEmailRequestToTheBackgroundQueue(new BackgroundEmailRequest
+            {
+                TypeOfTheRequestedBackgroundEmail = BackgroundEmailRequestType.AccountUnlock,
+                IdentifierOfTheAccountJustLocked = identifierOfTheAccountAlreadyConfirmed,
+                IpAddressOfTheRequestingVisitor = loginAttemptReceivedFromTheVisitor.IpAddressOfTheVisitor
+            });
         }
 
         return await RefuseLoginAttemptWithWrongCredentialsAsync(identifierOfTheAccountAlreadyConfirmed, loginAttemptReceivedFromTheVisitor);
     }
 
     // Ouvre une session avec un nouvel identifiant (SS §3), et enregistre l'appareil s'il est nouveau.
-    private async Task<AccountLoginResult> OpenNewSessionForThisAccountAsync(Guid identifierOfTheAccountLoggingIn, LoginAttemptFromVisitor loginAttemptReceivedFromTheVisitor)
+    private async Task<AccountLoginResult> OpenNewSessionForThisAccountAsync(
+        Guid identifierOfTheAccountLoggingIn,
+        string secureHashOfThePasswordJustChecked,
+        LoginAttemptFromVisitor loginAttemptReceivedFromTheVisitor)
     {
         var generatedTokenOfTheNewSession = generatorOfTheSecureRandomTokens.GenerateNewRandomSecureTokenWithItsHash();
         var generatedTokenOfTheNewDevice = await GenerateDeviceTokenIfThisDeviceIsNewForTheAccountAsync(identifierOfTheAccountLoggingIn, loginAttemptReceivedFromTheVisitor.DeviceTokenReadInTheCookie);
 
         var loginWasSavedInTheDatabase = await TryToSaveLoginUnlessOtherRequestsKeepChangingTheAccountAsync(
             identifierOfTheAccountLoggingIn,
+            secureHashOfThePasswordJustChecked,
             CreateSessionFromThisGeneratedToken(generatedTokenOfTheNewSession, identifierOfTheAccountLoggingIn),
             CreateDeviceFromThisGeneratedToken(generatedTokenOfTheNewDevice, identifierOfTheAccountLoggingIn),
             CreateSecurityEventOfThisLoginAttempt(SecurityEventType.Login, SecurityEventResult.Success, identifierOfTheAccountLoggingIn, loginAttemptReceivedFromTheVisitor));
@@ -177,17 +190,19 @@ public class AccountLoginService
     }
 
     // Enregistre la connexion. Si une autre requête a changé le compte pendant le hachage, relit le compte et recommence.
-    // Renvoie faux si le compte a disparu, ou s'il change encore au bout de 10 passages.
+    // Renvoie faux si le compte a disparu, s'il change encore au bout de 10 passages, ou si son mot de passe
+    // n'est plus celui qui vient d'être vérifié : une récupération est passée pendant le hachage (SS §3).
     private async Task<bool> TryToSaveLoginUnlessOtherRequestsKeepChangingTheAccountAsync(
         Guid identifierOfTheAccountLoggingIn,
+        string secureHashOfThePasswordJustChecked,
         UserSession newSessionOfTheUserAccount,
         Device? newDeviceOfTheUserAccount,
         SecurityEvent securityEventOfTheSuccessfulLogin)
     {
-        for (var numberOfTheTryBeingDone = 1; numberOfTheTryBeingDone <= MaximumNumberOfTriesToSaveTheLoginOfOneAccount; numberOfTheTryBeingDone++)
+        for (var numberOfTheTryBeingDone = 1; numberOfTheTryBeingDone <= AccountLockoutRules.MaximumNumberOfTriesWhileOtherRequestsChangeTheAccount; numberOfTheTryBeingDone++)
         {
             var accountReadBeforeSavingTheLogin = await repositoryOfTheUserAccountsInDatabase.FindUserAccountByIdentifierAsync(identifierOfTheAccountLoggingIn);
-            if (accountReadBeforeSavingTheLogin == null)
+            if (accountReadBeforeSavingTheLogin == null || accountReadBeforeSavingTheLogin.PasswordHash != secureHashOfThePasswordJustChecked)
             {
                 return false;
             }

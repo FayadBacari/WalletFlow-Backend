@@ -189,7 +189,7 @@ public class AccountRegistrationService
     {
         var emailWithTheSignupConfirmationLink = AccountRegistrationEmails.CreateSignupConfirmationEmailWithItsLink(
             emailAddressInItsStoredForm,
-            BuildSignupConfirmationLinkForEmailToken(generatedTokenForTheConfirmationLink.TokenGivenOnlyToTheVisitor));
+            settingsOfThePublicWalletFlowWebsite.BuildLinkToThisWebsitePageWithItsToken("/confirm-email", generatedTokenForTheConfirmationLink.TokenGivenOnlyToTheVisitor));
 
         return await SendEmailToTheVisitorAsync(emailWithTheSignupConfirmationLink, identifierOfTheAccountToConfirm);
     }
@@ -211,13 +211,5 @@ public class AccountRegistrationService
                 UserIdentifierForTheTechnicalLog = identifierOfTheAccountConcernedByTheEmail
             };
         }
-    }
-
-    // Construit le lien de confirmation. Le lien ouvre une page du site, qui demande le mot de passe
-    // avant de confirmer (SS §2). Le jeton est placé après le # : il n'est jamais envoyé au serveur
-    // quand la page s'ouvre, et n'apparaît donc pas dans ses journaux (SS §7).
-    private string BuildSignupConfirmationLinkForEmailToken(string tokenToSendInTheEmailLink)
-    {
-        return settingsOfThePublicWalletFlowWebsite.PublicWebsiteAddress + "/confirm-email#token=" + tokenToSendInTheEmailLink;
     }
 }

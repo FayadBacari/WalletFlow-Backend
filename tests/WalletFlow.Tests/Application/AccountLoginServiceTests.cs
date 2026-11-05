@@ -19,6 +19,7 @@ public class AccountLoginServiceTests
     private readonly FakeUserAccountRepository repositoryThatKeepsAccountsInMemory = new FakeUserAccountRepository();
     private readonly FakeSecurityEventRepository repositoryThatKeepsSecurityEventsInMemory = new FakeSecurityEventRepository();
     private readonly FakeUserSessionRepository repositoryThatKeepsSessionsInMemory;
+    private readonly FakeBackgroundEmailRequestQueue queueThatKeepsTheEmailRequestsInMemory = new FakeBackgroundEmailRequestQueue();
     private readonly FakePasswordHasher hasherThatCountsTheComparedPasswords = new FakePasswordHasher();
     private readonly RandomSecureTokenGenerator realGeneratorOfTheTokensInTheseTests = new RandomSecureTokenGenerator();
     private readonly FakeTimeProviderForTests clockThatOnlyMovesWhenTestsAskIt = new FakeTimeProviderForTests();
@@ -36,6 +37,7 @@ public class AccountLoginServiceTests
             repositoryThatKeepsAccountsInMemory,
             repositoryThatKeepsSessionsInMemory,
             repositoryThatKeepsSecurityEventsInMemory,
+            queueThatKeepsTheEmailRequestsInMemory,
             hasherThatCountsTheComparedPasswords,
             realGeneratorOfTheTokensInTheseTests,
             clockThatOnlyMovesWhenTestsAskIt);
@@ -494,6 +496,93 @@ public class AccountLoginServiceTests
             TryToLogInWithThisEmailAddressAndPasswordAsync(EmailAddressOfTheAccountInTheseTests, PasswordOfTheAccountInTheseTests));
 
         Assert.Empty(repositoryThatKeepsSessionsInMemory.SavedSessions);
+    }
+
+    // Une récupération passe pendant le hachage : le mot de passe vérifié n'est plus le bon, aucune session ne doit s'ouvrir (SS §3).
+    [Fact]
+    public async Task PasswordChangedWhileItIsBeingCheckedOpensNoSession()
+    {
+        var accountBeingTestedInThisLogin = AddAccountToTheFakeDatabase();
+        hasherThatCountsTheComparedPasswords.ActionRunWhenOnePasswordIsCompared = () =>
+            accountBeingTestedInThisLogin.PasswordHash = "empreinte-du-nouveau-mot-de-passe";
+
+        var resultOfTheLoginDuringTheRecovery = await TryToLogInWithThisEmailAddressAndPasswordAsync(EmailAddressOfTheAccountInTheseTests, PasswordOfTheAccountInTheseTests);
+
+        // La comparaison dit vrai, car elle porte sur l'ancienne empreinte : seul le contrôle qui la suit refuse la session.
+        CheckThatLoginWasRefusedWithTheGenericMessage(resultOfTheLoginDuringTheRecovery);
+    }
+
+    // --- E-mail de déblocage
+
+    [Fact]
+    public async Task FifthWrongPasswordAsksForOneUnlockEmailWithTheAccountAndIpAddress()
+    {
+        var accountBeingTestedInThisLogin = AddAccountToTheFakeDatabase();
+
+        await TryWrongPasswordThisNumberOfTimesAsync(5);
+
+        var requestOfTheAccountUnlockEmail = Assert.Single(queueThatKeepsTheEmailRequestsInMemory.RequestsAddedToTheBackgroundQueue);
+        Assert.Equal(WalletFlow.Application.AccountRecovery.BackgroundEmailRequestType.AccountUnlock, requestOfTheAccountUnlockEmail.TypeOfTheRequestedBackgroundEmail);
+        Assert.Equal(accountBeingTestedInThisLogin.Id, requestOfTheAccountUnlockEmail.IdentifierOfTheAccountJustLocked);
+        Assert.Equal(IpAddressOfTheVisitorInTheseTests, requestOfTheAccountUnlockEmail.IpAddressOfTheRequestingVisitor);
+    }
+
+    [Fact]
+    public async Task FourWrongPasswordsAskForNoUnlockEmail()
+    {
+        AddAccountToTheFakeDatabase();
+
+        await TryWrongPasswordThisNumberOfTimesAsync(4);
+
+        Assert.Empty(queueThatKeepsTheEmailRequestsInMemory.RequestsAddedToTheBackgroundQueue);
+    }
+
+    // SS §2 : un seul e-mail par blocage, pour qu'un attaquant ne puisse pas inonder la boîte de la victime.
+    [Fact]
+    public async Task AttemptsDuringTheLockoutAskForNoOtherUnlockEmail()
+    {
+        AddAccountToTheFakeDatabase();
+        await TryWrongPasswordThisNumberOfTimesAsync(5);
+
+        await TryWrongPasswordThisNumberOfTimesAsync(3);
+        await TryToLogInWithThisEmailAddressAndPasswordAsync(EmailAddressOfTheAccountInTheseTests, PasswordOfTheAccountInTheseTests);
+
+        Assert.Single(queueThatKeepsTheEmailRequestsInMemory.RequestsAddedToTheBackgroundQueue);
+    }
+
+    [Fact]
+    public async Task EveryNewLockoutAsksForItsOwnUnlockEmail()
+    {
+        AddAccountToTheFakeDatabase();
+        await TryWrongPasswordThisNumberOfTimesAsync(5);
+        clockThatOnlyMovesWhenTestsAskIt.MoveFakeClockForwardByThisDuration(TimeSpan.FromMinutes(15));
+
+        await TryWrongPasswordThisNumberOfTimesAsync(5);
+
+        Assert.Equal(2, queueThatKeepsTheEmailRequestsInMemory.RequestsAddedToTheBackgroundQueue.Count);
+    }
+
+    // Le bon mot de passe au 5e essai annule le blocage : il n'y a rien à débloquer.
+    [Fact]
+    public async Task RightPasswordOnTheFifthAttemptAsksForNoUnlockEmail()
+    {
+        AddAccountToTheFakeDatabase();
+        await TryWrongPasswordThisNumberOfTimesAsync(4);
+
+        await TryToLogInWithThisEmailAddressAndPasswordAsync(EmailAddressOfTheAccountInTheseTests, PasswordOfTheAccountInTheseTests);
+
+        Assert.Empty(queueThatKeepsTheEmailRequestsInMemory.RequestsAddedToTheBackgroundQueue);
+    }
+
+    // SS §2 : un compte non confirmé n'est jamais bloqué, et aucun e-mail de déblocage ne part.
+    [Fact]
+    public async Task UnconfirmedAccountNeverAsksForAnUnlockEmail()
+    {
+        AddAccountToTheFakeDatabase(emailAddressOfTheAccountIsConfirmed: false);
+
+        await TryWrongPasswordThisNumberOfTimesAsync(6);
+
+        Assert.Empty(queueThatKeepsTheEmailRequestsInMemory.RequestsAddedToTheBackgroundQueue);
     }
 
     // --- Appareils

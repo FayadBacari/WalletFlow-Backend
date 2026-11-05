@@ -9,6 +9,9 @@ public static class RateLimitingConfiguration
     public const string PolicyNameForSignupRequestsPerIpAddress = "inscription-par-adresse-ip";
     public const string PolicyNameForConfirmationAttemptsPerIpAddress = "confirmation-par-adresse-ip";
     public const string PolicyNameForLoginAttemptsPerIpAddress = "connexion-par-adresse-ip";
+    public const string PolicyNameForPasswordRecoveryRequestsPerIpAddress = "mot-de-passe-oublie-par-adresse-ip";
+    public const string PolicyNameForPasswordResetAttemptsPerIpAddress = "lien-de-recuperation-par-adresse-ip";
+    public const string PolicyNameForAccountUnlockAttemptsPerIpAddress = "lien-de-deblocage-par-adresse-ip";
 
     // Connexion : 10 essais par minute et par adresse IP, en plus des 5 tentatives par compte.
     public static FixedWindowRateLimiterOptions CreateOptionsOfTheLoginAttemptsLimit()
@@ -40,6 +43,16 @@ public static class RateLimitingConfiguration
         };
     }
 
+    // Mot de passe oublié, lien de récupération, lien de déblocage : 10 par heure et par adresse IP. Chaque route a son compteur.
+    public static FixedWindowRateLimiterOptions CreateOptionsOfTheAccountRecoveryRequestsLimit()
+    {
+        return new FixedWindowRateLimiterOptions
+        {
+            PermitLimit = 10,
+            Window = TimeSpan.FromHours(1)
+        };
+    }
+
     // Ajoute les limites de débit aux services de l'API.
     public static IServiceCollection AddWalletFlowRateLimitingToTheServices(this IServiceCollection servicesOfTheWalletFlowApplication)
     {
@@ -47,23 +60,24 @@ public static class RateLimitingConfiguration
         {
             optionsOfTheRateLimitingToConfigure.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
 
-            optionsOfTheRateLimitingToConfigure.AddPolicy(PolicyNameForSignupRequestsPerIpAddress, httpContextOfTheRequestToLimit =>
-                RateLimitPartition.GetFixedWindowLimiter(
-                    ReadIpAddressOfTheRequestToLimit(httpContextOfTheRequestToLimit),
-                    ipAddressUsedAsThePartitionKey => CreateOptionsOfTheSignupRequestsLimit()));
-
-            optionsOfTheRateLimitingToConfigure.AddPolicy(PolicyNameForConfirmationAttemptsPerIpAddress, httpContextOfTheRequestToLimit =>
-                RateLimitPartition.GetFixedWindowLimiter(
-                    ReadIpAddressOfTheRequestToLimit(httpContextOfTheRequestToLimit),
-                    ipAddressUsedAsThePartitionKey => CreateOptionsOfTheConfirmationAttemptsLimit()));
-
-            optionsOfTheRateLimitingToConfigure.AddPolicy(PolicyNameForLoginAttemptsPerIpAddress, httpContextOfTheRequestToLimit =>
-                RateLimitPartition.GetFixedWindowLimiter(
-                    ReadIpAddressOfTheRequestToLimit(httpContextOfTheRequestToLimit),
-                    ipAddressUsedAsThePartitionKey => CreateOptionsOfTheLoginAttemptsLimit()));
+            AddLimitPerIpAddressToTheOptions(optionsOfTheRateLimitingToConfigure, PolicyNameForSignupRequestsPerIpAddress, CreateOptionsOfTheSignupRequestsLimit());
+            AddLimitPerIpAddressToTheOptions(optionsOfTheRateLimitingToConfigure, PolicyNameForConfirmationAttemptsPerIpAddress, CreateOptionsOfTheConfirmationAttemptsLimit());
+            AddLimitPerIpAddressToTheOptions(optionsOfTheRateLimitingToConfigure, PolicyNameForLoginAttemptsPerIpAddress, CreateOptionsOfTheLoginAttemptsLimit());
+            AddLimitPerIpAddressToTheOptions(optionsOfTheRateLimitingToConfigure, PolicyNameForPasswordRecoveryRequestsPerIpAddress, CreateOptionsOfTheAccountRecoveryRequestsLimit());
+            AddLimitPerIpAddressToTheOptions(optionsOfTheRateLimitingToConfigure, PolicyNameForPasswordResetAttemptsPerIpAddress, CreateOptionsOfTheAccountRecoveryRequestsLimit());
+            AddLimitPerIpAddressToTheOptions(optionsOfTheRateLimitingToConfigure, PolicyNameForAccountUnlockAttemptsPerIpAddress, CreateOptionsOfTheAccountRecoveryRequestsLimit());
         });
 
         return servicesOfTheWalletFlowApplication;
+    }
+
+    // Ajoute une limite, avec un compteur par adresse IP.
+    private static void AddLimitPerIpAddressToTheOptions(RateLimiterOptions optionsOfTheRateLimitingToConfigure, string nameOfTheLimitPolicyToAdd, FixedWindowRateLimiterOptions optionsOfTheLimitToAdd)
+    {
+        optionsOfTheRateLimitingToConfigure.AddPolicy(nameOfTheLimitPolicyToAdd, httpContextOfTheRequestToLimit =>
+            RateLimitPartition.GetFixedWindowLimiter(
+                ReadIpAddressOfTheRequestToLimit(httpContextOfTheRequestToLimit),
+                ipAddressUsedAsThePartitionKey => optionsOfTheLimitToAdd));
     }
 
     // Donne l'adresse IP qui sert de compteur à une requête.

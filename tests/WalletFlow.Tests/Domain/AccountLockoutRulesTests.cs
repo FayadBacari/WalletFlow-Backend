@@ -138,6 +138,24 @@ public class AccountLockoutRulesTests
         Assert.Equal(1, accountBeingTestedWithTheseAttempts.FailedLoginAttemptCount);
     }
 
+    // Le lien de déblocage et la récupération n'effacent pas l'historique : le prochain blocage reste plus long (GR Auth).
+    [Fact]
+    public void UnlockingEndsTheLockoutButKeepsTheNumberOfLockouts()
+    {
+        var accountBeingTestedWithTheseAttempts = new User
+        {
+            FailedLoginAttemptCount = 5,
+            LockoutCount = 3,
+            LockoutEndsAt = CurrentDateUsedInTheseTests.AddHours(1)
+        };
+
+        AccountLockoutRules.RemoveCurrentLockoutOfThisAccount(accountBeingTestedWithTheseAttempts);
+
+        Assert.Equal(0, accountBeingTestedWithTheseAttempts.FailedLoginAttemptCount);
+        Assert.Null(accountBeingTestedWithTheseAttempts.LockoutEndsAt);
+        Assert.Equal(3, accountBeingTestedWithTheseAttempts.LockoutCount);
+    }
+
     [Fact]
     public void SuccessfulLoginResetsEveryCounterOfTheAccount()
     {

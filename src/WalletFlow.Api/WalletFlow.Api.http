@@ -53,3 +53,34 @@ POST {{WalletFlow_Api_SecureAddress}}/api/account/logout
 X-CSRF-TOKEN: colle-ici-le-jeton-anti-csrf
 
 ###
+
+# Mot de passe oublié (GR Auth) : même réponse pour toutes les adresses, l'e-mail part en arrière-plan.
+POST {{WalletFlow_Api_HostAddress}}/api/account/forgot-password
+Content-Type: application/json
+
+{
+  "email": "exemple@exemple.test"
+}
+
+###
+
+# Nouveau mot de passe (GR Auth) : le jeton se lit après « #token= » dans le lien de l'e-mail.
+POST {{WalletFlow_Api_HostAddress}}/api/account/reset-password
+Content-Type: application/json
+
+{
+  "token": "colle-ici-le-jeton-du-lien",
+  "newPassword": "Nouveau-Mot-De-Passe-2"
+}
+
+###
+
+# Déblocage (GR Auth) : le jeton se lit après « #token= » dans le lien de l'e-mail. Ne connecte personne.
+POST {{WalletFlow_Api_HostAddress}}/api/account/unlock
+Content-Type: application/json
+
+{
+  "token": "colle-ici-le-jeton-du-lien"
+}
+
+###

@@ -99,6 +99,59 @@ public class RegistrationRequestSizeLimitTests
         Assert.Equal(HttpStatusCode.Unauthorized, answerToTheBiggestValidRequest.StatusCode);
     }
 
+    // Les routes de récupération et de déblocage ont la même limite.
+    [Theory]
+    [InlineData(RecoveryRequestTestValues.AddressOfTheForgotPasswordEndpoint, "email")]
+    [InlineData(RecoveryRequestTestValues.AddressOfTheResetPasswordEndpoint, "newPassword")]
+    [InlineData(RecoveryRequestTestValues.AddressOfTheAccountUnlockEndpoint, "token")]
+    public async Task RecoveryRequestBiggerThanTheLimitIsRefusedWithPayloadTooLarge(string addressOfTheEndpointBeingTested, string nameOfTheFieldFilledWithLongText)
+    {
+        using var apiStartedOnTheRealKestrelServer = new ApiFactoryRunningLikeInProduction();
+        apiStartedOnTheRealKestrelServer.UseKestrel();
+        var clientThatCallsTheRealKestrelServer = apiStartedOnTheRealKestrelServer.CreateClient();
+        var bodyBiggerThanTheRequestSizeLimit = "{\"token\":\"jeton\",\"" + nameOfTheFieldFilledWithLongText + "\":\"" + new string('a', 5000) + "\"}";
+
+        var answerToTheRequestThatIsTooBig = await clientThatCallsTheRealKestrelServer.PostAsync(
+            addressOfTheEndpointBeingTested,
+            new StringContent(bodyBiggerThanTheRequestSizeLimit, Encoding.UTF8, "application/json"));
+
+        Assert.Equal(HttpStatusCode.RequestEntityTooLarge, answerToTheRequestThatIsTooBig.StatusCode);
+    }
+
+    // La plus longue adresse permise passe sur la demande de récupération.
+    [Fact]
+    public async Task BiggestValidForgotPasswordRequestStaysUnderTheLimit()
+    {
+        using var apiStartedOnTheRealKestrelServer = new ApiFactoryRunningLikeInProduction();
+        apiStartedOnTheRealKestrelServer.UseKestrel();
+        var clientThatCallsTheRealKestrelServer = apiStartedOnTheRealKestrelServer.CreateClient();
+        var longestEmailAddressAllowedByTheRules = new string('a', 64) + "@" + new string('b', 63) + "." + new string('c', 63) + "." + new string('d', 58) + ".fr";
+
+        var answerToTheBiggestValidRequest = await clientThatCallsTheRealKestrelServer.PostAsync(
+            RecoveryRequestTestValues.AddressOfTheForgotPasswordEndpoint,
+            new StringContent("{\"email\":\"" + longestEmailAddressAllowedByTheRules + "\"}", Encoding.UTF8, "application/json"));
+
+        Assert.Equal(HttpStatusCode.OK, answerToTheBiggestValidRequest.StatusCode);
+    }
+
+    // Le plus long jeton réel et le plus long mot de passe permis passent sur la route du nouveau mot de passe.
+    [Fact]
+    public async Task BiggestValidResetPasswordRequestStaysUnderTheLimit()
+    {
+        using var apiStartedOnTheRealKestrelServer = new ApiFactoryRunningLikeInProduction();
+        apiStartedOnTheRealKestrelServer.UseKestrel();
+        var clientThatCallsTheRealKestrelServer = apiStartedOnTheRealKestrelServer.CreateClient();
+        var longestValidPasswordWrittenWithEscapes = "Aa1!" + string.Concat(Enumerable.Repeat("\\ud83d\\ude00", 124));
+        var bodyOfTheBiggestValidRequest = "{\"token\":\"" + new string('a', 43) + "\",\"newPassword\":\"" + longestValidPasswordWrittenWithEscapes + "\"}";
+
+        var answerToTheBiggestValidRequest = await clientThatCallsTheRealKestrelServer.PostAsync(
+            RecoveryRequestTestValues.AddressOfTheResetPasswordEndpoint,
+            new StringContent(bodyOfTheBiggestValidRequest, Encoding.UTF8, "application/json"));
+
+        // Le jeton est inconnu : la requête a donc bien été lue jusqu'au bout, sans erreur de taille.
+        Assert.Equal(HttpStatusCode.BadRequest, answerToTheBiggestValidRequest.StatusCode);
+    }
+
     // Le plus long jeton réel et le plus long mot de passe permis passent sur la route de confirmation.
     [Fact]
     public async Task BiggestValidConfirmationRequestStaysUnderTheLimit()

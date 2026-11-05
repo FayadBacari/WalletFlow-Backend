@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using WalletFlow.Application.AccountRecovery;
 using WalletFlow.Application.Emails;
 using WalletFlow.Application.Security;
 using WalletFlow.Application.UserAccounts;
@@ -31,12 +32,21 @@ public static class InfrastructureServicesRegistration
         return servicesOfTheWalletFlowApplication;
     }
 
-    // Ajoute le hachage des mots de passe, la création des jetons et la limite par adresse e-mail.
+    // Ajoute le hachage des mots de passe, la création des jetons et les limites par adresse e-mail.
     public static IServiceCollection AddWalletFlowSecurityToolsToTheServices(this IServiceCollection servicesOfTheWalletFlowApplication)
     {
         servicesOfTheWalletFlowApplication.AddSingleton<IPasswordHasher, LibsodiumPasswordHasher>();
         servicesOfTheWalletFlowApplication.AddSingleton<ISecureTokenGenerator, RandomSecureTokenGenerator>();
         servicesOfTheWalletFlowApplication.AddSingleton<IEmailAddressRequestLimiter, InMemoryEmailAddressRequestLimiter>();
+        servicesOfTheWalletFlowApplication.AddSingleton<IPasswordRecoveryRequestLimiter, InMemoryPasswordRecoveryRequestLimiter>();
+
+        return servicesOfTheWalletFlowApplication;
+    }
+
+    // Ajoute la file des e-mails préparés en arrière-plan.
+    public static IServiceCollection AddBackgroundEmailRequestQueueToTheServices(this IServiceCollection servicesOfTheWalletFlowApplication)
+    {
+        servicesOfTheWalletFlowApplication.AddSingleton<IBackgroundEmailRequestQueue, InMemoryBackgroundEmailRequestQueue>();
 
         return servicesOfTheWalletFlowApplication;
     }

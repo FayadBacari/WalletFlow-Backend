@@ -16,7 +16,6 @@ public class UserSessionRepository : IUserSessionRepository
     }
 
     // Enregistre tout en une seule transaction SQL : SaveChangesAsync enregistre tout, ou rien.
-    // EF Core suit le compte depuis sa lecture, et n'écrit que les compteurs qui ont changé.
     // Renvoie faux si une autre requête vient de modifier le compte : rien n'est alors enregistré.
     public async Task<bool> TryToSaveSuccessfulLoginOfThisAccountAsync(
         User accountThatHasJustLoggedIn,
@@ -24,6 +23,10 @@ public class UserSessionRepository : IUserSessionRepository
         Device? newDeviceOfTheUserAccount,
         SecurityEvent securityEventOfTheSuccessfulLogin)
     {
+        // EF Core suit le compte depuis sa lecture. Le compte est écrit même si ses compteurs n'ont pas changé : cette écriture
+        // contrôle en base que le mot de passe vérifié est toujours le bon. Sinon, une session survivrait à une récupération.
+        databaseContextOfTheCurrentHttpRequest.Entry(accountThatHasJustLoggedIn).Property(nameof(User.FailedLoginAttemptCount)).IsModified = true;
+
         databaseContextOfTheCurrentHttpRequest.UserSessions.Add(newSessionOfTheUserAccount);
         databaseContextOfTheCurrentHttpRequest.SecurityEvents.Add(securityEventOfTheSuccessfulLogin);
 
@@ -65,6 +68,14 @@ public class UserSessionRepository : IUserSessionRepository
     {
         await databaseContextOfTheCurrentHttpRequest.UserSessions
             .Where(sessionAlreadySavedInTheDatabase => sessionAlreadySavedInTheDatabase.Id == hashOfTheTokenOfTheSession)
+            .ExecuteDeleteAsync();
+    }
+
+    // Détruit toutes les sessions d'un compte, après une récupération de mot de passe (SS §3).
+    public async Task DeleteAllUserSessionsOfThisAccountAsync(Guid identifierOfTheAccountToDisconnectEverywhere)
+    {
+        await databaseContextOfTheCurrentHttpRequest.UserSessions
+            .Where(sessionAlreadySavedInTheDatabase => sessionAlreadySavedInTheDatabase.UserId == identifierOfTheAccountToDisconnectEverywhere)
             .ExecuteDeleteAsync();
     }
 

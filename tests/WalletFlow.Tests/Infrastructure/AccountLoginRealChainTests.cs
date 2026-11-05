@@ -73,6 +73,7 @@ public class AccountLoginRealChainTests
             new UserAccountRepository(databaseContextOfThisChainTest),
             new UserSessionRepository(databaseContextOfThisChainTest),
             new SecurityEventRepository(databaseContextOfThisChainTest),
+            new FakeBackgroundEmailRequestQueue(),
             realHasherOfThePasswordsInTheseTests,
             realGeneratorOfTheTokensInTheseTests,
             clockThatOnlyMovesWhenTestsAskIt);

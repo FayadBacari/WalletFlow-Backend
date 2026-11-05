@@ -22,6 +22,17 @@ public class PublicWebsiteSettingsTests
         Assert.Throws<InvalidOperationException>(() => new PublicWebsiteSettings(websiteAddressWithoutHttpsForThisTest));
     }
 
+    // Le jeton est après le # : il n'est jamais envoyé au serveur quand la page s'ouvre (SS §7).
+    [Fact]
+    public void LinkContainsThePageAndTheTokenAfterTheHashSign()
+    {
+        var settingsOfThePublicWebsiteBeingTested = new PublicWebsiteSettings("https://walletflow.test/");
+
+        var linkBuiltForThisWebsitePage = settingsOfThePublicWebsiteBeingTested.BuildLinkToThisWebsitePageWithItsToken("/reset-password", "jeton-du-lien");
+
+        Assert.Equal("https://walletflow.test/reset-password#token=jeton-du-lien", linkBuiltForThisWebsitePage);
+    }
+
     [Fact]
     public void FinalSlashOfTheWebsiteAddressIsRemoved()
     {

@@ -116,9 +116,10 @@ public class UserSessionRepositoryTests
         await using var transactionCancelledAtTheEndOfThisTest = await databaseContextOfThisRepositoryTest.Database.BeginTransactionAsync();
         var repositoryBeingTestedOnTheRealDatabase = new UserSessionRepository(databaseContextOfThisRepositoryTest);
         var accountSavedInDatabaseByThisTest = await SaveNewConfirmedAccountWithThisEmailAddressAsync(databaseContextOfThisRepositoryTest, "test-session-sans-appareil@exemple.test");
+        var accountReadByThisSuccessfulLogin = await new UserAccountRepository(databaseContextOfThisRepositoryTest).FindUserAccountByIdentifierAsync(accountSavedInDatabaseByThisTest.Id);
 
         await repositoryBeingTestedOnTheRealDatabase.TryToSaveSuccessfulLoginOfThisAccountAsync(
-            accountSavedInDatabaseByThisTest, CreateNewSessionForThisUserAccount(accountSavedInDatabaseByThisTest, CurrentDateUsedInTheseTests), null, CreateSecurityEventOfTheSuccessfulLogin(accountSavedInDatabaseByThisTest));
+            accountReadByThisSuccessfulLogin!, CreateNewSessionForThisUserAccount(accountSavedInDatabaseByThisTest, CurrentDateUsedInTheseTests), null, CreateSecurityEventOfTheSuccessfulLogin(accountSavedInDatabaseByThisTest));
 
         Assert.Equal(0, await databaseContextOfThisRepositoryTest.Devices.CountAsync(deviceSearchedInTheDatabaseTable => deviceSearchedInTheDatabaseTable.UserId == accountSavedInDatabaseByThisTest.Id));
     }
@@ -200,6 +201,34 @@ public class UserSessionRepositoryTests
         Assert.False(countersWereSavedInTheDatabase);
         var accountReadAgainAfterTheConflict = await accountRepositoryUsedByThisDatabaseTest.FindUserAccountByIdentifierAsync(accountSavedInDatabaseByThisTest.Id);
         Assert.Equal(3, accountReadAgainAfterTheConflict!.FailedLoginAttemptCount);
+    }
+
+    // Une récupération vient de changer le mot de passe : la connexion en cours ne doit rien enregistrer,
+    // même si ses compteurs n'ont pas changé. Sans ce contrôle, une session survivrait au changement de mot de passe.
+    [Fact]
+    public async Task LoginIsNotSavedWhenThePasswordJustChangedEvenWithUnchangedCounters()
+    {
+        await using var databaseContextOfThisRepositoryTest = CreateDatabaseContextConnectedToLocalDatabase();
+        await using var transactionCancelledAtTheEndOfThisTest = await databaseContextOfThisRepositoryTest.Database.BeginTransactionAsync();
+        var repositoryBeingTestedOnTheRealDatabase = new UserSessionRepository(databaseContextOfThisRepositoryTest);
+        var accountSavedInDatabaseByThisTest = await SaveNewConfirmedAccountWithThisEmailAddressAsync(databaseContextOfThisRepositoryTest, "test-session-mot-de-passe-change@exemple.test");
+        var accountReadByThisSuccessfulLogin = await new UserAccountRepository(databaseContextOfThisRepositoryTest).FindUserAccountByIdentifierAsync(accountSavedInDatabaseByThisTest.Id);
+
+        await databaseContextOfThisRepositoryTest.Users
+            .Where(userSearchedInTheDatabaseTable => userSearchedInTheDatabaseTable.Id == accountSavedInDatabaseByThisTest.Id)
+            .ExecuteUpdateAsync(setterOfTheColumnsOfTheUser => setterOfTheColumnsOfTheUser.SetProperty(
+                userBeingUpdatedInTheDatabase => userBeingUpdatedInTheDatabase.PasswordHash,
+                "empreinte-du-nouveau-mot-de-passe"));
+
+        var loginWasSavedInTheDatabase = await repositoryBeingTestedOnTheRealDatabase.TryToSaveSuccessfulLoginOfThisAccountAsync(
+            accountReadByThisSuccessfulLogin!,
+            CreateNewSessionForThisUserAccount(accountSavedInDatabaseByThisTest, CurrentDateUsedInTheseTests),
+            null,
+            CreateSecurityEventOfTheSuccessfulLogin(accountSavedInDatabaseByThisTest));
+
+        Assert.False(loginWasSavedInTheDatabase);
+        Assert.Equal(0, await databaseContextOfThisRepositoryTest.UserSessions.CountAsync(sessionSearchedInTheDatabaseTable => sessionSearchedInTheDatabaseTable.UserId == accountSavedInDatabaseByThisTest.Id));
+        Assert.Equal(0, await databaseContextOfThisRepositoryTest.SecurityEvents.CountAsync(eventSearchedInTheDatabaseTable => eventSearchedInTheDatabaseTable.UserId == accountSavedInDatabaseByThisTest.Id));
     }
 
     // À chaque blocage, le compteur revient à 5 : une requête qui a lu le blocage précédent ne doit pas effacer le nouveau.
@@ -320,6 +349,27 @@ public class UserSessionRepositoryTests
         Assert.True(numberOfSessionsDeletedByThisCleanup >= 1);
         Assert.Null(await repositoryBeingTestedOnTheRealDatabase.FindUserSessionByItsHashAsync(sessionInactiveExactlySinceTheDate.Id));
         Assert.NotNull(await repositoryBeingTestedOnTheRealDatabase.FindUserSessionByItsHashAsync(sessionActiveOneSecondAfterTheDate.Id));
+    }
+
+    // SS §3 : après une récupération, toutes les sessions du compte sont fermées, et seulement les siennes.
+    [Fact]
+    public async Task DeletingEverySessionOfOneAccountKeepsTheSessionsOfOtherAccounts()
+    {
+        await using var databaseContextOfThisRepositoryTest = CreateDatabaseContextConnectedToLocalDatabase();
+        await using var transactionCancelledAtTheEndOfThisTest = await databaseContextOfThisRepositoryTest.Database.BeginTransactionAsync();
+        var repositoryBeingTestedOnTheRealDatabase = new UserSessionRepository(databaseContextOfThisRepositoryTest);
+        var accountDisconnectedEverywhereByThisTest = await SaveNewConfirmedAccountWithThisEmailAddressAsync(databaseContextOfThisRepositoryTest, "test-session-toutes-fermees@exemple.test");
+        var accountThatKeepsItsSessionInThisTest = await SaveNewConfirmedAccountWithThisEmailAddressAsync(databaseContextOfThisRepositoryTest, "test-session-gardee@exemple.test");
+        var firstSessionOfTheDisconnectedAccount = CreateNewSessionForThisUserAccount(accountDisconnectedEverywhereByThisTest, CurrentDateUsedInTheseTests);
+        var secondSessionOfTheDisconnectedAccount = CreateNewSessionForThisUserAccount(accountDisconnectedEverywhereByThisTest, CurrentDateUsedInTheseTests);
+        var sessionOfTheOtherAccountInThisTest = CreateNewSessionForThisUserAccount(accountThatKeepsItsSessionInThisTest, CurrentDateUsedInTheseTests);
+        await SaveTheseSessionsDirectlyInTheDatabaseAsync(databaseContextOfThisRepositoryTest, firstSessionOfTheDisconnectedAccount, secondSessionOfTheDisconnectedAccount, sessionOfTheOtherAccountInThisTest);
+
+        await repositoryBeingTestedOnTheRealDatabase.DeleteAllUserSessionsOfThisAccountAsync(accountDisconnectedEverywhereByThisTest.Id);
+
+        Assert.Null(await repositoryBeingTestedOnTheRealDatabase.FindUserSessionByItsHashAsync(firstSessionOfTheDisconnectedAccount.Id));
+        Assert.Null(await repositoryBeingTestedOnTheRealDatabase.FindUserSessionByItsHashAsync(secondSessionOfTheDisconnectedAccount.Id));
+        Assert.NotNull(await repositoryBeingTestedOnTheRealDatabase.FindUserSessionByItsHashAsync(sessionOfTheOtherAccountInThisTest.Id));
     }
 
     // Quand le compte disparaît, ses sessions et ses appareils partent avec lui (MPD) : la session ne vaut plus rien.

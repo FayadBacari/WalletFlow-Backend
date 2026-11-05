@@ -12,8 +12,28 @@ public interface IUserAccountRepository
     // Cherche un compte par son identifiant. Renvoie null s'il n'existe plus.
     Task<User?> FindUserAccountByIdentifierAsync(Guid identifierOfTheUserAccountToFind);
 
-    // Cherche un jeton de confirmation d'inscription par son empreinte. Renvoie null s'il n'existe pas.
-    Task<EmailToken?> FindSignupConfirmationTokenByItsHashAsync(string hashOfTheTokenFromTheLink);
+    // Cherche un jeton de ce type par son empreinte. Renvoie null s'il n'existe pas : un lien ne sert jamais à un autre usage.
+    Task<EmailToken?> FindEmailTokenOfThisTypeByItsHashAsync(string hashOfTheTokenFromTheLink, EmailTokenType typeOfTheTokenToFindNow);
+
+    // Efface l'ancien jeton du même type et du même compte, puis enregistre le nouveau : l'ancien lien ne marche plus (SS §2).
+    Task ReplaceEmailTokenOfThisTypeForThisAccountAsync(EmailToken newEmailTokenOfTheAccount);
+
+    // Enregistre le nouveau mot de passe, le compte débloqué, le jeton utilisé et l'événement du journal, en une seule transaction SQL.
+    // Renvoie faux si le compte ou le jeton vient de changer : rien n'est alors modifié.
+    Task<bool> TryToSaveNewPasswordAndUseItsTokenAsync(
+        User accountThatReceivesTheNewPassword,
+        EmailToken tokenUsedToChangeThePassword,
+        string secureHashOfTheNewPassword,
+        DateTime dateOfThePasswordChangeOfTheAccount,
+        SecurityEvent securityEventOfThePasswordChange);
+
+    // Enregistre le compte débloqué, le jeton utilisé et l'événement du journal, en une seule transaction SQL.
+    // Renvoie faux si le compte ou le jeton vient de changer : rien n'est alors modifié.
+    Task<bool> TryToUnlockAccountAndUseItsTokenAsync(
+        User accountJustUnlockedByTheLink,
+        EmailToken tokenUsedToUnlockTheAccount,
+        DateTime dateOfTheAccountUnlockByTheLink,
+        SecurityEvent securityEventOfTheAccountUnlock);
 
     // Enregistre le nouvel utilisateur, ses catégories et son jeton en une seule transaction SQL (MPD §3).
     // Renvoie faux si une autre inscription vient de prendre la même adresse.

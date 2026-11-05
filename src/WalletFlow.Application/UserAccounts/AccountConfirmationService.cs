@@ -83,9 +83,9 @@ public class AccountConfirmationService
     private async Task<EmailToken?> FindTokenThatCanStillBeUsedAtThisDateAsync(string tokenReadInTheConfirmationLink, DateTime currentDateOfTheAccountConfirmation)
     {
         var hashOfTheTokenFromTheLink = generatorOfTheSecureRandomEmailTokens.ConvertSecureTokenIntoItsHash(tokenReadInTheConfirmationLink);
-        var tokenFoundInTheDatabaseTable = await repositoryOfTheUserAccountsInDatabase.FindSignupConfirmationTokenByItsHashAsync(hashOfTheTokenFromTheLink);
+        var tokenFoundInTheDatabaseTable = await repositoryOfTheUserAccountsInDatabase.FindEmailTokenOfThisTypeByItsHashAsync(hashOfTheTokenFromTheLink, EmailTokenType.SignupConfirmation);
 
-        if (tokenFoundInTheDatabaseTable == null || tokenFoundInTheDatabaseTable.UsedAt != null || tokenFoundInTheDatabaseTable.ExpiresAt <= currentDateOfTheAccountConfirmation)
+        if (tokenFoundInTheDatabaseTable == null || !EmailTokenRules.CheckThatTokenCanStillBeUsedAtThisDate(tokenFoundInTheDatabaseTable, currentDateOfTheAccountConfirmation))
         {
             return null;
         }

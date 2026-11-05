@@ -21,6 +21,9 @@ public class FakeUserSessionRepository : IUserSessionRepository
     // Simule une panne de la base : enregistrer une connexion ou chercher une session échoue.
     public bool DatabaseIsDownDuringThisTest { get; set; } = false;
 
+    // Simule une panne de la base au moment de fermer toutes les sessions d'un compte.
+    public bool DatabaseIsDownWhileClosingEverySession { get; set; } = false;
+
     // Simule une panne de la base pendant l'effacement des sessions expirées.
     public bool DatabaseIsDownDuringTheCleanup { get; set; } = false;
 
@@ -112,6 +115,19 @@ public class FakeUserSessionRepository : IUserSessionRepository
     public Task DeleteUserSessionByItsHashAsync(string hashOfTheTokenOfTheSession)
     {
         SavedSessions.RemoveAll(sessionAlreadyKeptInThisMemoryList => sessionAlreadyKeptInThisMemoryList.Id == hashOfTheTokenOfTheSession);
+
+        return Task.CompletedTask;
+    }
+
+    // Retire de la liste toutes les sessions du compte.
+    public Task DeleteAllUserSessionsOfThisAccountAsync(Guid identifierOfTheAccountToDisconnectEverywhere)
+    {
+        if (DatabaseIsDownWhileClosingEverySession)
+        {
+            throw new InvalidOperationException(TechnicalDetailOfTheSimulatedSessionFailure);
+        }
+
+        SavedSessions.RemoveAll(sessionAlreadyKeptInThisMemoryList => sessionAlreadyKeptInThisMemoryList.UserId == identifierOfTheAccountToDisconnectEverywhere);
 
         return Task.CompletedTask;
     }

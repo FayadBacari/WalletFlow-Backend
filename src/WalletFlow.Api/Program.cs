@@ -5,6 +5,7 @@ using WalletFlow.Api.Authentication;
 using WalletFlow.Api.BackgroundTasks;
 using WalletFlow.Api.Configuration;
 using WalletFlow.Api.Middlewares;
+using WalletFlow.Application.AccountRecovery;
 using WalletFlow.Application.Configuration;
 using WalletFlow.Application.UserAccounts;
 using WalletFlow.Application.UserSessions;
@@ -27,8 +28,11 @@ builderOfTheWalletFlowWebApplication.Services.AddWalletFlowDatabaseAccessToTheSe
 // L'horloge de l'application : les tests peuvent la remplacer pour vérifier les durées sans attendre.
 builderOfTheWalletFlowWebApplication.Services.AddSingleton(TimeProvider.System);
 
-// Hachage des mots de passe, création des jetons et limite par adresse e-mail (SS §2 et §6).
+// Hachage des mots de passe, création des jetons et limites par adresse e-mail (SS §2 et §6).
 builderOfTheWalletFlowWebApplication.Services.AddWalletFlowSecurityToolsToTheServices();
+
+// File des e-mails préparés en arrière-plan : le temps de réponse des routes ne révèle aucun compte (SS §2).
+builderOfTheWalletFlowWebApplication.Services.AddBackgroundEmailRequestQueueToTheServices();
 
 // En développement, les e-mails sont écrits dans un dossier local. L'envoi réel sera branché
 // avant la mise en production : d'ici là, l'API refuse de démarrer sans ce réglage.
@@ -52,10 +56,16 @@ builderOfTheWalletFlowWebApplication.Services.AddScoped<UnconfirmedAccountsClean
 builderOfTheWalletFlowWebApplication.Services.AddScoped<AccountLoginService>();
 builderOfTheWalletFlowWebApplication.Services.AddScoped<UserSessionService>();
 builderOfTheWalletFlowWebApplication.Services.AddScoped<ExpiredUserSessionsCleanupService>();
+builderOfTheWalletFlowWebApplication.Services.AddScoped<PasswordRecoveryRequestService>();
+builderOfTheWalletFlowWebApplication.Services.AddScoped<BackgroundEmailRequestProcessingService>();
+builderOfTheWalletFlowWebApplication.Services.AddScoped<PasswordResetService>();
+builderOfTheWalletFlowWebApplication.Services.AddScoped<AccountUnlockService>();
 
-// Tâches de fond : effacent chaque jour les comptes non confirmés dont le lien a expiré (GR Auth) et les sessions expirées.
+// Tâches de fond : effacent chaque jour les comptes non confirmés dont le lien a expiré (GR Auth) et les sessions expirées,
+// et préparent les e-mails de récupération et de déblocage.
 builderOfTheWalletFlowWebApplication.Services.AddHostedService<UnconfirmedAccountsCleanupBackgroundService>();
 builderOfTheWalletFlowWebApplication.Services.AddHostedService<ExpiredUserSessionsCleanupBackgroundService>();
+builderOfTheWalletFlowWebApplication.Services.AddHostedService<BackgroundEmailRequestsBackgroundService>();
 
 // Limites de débit des points d'entrée sensibles (SS §6).
 builderOfTheWalletFlowWebApplication.Services.AddWalletFlowRateLimitingToTheServices();

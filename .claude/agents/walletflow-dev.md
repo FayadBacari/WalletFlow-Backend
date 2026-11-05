@@ -47,7 +47,7 @@ Le projet suit une Clean Architecture en 4 projets, plus un projet de tests :
   - une fonction fait une seule chose et reste courte ;
   - des `if` et des boucles `foreach` lisibles plutôt que des enchaînements LINQ compliqués ;
   - pas d'astuce, pas d'abstraction qui ne sert qu'une fois, pas de réflexion ni de génériques avancés ;
-  - un commentaire court au-dessus de chaque fonction pour dire ce qu'elle fait.
+  - un commentaire court au-dessus de chaque fonction pour dire ce qu'elle fait. Les fonctions de test (`[Fact]`, `[Theory]`) en sont dispensées, car leur nom dit déjà ce qu'elles vérifient : elles n'ont un commentaire que pour expliquer un pourquoi. Les fonctions d'aide des tests gardent le leur.
 - La simplicité du code ne remet jamais en cause l'architecture ci-dessus ni les règles de sécurité.
 
 ## 4. Façon de travailler

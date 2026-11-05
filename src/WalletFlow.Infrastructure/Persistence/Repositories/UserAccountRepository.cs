@@ -34,12 +34,59 @@ public class UserAccountRepository : IUserAccountRepository
             userAlreadySavedInTheDatabase.Id == identifierOfTheUserAccountToFind);
     }
 
-    // Cherche un jeton de confirmation d'inscription par son empreinte. Renvoie null s'il n'existe pas.
-    public async Task<EmailToken?> FindSignupConfirmationTokenByItsHashAsync(string hashOfTheTokenFromTheLink)
+    // Cherche un jeton de ce type par son empreinte. Renvoie null s'il n'existe pas : un lien ne sert jamais à un autre usage.
+    public async Task<EmailToken?> FindEmailTokenOfThisTypeByItsHashAsync(string hashOfTheTokenFromTheLink, EmailTokenType typeOfTheTokenToFindNow)
     {
         return await databaseContextOfTheCurrentHttpRequest.EmailTokens.SingleOrDefaultAsync(tokenAlreadySavedInTheDatabase =>
             tokenAlreadySavedInTheDatabase.TokenHash == hashOfTheTokenFromTheLink
-            && tokenAlreadySavedInTheDatabase.Type == EmailTokenType.SignupConfirmation);
+            && tokenAlreadySavedInTheDatabase.Type == typeOfTheTokenToFindNow);
+    }
+
+    // Efface l'ancien jeton du même type et du même compte, puis enregistre le nouveau : l'ancien lien ne marche plus (SS §2),
+    // et il ne reste jamais qu'un jeton par type et par compte. L'effacement est direct : un clic sur l'ancien lien au même instant
+    // ne peut pas le faire échouer. Une panne entre les deux écritures laisse le compte sans lien : il suffit d'en redemander un.
+    public async Task ReplaceEmailTokenOfThisTypeForThisAccountAsync(EmailToken newEmailTokenOfTheAccount)
+    {
+        await databaseContextOfTheCurrentHttpRequest.EmailTokens
+            .Where(tokenAlreadySavedInTheDatabase =>
+                tokenAlreadySavedInTheDatabase.UserId == newEmailTokenOfTheAccount.UserId
+                && tokenAlreadySavedInTheDatabase.Type == newEmailTokenOfTheAccount.Type)
+            .ExecuteDeleteAsync();
+
+        databaseContextOfTheCurrentHttpRequest.EmailTokens.Add(newEmailTokenOfTheAccount);
+
+        await databaseContextOfTheCurrentHttpRequest.SaveChangesAsync();
+    }
+
+    // Enregistre le nouveau mot de passe, le compte débloqué, le jeton utilisé et l'événement du journal, en une seule transaction SQL.
+    // Les contrôles sur le mot de passe et sur le jeton renvoient faux si une autre requête vient de les changer.
+    public async Task<bool> TryToSaveNewPasswordAndUseItsTokenAsync(
+        User accountThatReceivesTheNewPassword,
+        EmailToken tokenUsedToChangeThePassword,
+        string secureHashOfTheNewPassword,
+        DateTime dateOfThePasswordChangeOfTheAccount,
+        SecurityEvent securityEventOfThePasswordChange)
+    {
+        accountThatReceivesTheNewPassword.PasswordHash = secureHashOfTheNewPassword;
+        tokenUsedToChangeThePassword.UsedAt = dateOfThePasswordChangeOfTheAccount;
+        databaseContextOfTheCurrentHttpRequest.SecurityEvents.Add(securityEventOfThePasswordChange);
+
+        return await databaseContextOfTheCurrentHttpRequest.TryToSaveChangesUnlessAnotherRequestChangedTheSameRowsAsync();
+    }
+
+    // Enregistre le compte débloqué, le jeton utilisé et l'événement du journal, en une seule transaction SQL.
+    // EF Core suit le compte depuis sa lecture, et n'écrit que les compteurs qui ont changé.
+    // Le contrôle sur le jeton renvoie faux si le lien vient de servir ou d'être remplacé.
+    public async Task<bool> TryToUnlockAccountAndUseItsTokenAsync(
+        User accountJustUnlockedByTheLink,
+        EmailToken tokenUsedToUnlockTheAccount,
+        DateTime dateOfTheAccountUnlockByTheLink,
+        SecurityEvent securityEventOfTheAccountUnlock)
+    {
+        tokenUsedToUnlockTheAccount.UsedAt = dateOfTheAccountUnlockByTheLink;
+        databaseContextOfTheCurrentHttpRequest.SecurityEvents.Add(securityEventOfTheAccountUnlock);
+
+        return await databaseContextOfTheCurrentHttpRequest.TryToSaveChangesUnlessAnotherRequestChangedTheSameRowsAsync();
     }
 
     // Enregistre le nouvel utilisateur, ses catégories et son jeton en une seule transaction SQL :
