@@ -6,12 +6,13 @@ namespace WalletFlow.Application.UserSessions;
 public interface IUserSessionRepository
 {
     // Enregistre une connexion réussie en une seule transaction SQL : les compteurs du compte, la nouvelle session,
-    // le nouvel appareil s'il y en a un, et l'événement du journal.
-    // Renvoie faux si une autre requête vient de modifier le compte : rien n'est alors enregistré.
+    // le nouvel appareil s'il y en a un, le code de secours utilisé s'il y en a un, et l'événement du journal.
+    // Renvoie faux si une autre requête vient de modifier le compte ou d'utiliser ce code : rien n'est alors enregistré.
     Task<bool> TryToSaveSuccessfulLoginOfThisAccountAsync(
         User accountThatHasJustLoggedIn,
         UserSession newSessionOfTheUserAccount,
         Device? newDeviceOfTheUserAccount,
+        BackupCode? backupCodeUsedForThisLogin,
         SecurityEvent securityEventOfTheSuccessfulLogin);
 
     // Renvoie vrai si cette empreinte de jeton d'appareil appartient à ce compte.

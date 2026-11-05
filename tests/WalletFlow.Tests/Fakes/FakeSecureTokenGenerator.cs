@@ -24,4 +24,10 @@ public class FakeSecureTokenGenerator : ISecureTokenGenerator
 
         return "autre-empreinte-de-" + tokenToConvertIntoItsHash;
     }
+
+    // Les tests de la double authentification utilisent le vrai générateur : chaque code de secours doit être différent.
+    public string GenerateNewRandomBackupCodeInItsCleanForm()
+    {
+        throw new NotSupportedException("Ce faux générateur ne tire pas de code de secours.");
+    }
 }

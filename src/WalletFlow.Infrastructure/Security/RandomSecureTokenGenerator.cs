@@ -2,6 +2,7 @@ using System.Buffers.Text;
 using System.Security.Cryptography;
 using System.Text;
 using WalletFlow.Application.Security;
+using WalletFlow.Domain.UsersAndSecurity;
 
 namespace WalletFlow.Infrastructure.Security;
 
@@ -26,5 +27,11 @@ public class RandomSecureTokenGenerator : ISecureTokenGenerator
         var hashBytesOfTheSecureToken = SHA256.HashData(Encoding.UTF8.GetBytes(tokenToConvertIntoItsHash));
 
         return Convert.ToHexStringLower(hashBytesOfTheSecureToken);
+    }
+
+    // Tire au hasard un nouveau code de secours : GetString donne à chaque caractère permis la même chance d'être tiré.
+    public string GenerateNewRandomBackupCodeInItsCleanForm()
+    {
+        return RandomNumberGenerator.GetString(TwoFactorAuthenticationRules.CharactersAllowedInOneBackupCode, TwoFactorAuthenticationRules.NumberOfCharactersInOneBackupCode);
     }
 }

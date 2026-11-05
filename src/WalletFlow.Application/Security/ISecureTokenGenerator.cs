@@ -8,4 +8,7 @@ public interface ISecureTokenGenerator
 
     // Calcule l'empreinte d'un jeton reçu dans un lien ou un cookie, pour le retrouver en base.
     string ConvertSecureTokenIntoItsHash(string tokenToConvertIntoItsHash);
+
+    // Tire au hasard un nouveau code de secours, écrit sans son tiret (SS §2).
+    string GenerateNewRandomBackupCodeInItsCleanForm();
 }

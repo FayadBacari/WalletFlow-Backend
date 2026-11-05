@@ -31,6 +31,8 @@ public static class SecurityEventTypeDatabaseCodes
                 return "changement_email";
             case SecurityEventType.TwoFactorActivation:
                 return "activation_double_auth";
+            case SecurityEventType.TwoFactorDeactivation:
+                return "desactivation_double_auth";
             case SecurityEventType.BankConnection:
                 return "connexion_banque";
             case SecurityEventType.BankDisconnection:
@@ -69,6 +71,8 @@ public static class SecurityEventTypeDatabaseCodes
                 return SecurityEventType.EmailChange;
             case "activation_double_auth":
                 return SecurityEventType.TwoFactorActivation;
+            case "desactivation_double_auth":
+                return SecurityEventType.TwoFactorDeactivation;
             case "connexion_banque":
                 return SecurityEventType.BankConnection;
             case "deconnexion_banque":

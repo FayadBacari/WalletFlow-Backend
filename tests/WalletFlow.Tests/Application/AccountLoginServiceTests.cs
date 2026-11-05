@@ -19,15 +19,19 @@ public class AccountLoginServiceTests
     private readonly FakeUserAccountRepository repositoryThatKeepsAccountsInMemory = new FakeUserAccountRepository();
     private readonly FakeSecurityEventRepository repositoryThatKeepsSecurityEventsInMemory = new FakeSecurityEventRepository();
     private readonly FakeUserSessionRepository repositoryThatKeepsSessionsInMemory;
+    private readonly FakeTwoFactorAuthenticationRepository repositoryThatKeepsTwoFactorDataInMemory;
+    private readonly InMemoryLoginsWaitingForTheirCodeStore storeOfTheLoginsWaitingForTheirCode;
     private readonly FakeBackgroundEmailRequestQueue queueThatKeepsTheEmailRequestsInMemory = new FakeBackgroundEmailRequestQueue();
     private readonly FakePasswordHasher hasherThatCountsTheComparedPasswords = new FakePasswordHasher();
     private readonly RandomSecureTokenGenerator realGeneratorOfTheTokensInTheseTests = new RandomSecureTokenGenerator();
     private readonly FakeTimeProviderForTests clockThatOnlyMovesWhenTestsAskIt = new FakeTimeProviderForTests();
 
-    // Relie le faux accès aux sessions au faux journal de sécurité.
+    // Relie les faux accès au faux journal de sécurité.
     public AccountLoginServiceTests()
     {
         repositoryThatKeepsSessionsInMemory = new FakeUserSessionRepository(repositoryThatKeepsSecurityEventsInMemory);
+        repositoryThatKeepsTwoFactorDataInMemory = new FakeTwoFactorAuthenticationRepository(repositoryThatKeepsAccountsInMemory, repositoryThatKeepsSecurityEventsInMemory);
+        storeOfTheLoginsWaitingForTheirCode = new InMemoryLoginsWaitingForTheirCodeStore(clockThatOnlyMovesWhenTestsAskIt);
     }
 
     // Crée le service à tester, avec ses faux outils.
@@ -35,11 +39,17 @@ public class AccountLoginServiceTests
     {
         return new AccountLoginService(
             repositoryThatKeepsAccountsInMemory,
-            repositoryThatKeepsSessionsInMemory,
             repositoryThatKeepsSecurityEventsInMemory,
             queueThatKeepsTheEmailRequestsInMemory,
             hasherThatCountsTheComparedPasswords,
             realGeneratorOfTheTokensInTheseTests,
+            storeOfTheLoginsWaitingForTheirCode,
+            new UserSessionOpeningService(
+                repositoryThatKeepsAccountsInMemory,
+                repositoryThatKeepsSessionsInMemory,
+                repositoryThatKeepsTwoFactorDataInMemory,
+                realGeneratorOfTheTokensInTheseTests,
+                clockThatOnlyMovesWhenTestsAskIt),
             clockThatOnlyMovesWhenTestsAskIt);
     }
 

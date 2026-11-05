@@ -16,6 +16,7 @@ namespace WalletFlow.Api.Controllers;
 public class AccountLoginController : ControllerBase
 {
     public const string MessageSentWhenTheVisitorIsLoggedIn = "Tu es connecté.";
+    public const string MessageSentWhenTheLoginWaitsForItsCode = "Saisis le code de ton application d'authentification, ou un code de secours.";
 
     private readonly AccountLoginService serviceThatLogsTheVisitorsIn;
 
@@ -26,6 +27,7 @@ public class AccountLoginController : ControllerBase
     }
 
     // POST api/account/login : ouvre une session avec l'adresse e-mail et le mot de passe.
+    // Si la double authentification est activée, aucune session ne s'ouvre : la réponse demande le code.
     [HttpPost("login")]
     [EnableRateLimiting(RateLimitingConfiguration.PolicyNameForLoginAttemptsPerIpAddress)]
     [RequestSizeLimit(RequestSizeConfiguration.MaximumNumberOfBytesInOneAccountRequest)]
@@ -42,8 +44,14 @@ public class AccountLoginController : ControllerBase
 
         if (resultOfTheLoginOfTheVisitor.IsLoggedIn)
         {
-            WriteLoginCookiesInTheAnswer(resultOfTheLoginOfTheVisitor);
-            return Ok(new MessageResponse(MessageSentWhenTheVisitorIsLoggedIn));
+            SessionCookiesConfiguration.WriteLoginCookiesInThisAnswer(Response, resultOfTheLoginOfTheVisitor.SessionTokenToPutInTheCookie!, resultOfTheLoginOfTheVisitor.DeviceTokenToPutInTheCookie!);
+            return Ok(new LoginResponse(MessageSentWhenTheVisitorIsLoggedIn, false));
+        }
+
+        if (resultOfTheLoginOfTheVisitor.IsWaitingForTwoFactorCode)
+        {
+            Response.Cookies.Append(SessionCookiesConfiguration.NameOfTheWaitingLoginCookie, resultOfTheLoginOfTheVisitor.WaitingLoginTokenToPutInTheCookie!, SessionCookiesConfiguration.CreateOptionsOfTheWaitingLoginCookie());
+            return Ok(new LoginResponse(MessageSentWhenTheLoginWaitsForItsCode, true));
         }
 
         if (resultOfTheLoginOfTheVisitor.EmailAddressNotConfirmedErrorMessage != null)
@@ -52,19 +60,5 @@ public class AccountLoginController : ControllerBase
         }
 
         return Problem(statusCode: StatusCodes.Status401Unauthorized, title: resultOfTheLoginOfTheVisitor.WrongCredentialsErrorMessage);
-    }
-
-    // Écrit le cookie de session et le cookie d'appareil, renouvelé à chaque connexion.
-    private void WriteLoginCookiesInTheAnswer(AccountLoginResult resultOfTheLoginOfTheVisitor)
-    {
-        Response.Cookies.Append(
-            SessionCookiesConfiguration.NameOfTheUserSessionCookie,
-            resultOfTheLoginOfTheVisitor.SessionTokenToPutInTheCookie!,
-            SessionCookiesConfiguration.CreateOptionsOfTheUserSessionCookie());
-
-        Response.Cookies.Append(
-            SessionCookiesConfiguration.NameOfTheDeviceTokenCookie,
-            resultOfTheLoginOfTheVisitor.DeviceTokenToPutInTheCookie!,
-            SessionCookiesConfiguration.CreateOptionsOfTheDeviceTokenCookie());
     }
 }

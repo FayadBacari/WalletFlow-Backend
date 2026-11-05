@@ -17,7 +17,10 @@ public class BackupCodeTableConfiguration : IEntityTypeConfiguration<BackupCode>
         builderOfTheBackupCodeTableMapping.Property(nameof(BackupCode.Id)).HasColumnName("id_code_secours").ValueGeneratedNever();
 
         builderOfTheBackupCodeTableMapping.Property(nameof(BackupCode.CodeHash)).HasColumnName("empreinte_code_secours");
-        builderOfTheBackupCodeTableMapping.Property(nameof(BackupCode.UsedAt)).HasColumnName("date_utilisation_code_secours");
+
+        // Chaque mise à jour vérifie que le code n'a pas servi depuis sa lecture : de deux requêtes simultanées, une seule peut l'utiliser.
+        builderOfTheBackupCodeTableMapping.Property(nameof(BackupCode.UsedAt)).HasColumnName("date_utilisation_code_secours").IsConcurrencyToken();
+
         builderOfTheBackupCodeTableMapping.Property(nameof(BackupCode.UserId)).HasColumnName("id_utilisateur");
 
         // Un code de secours appartient à un utilisateur et disparaît avec lui (ON DELETE CASCADE).

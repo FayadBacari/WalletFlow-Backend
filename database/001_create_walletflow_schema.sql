@@ -83,9 +83,9 @@ CREATE TABLE evenement_securite (
         REFERENCES utilisateur (id_utilisateur) ON DELETE SET NULL,
     CONSTRAINT ck_evenement_type CHECK (type_evenement IN (
         'connexion', 'blocage', 'deblocage', 'recuperation_mdp', 'changement_mdp',
-        'changement_email', 'activation_double_auth', 'connexion_banque', 'deconnexion_banque',
-        'export_donnees', 'demande_suppression', 'action_admin', 'changement_role',
-        'acces_refuse')),
+        'changement_email', 'activation_double_auth', 'desactivation_double_auth',
+        'connexion_banque', 'deconnexion_banque', 'export_donnees', 'demande_suppression',
+        'action_admin', 'changement_role', 'acces_refuse')),
     CONSTRAINT ck_evenement_resultat CHECK (resultat_evenement IN ('succes', 'echec'))
 );
 

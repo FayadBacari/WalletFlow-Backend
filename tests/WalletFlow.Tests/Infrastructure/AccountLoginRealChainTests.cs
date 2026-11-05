@@ -71,11 +71,17 @@ public class AccountLoginRealChainTests
     {
         var serviceThatLogsTheVisitorIn = new AccountLoginService(
             new UserAccountRepository(databaseContextOfThisChainTest),
-            new UserSessionRepository(databaseContextOfThisChainTest),
             new SecurityEventRepository(databaseContextOfThisChainTest),
             new FakeBackgroundEmailRequestQueue(),
             realHasherOfThePasswordsInTheseTests,
             realGeneratorOfTheTokensInTheseTests,
+            new InMemoryLoginsWaitingForTheirCodeStore(clockThatOnlyMovesWhenTestsAskIt),
+            new UserSessionOpeningService(
+                new UserAccountRepository(databaseContextOfThisChainTest),
+                new UserSessionRepository(databaseContextOfThisChainTest),
+                new TwoFactorAuthenticationRepository(databaseContextOfThisChainTest),
+                realGeneratorOfTheTokensInTheseTests,
+                clockThatOnlyMovesWhenTestsAskIt),
             clockThatOnlyMovesWhenTestsAskIt);
 
         var resultOfTheLoginAttemptOfTheVisitor = await serviceThatLogsTheVisitorIn.LogVisitorInWithEmailAddressAndPasswordAsync(new LoginAttemptFromVisitor

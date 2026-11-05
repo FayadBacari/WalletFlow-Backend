@@ -7,6 +7,7 @@ using WalletFlow.Api.Configuration;
 using WalletFlow.Api.Middlewares;
 using WalletFlow.Application.AccountRecovery;
 using WalletFlow.Application.Configuration;
+using WalletFlow.Application.TwoFactorAuthentication;
 using WalletFlow.Application.UserAccounts;
 using WalletFlow.Application.UserSessions;
 using WalletFlow.Infrastructure;
@@ -31,6 +32,16 @@ builderOfTheWalletFlowWebApplication.Services.AddSingleton(TimeProvider.System);
 // Hachage des mots de passe, création des jetons et limites par adresse e-mail (SS §2 et §6).
 builderOfTheWalletFlowWebApplication.Services.AddWalletFlowSecurityToolsToTheServices();
 
+// La clé qui chiffre les secrets de double authentification vient des secrets, jamais du code ni de Git (SS §2 et §7).
+// Sans elle, aucun compte avec double authentification ne pourrait utiliser son application : l'API refuse donc de démarrer.
+var encryptionKeyOfTheTotpSecrets = builderOfTheWalletFlowWebApplication.Configuration["TwoFactorSecretEncryptionKey"];
+if (string.IsNullOrWhiteSpace(encryptionKeyOfTheTotpSecrets))
+{
+    throw new InvalidOperationException(
+        "Le réglage « TwoFactorSecretEncryptionKey » est absent. En développement, ajoute-le avec dotnet user-secrets.");
+}
+builderOfTheWalletFlowWebApplication.Services.AddTotpSecretEncryptionToTheServices(encryptionKeyOfTheTotpSecrets);
+
 // File des e-mails préparés en arrière-plan : le temps de réponse des routes ne révèle aucun compte (SS §2).
 builderOfTheWalletFlowWebApplication.Services.AddBackgroundEmailRequestQueueToTheServices();
 
@@ -53,6 +64,7 @@ builderOfTheWalletFlowWebApplication.Services.AddSingleton(
 builderOfTheWalletFlowWebApplication.Services.AddScoped<AccountRegistrationService>();
 builderOfTheWalletFlowWebApplication.Services.AddScoped<AccountConfirmationService>();
 builderOfTheWalletFlowWebApplication.Services.AddScoped<UnconfirmedAccountsCleanupService>();
+builderOfTheWalletFlowWebApplication.Services.AddScoped<UserSessionOpeningService>();
 builderOfTheWalletFlowWebApplication.Services.AddScoped<AccountLoginService>();
 builderOfTheWalletFlowWebApplication.Services.AddScoped<UserSessionService>();
 builderOfTheWalletFlowWebApplication.Services.AddScoped<ExpiredUserSessionsCleanupService>();
@@ -60,6 +72,10 @@ builderOfTheWalletFlowWebApplication.Services.AddScoped<PasswordRecoveryRequestS
 builderOfTheWalletFlowWebApplication.Services.AddScoped<BackgroundEmailRequestProcessingService>();
 builderOfTheWalletFlowWebApplication.Services.AddScoped<PasswordResetService>();
 builderOfTheWalletFlowWebApplication.Services.AddScoped<AccountUnlockService>();
+builderOfTheWalletFlowWebApplication.Services.AddScoped<TwoFactorCodeCheckingService>();
+builderOfTheWalletFlowWebApplication.Services.AddScoped<TwoFactorLoginService>();
+builderOfTheWalletFlowWebApplication.Services.AddScoped<TwoFactorActivationService>();
+builderOfTheWalletFlowWebApplication.Services.AddScoped<TwoFactorDeactivationService>();
 
 // Tâches de fond : effacent chaque jour les comptes non confirmés dont le lien a expiré (GR Auth) et les sessions expirées,
 // et préparent les e-mails de récupération et de déblocage.

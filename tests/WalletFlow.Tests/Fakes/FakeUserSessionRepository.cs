@@ -38,6 +38,7 @@ public class FakeUserSessionRepository : IUserSessionRepository
         User accountThatHasJustLoggedIn,
         UserSession newSessionOfTheUserAccount,
         Device? newDeviceOfTheUserAccount,
+        BackupCode? backupCodeUsedForThisLogin,
         SecurityEvent securityEventOfTheSuccessfulLogin)
     {
         if (DatabaseIsDownDuringThisTest)
@@ -57,6 +58,11 @@ public class FakeUserSessionRepository : IUserSessionRepository
         if (newDeviceOfTheUserAccount != null)
         {
             SavedDevices.Add(newDeviceOfTheUserAccount);
+        }
+
+        if (backupCodeUsedForThisLogin != null)
+        {
+            backupCodeUsedForThisLogin.UsedAt = newSessionOfTheUserAccount.LastActivityAt;
         }
 
         return Task.FromResult(true);

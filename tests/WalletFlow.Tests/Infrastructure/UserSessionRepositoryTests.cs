@@ -88,7 +88,7 @@ public class UserSessionRepositoryTests
         var newDeviceOfTheUserAccount = new Device { DeviceToken = new string('a', 64), UserId = accountSavedInDatabaseByThisTest.Id };
 
         var loginWasSavedInTheDatabase = await repositoryBeingTestedOnTheRealDatabase.TryToSaveSuccessfulLoginOfThisAccountAsync(
-            accountReadByThisSuccessfulLogin, newSessionOfTheUserAccount, newDeviceOfTheUserAccount, CreateSecurityEventOfTheSuccessfulLogin(accountSavedInDatabaseByThisTest));
+            accountReadByThisSuccessfulLogin, newSessionOfTheUserAccount, newDeviceOfTheUserAccount, null, CreateSecurityEventOfTheSuccessfulLogin(accountSavedInDatabaseByThisTest));
 
         Assert.True(loginWasSavedInTheDatabase);
 
@@ -119,7 +119,7 @@ public class UserSessionRepositoryTests
         var accountReadByThisSuccessfulLogin = await new UserAccountRepository(databaseContextOfThisRepositoryTest).FindUserAccountByIdentifierAsync(accountSavedInDatabaseByThisTest.Id);
 
         await repositoryBeingTestedOnTheRealDatabase.TryToSaveSuccessfulLoginOfThisAccountAsync(
-            accountReadByThisSuccessfulLogin!, CreateNewSessionForThisUserAccount(accountSavedInDatabaseByThisTest, CurrentDateUsedInTheseTests), null, CreateSecurityEventOfTheSuccessfulLogin(accountSavedInDatabaseByThisTest));
+            accountReadByThisSuccessfulLogin!, CreateNewSessionForThisUserAccount(accountSavedInDatabaseByThisTest, CurrentDateUsedInTheseTests), null, null, CreateSecurityEventOfTheSuccessfulLogin(accountSavedInDatabaseByThisTest));
 
         Assert.Equal(0, await databaseContextOfThisRepositoryTest.Devices.CountAsync(deviceSearchedInTheDatabaseTable => deviceSearchedInTheDatabaseTable.UserId == accountSavedInDatabaseByThisTest.Id));
     }
@@ -143,7 +143,7 @@ public class UserSessionRepositoryTests
         // Le compteur lu est 0, mais la base contient 1 : cette écriture doit être refusée.
         accountReadJustBeforeTheConflict!.LockoutCount = 2;
         var firstTryWasSavedInTheDatabase = await repositoryBeingTestedOnTheRealDatabase.TryToSaveSuccessfulLoginOfThisAccountAsync(
-            accountReadJustBeforeTheConflict, newSessionOfTheUserAccount, newDeviceOfTheUserAccount, securityEventOfTheSuccessfulUserLogin);
+            accountReadJustBeforeTheConflict, newSessionOfTheUserAccount, newDeviceOfTheUserAccount, null, securityEventOfTheSuccessfulUserLogin);
 
         Assert.False(firstTryWasSavedInTheDatabase);
         Assert.Equal(0, await databaseContextOfThisRepositoryTest.UserSessions.CountAsync(sessionSearchedInTheDatabaseTable => sessionSearchedInTheDatabaseTable.UserId == accountSavedInDatabaseByThisTest.Id));
@@ -156,7 +156,7 @@ public class UserSessionRepositoryTests
 
         AccountLockoutRules.ResetLoginCountersAfterSuccessfulLogin(accountReadAgainAfterTheConflict);
         var secondTryWasSavedInTheDatabase = await repositoryBeingTestedOnTheRealDatabase.TryToSaveSuccessfulLoginOfThisAccountAsync(
-            accountReadAgainAfterTheConflict, newSessionOfTheUserAccount, newDeviceOfTheUserAccount, securityEventOfTheSuccessfulUserLogin);
+            accountReadAgainAfterTheConflict, newSessionOfTheUserAccount, newDeviceOfTheUserAccount, null, securityEventOfTheSuccessfulUserLogin);
 
         Assert.True(secondTryWasSavedInTheDatabase);
         Assert.Equal(1, await databaseContextOfThisRepositoryTest.UserSessions.CountAsync(sessionSearchedInTheDatabaseTable => sessionSearchedInTheDatabaseTable.UserId == accountSavedInDatabaseByThisTest.Id));
@@ -223,6 +223,7 @@ public class UserSessionRepositoryTests
         var loginWasSavedInTheDatabase = await repositoryBeingTestedOnTheRealDatabase.TryToSaveSuccessfulLoginOfThisAccountAsync(
             accountReadByThisSuccessfulLogin!,
             CreateNewSessionForThisUserAccount(accountSavedInDatabaseByThisTest, CurrentDateUsedInTheseTests),
+            null,
             null,
             CreateSecurityEventOfTheSuccessfulLogin(accountSavedInDatabaseByThisTest));
 

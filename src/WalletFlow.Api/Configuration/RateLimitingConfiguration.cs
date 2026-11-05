@@ -12,6 +12,8 @@ public static class RateLimitingConfiguration
     public const string PolicyNameForPasswordRecoveryRequestsPerIpAddress = "mot-de-passe-oublie-par-adresse-ip";
     public const string PolicyNameForPasswordResetAttemptsPerIpAddress = "lien-de-recuperation-par-adresse-ip";
     public const string PolicyNameForAccountUnlockAttemptsPerIpAddress = "lien-de-deblocage-par-adresse-ip";
+    public const string PolicyNameForTwoFactorCodeAttemptsPerIpAddress = "code-de-double-authentification-par-adresse-ip";
+    public const string PolicyNameForTwoFactorSettingsRequestsPerIpAddress = "reglage-de-la-double-authentification-par-adresse-ip";
 
     // Connexion : 10 essais par minute et par adresse IP, en plus des 5 tentatives par compte.
     public static FixedWindowRateLimiterOptions CreateOptionsOfTheLoginAttemptsLimit()
@@ -53,6 +55,26 @@ public static class RateLimitingConfiguration
         };
     }
 
+    // Code de double authentification : 10 essais par minute et par adresse IP, en plus des 5 essais par connexion.
+    public static FixedWindowRateLimiterOptions CreateOptionsOfTheTwoFactorCodeAttemptsLimit()
+    {
+        return new FixedWindowRateLimiterOptions
+        {
+            PermitLimit = 10,
+            Window = TimeSpan.FromMinutes(1)
+        };
+    }
+
+    // Réglage de la double authentification : 10 par heure et par adresse IP, avec un seul compteur pour ses trois routes.
+    public static FixedWindowRateLimiterOptions CreateOptionsOfTheTwoFactorSettingsRequestsLimit()
+    {
+        return new FixedWindowRateLimiterOptions
+        {
+            PermitLimit = 10,
+            Window = TimeSpan.FromHours(1)
+        };
+    }
+
     // Ajoute les limites de débit aux services de l'API.
     public static IServiceCollection AddWalletFlowRateLimitingToTheServices(this IServiceCollection servicesOfTheWalletFlowApplication)
     {
@@ -66,6 +88,8 @@ public static class RateLimitingConfiguration
             AddLimitPerIpAddressToTheOptions(optionsOfTheRateLimitingToConfigure, PolicyNameForPasswordRecoveryRequestsPerIpAddress, CreateOptionsOfTheAccountRecoveryRequestsLimit());
             AddLimitPerIpAddressToTheOptions(optionsOfTheRateLimitingToConfigure, PolicyNameForPasswordResetAttemptsPerIpAddress, CreateOptionsOfTheAccountRecoveryRequestsLimit());
             AddLimitPerIpAddressToTheOptions(optionsOfTheRateLimitingToConfigure, PolicyNameForAccountUnlockAttemptsPerIpAddress, CreateOptionsOfTheAccountRecoveryRequestsLimit());
+            AddLimitPerIpAddressToTheOptions(optionsOfTheRateLimitingToConfigure, PolicyNameForTwoFactorCodeAttemptsPerIpAddress, CreateOptionsOfTheTwoFactorCodeAttemptsLimit());
+            AddLimitPerIpAddressToTheOptions(optionsOfTheRateLimitingToConfigure, PolicyNameForTwoFactorSettingsRequestsPerIpAddress, CreateOptionsOfTheTwoFactorSettingsRequestsLimit());
         });
 
         return servicesOfTheWalletFlowApplication;

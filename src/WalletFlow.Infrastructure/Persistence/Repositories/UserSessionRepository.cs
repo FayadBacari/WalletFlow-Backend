@@ -21,6 +21,7 @@ public class UserSessionRepository : IUserSessionRepository
         User accountThatHasJustLoggedIn,
         UserSession newSessionOfTheUserAccount,
         Device? newDeviceOfTheUserAccount,
+        BackupCode? backupCodeUsedForThisLogin,
         SecurityEvent securityEventOfTheSuccessfulLogin)
     {
         // EF Core suit le compte depuis sa lecture. Le compte est écrit même si ses compteurs n'ont pas changé : cette écriture
@@ -33,6 +34,12 @@ public class UserSessionRepository : IUserSessionRepository
         if (newDeviceOfTheUserAccount != null)
         {
             databaseContextOfTheCurrentHttpRequest.Devices.Add(newDeviceOfTheUserAccount);
+        }
+
+        // EF Core suit ce code depuis sa lecture. Le contrôle sur sa date d'utilisation refuse tout si une autre requête vient de s'en servir.
+        if (backupCodeUsedForThisLogin != null)
+        {
+            backupCodeUsedForThisLogin.UsedAt = newSessionOfTheUserAccount.LastActivityAt;
         }
 
         return await databaseContextOfTheCurrentHttpRequest.TryToSaveChangesUnlessAnotherRequestChangedTheSameRowsAsync();

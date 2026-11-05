@@ -1,5 +1,9 @@
 using System.Net;
 using System.Text;
+using Microsoft.AspNetCore.Http.Metadata;
+using Microsoft.AspNetCore.Mvc.Infrastructure;
+using Microsoft.Extensions.DependencyInjection;
+using WalletFlow.Api.Configuration;
 using static WalletFlow.Tests.Api.RegistrationRequestTestValues;
 
 namespace WalletFlow.Tests.Api;
@@ -7,12 +11,15 @@ namespace WalletFlow.Tests.Api;
 // Vérifie la limite de taille des requêtes avec le vrai serveur Kestrel : le serveur de test ne l'applique pas.
 public class RegistrationRequestSizeLimitTests
 {
+    // Le système choisit un port libre : un port fixe ferait échouer ces tests dès qu'un autre programme l'utilise.
+    private const int PortChosenFreelyByTheOperatingSystem = 0;
+
     // Une requête trop grosse reçoit 413, sans détail technique, et n'arrive jamais à la base.
     [Fact]
     public async Task RequestBiggerThanTheLimitIsRefusedWithPayloadTooLarge()
     {
         using var apiStartedOnTheRealKestrelServer = new ApiFactoryRunningLikeInProduction();
-        apiStartedOnTheRealKestrelServer.UseKestrel();
+        apiStartedOnTheRealKestrelServer.UseKestrel(PortChosenFreelyByTheOperatingSystem);
         var clientThatCallsTheRealKestrelServer = apiStartedOnTheRealKestrelServer.CreateClient();
         var bodyBiggerThanTheRequestSizeLimit = "{\"email\":\"" + new string('a', 5000) + "@exemple.fr\",\"password\":\"" + ValidPasswordChosenInTheseTests + "\"}";
 
@@ -33,7 +40,7 @@ public class RegistrationRequestSizeLimitTests
     public async Task BiggestValidRequestStaysUnderTheLimit()
     {
         using var apiStartedOnTheRealKestrelServer = new ApiFactoryRunningLikeInProduction();
-        apiStartedOnTheRealKestrelServer.UseKestrel();
+        apiStartedOnTheRealKestrelServer.UseKestrel(PortChosenFreelyByTheOperatingSystem);
         var clientThatCallsTheRealKestrelServer = apiStartedOnTheRealKestrelServer.CreateClient();
         var longestEmailAddressAllowedByTheRules = new string('a', 64) + "@" + new string('b', 63) + "." + new string('c', 63) + "." + new string('d', 58) + ".fr";
         var longestValidPasswordWrittenWithEscapes = "Aa1!" + string.Concat(Enumerable.Repeat("\\ud83d\\ude00", 124));
@@ -52,7 +59,7 @@ public class RegistrationRequestSizeLimitTests
     public async Task ConfirmationRequestBiggerThanTheLimitIsRefusedWithPayloadTooLarge()
     {
         using var apiStartedOnTheRealKestrelServer = new ApiFactoryRunningLikeInProduction();
-        apiStartedOnTheRealKestrelServer.UseKestrel();
+        apiStartedOnTheRealKestrelServer.UseKestrel(PortChosenFreelyByTheOperatingSystem);
         var clientThatCallsTheRealKestrelServer = apiStartedOnTheRealKestrelServer.CreateClient();
         var bodyBiggerThanTheRequestSizeLimit = "{\"token\":\"jeton\",\"password\":\"" + new string('a', 5000) + "\"}";
 
@@ -68,7 +75,7 @@ public class RegistrationRequestSizeLimitTests
     public async Task LoginRequestBiggerThanTheLimitIsRefusedWithPayloadTooLarge()
     {
         using var apiStartedOnTheRealKestrelServer = new ApiFactoryRunningLikeInProduction();
-        apiStartedOnTheRealKestrelServer.UseKestrel();
+        apiStartedOnTheRealKestrelServer.UseKestrel(PortChosenFreelyByTheOperatingSystem);
         var clientThatCallsTheRealKestrelServer = apiStartedOnTheRealKestrelServer.CreateClient();
         var bodyBiggerThanTheRequestSizeLimit = "{\"email\":\"utilisateur@exemple.test\",\"password\":\"" + new string('a', 5000) + "\"}";
 
@@ -85,7 +92,7 @@ public class RegistrationRequestSizeLimitTests
     public async Task BiggestValidLoginRequestStaysUnderTheLimit()
     {
         using var apiStartedOnTheRealKestrelServer = new ApiFactoryRunningLikeInProduction();
-        apiStartedOnTheRealKestrelServer.UseKestrel();
+        apiStartedOnTheRealKestrelServer.UseKestrel(PortChosenFreelyByTheOperatingSystem);
         var clientThatCallsTheRealKestrelServer = apiStartedOnTheRealKestrelServer.CreateClient();
         var longestEmailAddressAllowedByTheRules = new string('a', 64) + "@" + new string('b', 63) + "." + new string('c', 63) + "." + new string('d', 58) + ".fr";
         var longestValidPasswordWrittenWithEscapes = "Aa1!" + string.Concat(Enumerable.Repeat("\\ud83d\\ude00", 124));
@@ -107,7 +114,7 @@ public class RegistrationRequestSizeLimitTests
     public async Task RecoveryRequestBiggerThanTheLimitIsRefusedWithPayloadTooLarge(string addressOfTheEndpointBeingTested, string nameOfTheFieldFilledWithLongText)
     {
         using var apiStartedOnTheRealKestrelServer = new ApiFactoryRunningLikeInProduction();
-        apiStartedOnTheRealKestrelServer.UseKestrel();
+        apiStartedOnTheRealKestrelServer.UseKestrel(PortChosenFreelyByTheOperatingSystem);
         var clientThatCallsTheRealKestrelServer = apiStartedOnTheRealKestrelServer.CreateClient();
         var bodyBiggerThanTheRequestSizeLimit = "{\"token\":\"jeton\",\"" + nameOfTheFieldFilledWithLongText + "\":\"" + new string('a', 5000) + "\"}";
 
@@ -123,7 +130,7 @@ public class RegistrationRequestSizeLimitTests
     public async Task BiggestValidForgotPasswordRequestStaysUnderTheLimit()
     {
         using var apiStartedOnTheRealKestrelServer = new ApiFactoryRunningLikeInProduction();
-        apiStartedOnTheRealKestrelServer.UseKestrel();
+        apiStartedOnTheRealKestrelServer.UseKestrel(PortChosenFreelyByTheOperatingSystem);
         var clientThatCallsTheRealKestrelServer = apiStartedOnTheRealKestrelServer.CreateClient();
         var longestEmailAddressAllowedByTheRules = new string('a', 64) + "@" + new string('b', 63) + "." + new string('c', 63) + "." + new string('d', 58) + ".fr";
 
@@ -139,7 +146,7 @@ public class RegistrationRequestSizeLimitTests
     public async Task BiggestValidResetPasswordRequestStaysUnderTheLimit()
     {
         using var apiStartedOnTheRealKestrelServer = new ApiFactoryRunningLikeInProduction();
-        apiStartedOnTheRealKestrelServer.UseKestrel();
+        apiStartedOnTheRealKestrelServer.UseKestrel(PortChosenFreelyByTheOperatingSystem);
         var clientThatCallsTheRealKestrelServer = apiStartedOnTheRealKestrelServer.CreateClient();
         var longestValidPasswordWrittenWithEscapes = "Aa1!" + string.Concat(Enumerable.Repeat("\\ud83d\\ude00", 124));
         var bodyOfTheBiggestValidRequest = "{\"token\":\"" + new string('a', 43) + "\",\"newPassword\":\"" + longestValidPasswordWrittenWithEscapes + "\"}";
@@ -157,7 +164,7 @@ public class RegistrationRequestSizeLimitTests
     public async Task BiggestValidConfirmationRequestStaysUnderTheLimit()
     {
         using var apiStartedOnTheRealKestrelServer = new ApiFactoryRunningLikeInProduction();
-        apiStartedOnTheRealKestrelServer.UseKestrel();
+        apiStartedOnTheRealKestrelServer.UseKestrel(PortChosenFreelyByTheOperatingSystem);
         var clientThatCallsTheRealKestrelServer = apiStartedOnTheRealKestrelServer.CreateClient();
         var longestValidPasswordWrittenWithEscapes = "Aa1!" + string.Concat(Enumerable.Repeat("\\ud83d\\ude00", 124));
         var bodyOfTheBiggestValidRequest = "{\"token\":\"" + new string('a', 43) + "\",\"password\":\"" + longestValidPasswordWrittenWithEscapes + "\"}";
@@ -168,5 +175,38 @@ public class RegistrationRequestSizeLimitTests
 
         // Le jeton est inconnu : la requête a donc bien été lue jusqu'au bout, sans erreur de taille.
         Assert.Equal(HttpStatusCode.BadRequest, answerToTheBiggestValidRequest.StatusCode);
+    }
+
+    // La route du code de double authentification a la même limite, et une requête trop grosse n'écrit rien au journal.
+    [Fact]
+    public async Task TwoFactorCodeRequestBiggerThanTheLimitIsRefusedWithPayloadTooLarge()
+    {
+        using var apiStartedOnTheRealKestrelServer = new ApiFactoryRunningLikeInProduction();
+        apiStartedOnTheRealKestrelServer.UseKestrel(PortChosenFreelyByTheOperatingSystem);
+        var clientThatCallsTheRealKestrelServer = apiStartedOnTheRealKestrelServer.CreateClient();
+        var bodyBiggerThanTheRequestSizeLimit = "{\"code\":\"" + new string('1', 5000) + "\"}";
+
+        var answerToTheRequestThatIsTooBig = await clientThatCallsTheRealKestrelServer.PostAsync(
+            TwoFactorRequestTestValues.AddressOfTheTwoFactorLoginEndpoint,
+            new StringContent(bodyBiggerThanTheRequestSizeLimit, Encoding.UTF8, "application/json"));
+
+        Assert.Equal(HttpStatusCode.RequestEntityTooLarge, answerToTheRequestThatIsTooBig.StatusCode);
+        Assert.Empty(apiStartedOnTheRealKestrelServer.RepositoryThatKeepsSecurityEventsInMemory.SavedSecurityEvents);
+    }
+
+    // Sans session, ces routes répondent 401 avant de lire la requête, et les cookies Secure ne partent pas en HTTP vers Kestrel :
+    // ce test lit donc la limite déclarée sur chacune, et le parcours réel en HTTPS vérifie la réponse 413.
+    [Theory]
+    [InlineData("api/account/two-factor/start-activation")]
+    [InlineData("api/account/two-factor/finish-activation")]
+    [InlineData("api/account/two-factor/deactivate")]
+    public void TwoFactorSettingsRoutesDeclareTheSizeLimit(string templateOfTheRouteBeingChecked)
+    {
+        using var apiStartedInMemoryForThisTest = new ApiFactoryWithFakeRepositoryAndEmails();
+        var providerOfTheRoutesOfTheApi = apiStartedInMemoryForThisTest.Services.GetRequiredService<IActionDescriptorCollectionProvider>();
+
+        var routeOfTheApiBeingCheckedByThisTest = providerOfTheRoutesOfTheApi.ActionDescriptors.Items.Single(oneRouteOfTheWalletFlowApi => oneRouteOfTheWalletFlowApi.AttributeRouteInfo!.Template == templateOfTheRouteBeingChecked);
+
+        Assert.Equal(RequestSizeConfiguration.MaximumNumberOfBytesInOneAccountRequest, routeOfTheApiBeingCheckedByThisTest.EndpointMetadata.OfType<IRequestSizeLimitMetadata>().Single().MaxRequestBodySize);
     }
 }

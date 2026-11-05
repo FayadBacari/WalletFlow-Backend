@@ -86,6 +86,7 @@ public class ApiInProductionModeTests
     [InlineData("ConnectionStrings:WalletFlowDatabase", "WalletFlowDatabase")]
     [InlineData("LocalEmailsFolder", "LocalEmailsFolder")]
     [InlineData("PublicWebsiteAddress", "PublicWebsiteAddress")]
+    [InlineData("TwoFactorSecretEncryptionKey", "TwoFactorSecretEncryptionKey")]
     public void ApiRefusesToStartWithoutItsRequiredSetting(string nameOfTheSettingLeftEmptyForThisTest, string textExpectedInTheStartupError)
     {
         using var apiStartedWithoutOneRequiredSetting = new ApiFactoryWithOneEmptySetting(nameOfTheSettingLeftEmptyForThisTest);
@@ -93,5 +94,37 @@ public class ApiInProductionModeTests
         var errorRaisedByTheApiStartup = Assert.Throws<InvalidOperationException>(() => apiStartedWithoutOneRequiredSetting.CreateClient());
 
         Assert.Contains(textExpectedInTheStartupError, errorRaisedByTheApiStartup.Message);
+    }
+
+    // Une clé absente ou vide reçoit le message qui dit quoi faire : elle ne doit pas arriver jusqu'au contrôle de sa forme.
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void ApiRefusesToStartWithoutTheEncryptionKeyAndSaysThatItIsMissing(string? valueOfTheSettingInThisTest)
+    {
+        using var apiStartedLikeInProductionForThisTest = new ApiFactoryRunningLikeInProduction();
+        using var apiStartedWithoutTheEncryptionKeyOfTheSecrets = apiStartedLikeInProductionForThisTest.WithWebHostBuilder(builderOfTheApiWithoutTheKey =>
+            builderOfTheApiWithoutTheKey.UseSetting("TwoFactorSecretEncryptionKey", valueOfTheSettingInThisTest));
+
+        var errorRaisedByTheApiStartup = Assert.Throws<InvalidOperationException>(() => apiStartedWithoutTheEncryptionKeyOfTheSecrets.CreateClient());
+
+        Assert.Contains("« TwoFactorSecretEncryptionKey » est absent", errorRaisedByTheApiStartup.Message);
+    }
+
+    // Une clé trop courte ou mal écrite empêche aussi de démarrer, et le message ne la cite pas : il part dans les journaux (SS §7).
+    [Theory]
+    [InlineData("cle-trop-courte")]
+    [InlineData("AAAAAAAAAAAAAAAAAAAAAA==")]
+    public void ApiRefusesToStartWithABadEncryptionKeyWithoutQuotingIt(string badKeyWrittenInTheSetting)
+    {
+        using var apiStartedLikeInProductionForThisTest = new ApiFactoryRunningLikeInProduction();
+        using var apiStartedWithABadKey = apiStartedLikeInProductionForThisTest.WithWebHostBuilder(builderOfTheApiWithABadKey =>
+            builderOfTheApiWithABadKey.UseSetting("TwoFactorSecretEncryptionKey", badKeyWrittenInTheSetting));
+
+        var errorRaisedByTheApiStartup = Assert.Throws<InvalidOperationException>(() => apiStartedWithABadKey.CreateClient());
+
+        Assert.Contains("TwoFactorSecretEncryptionKey", errorRaisedByTheApiStartup.Message);
+        Assert.DoesNotContain(badKeyWrittenInTheSetting, errorRaisedByTheApiStartup.Message);
     }
 }

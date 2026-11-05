@@ -561,6 +561,27 @@ END;
 $$;
 
 
+-- 9. SS §11 et DD : le journal accepte chaque type d'événement du dictionnaire de données,
+-- et refuse tout autre type.
+DO $$
+BEGIN
+    INSERT INTO evenement_securite (type_evenement, resultat_evenement)
+    VALUES ('connexion', 'succes'), ('blocage', 'succes'), ('deblocage', 'succes'),
+           ('recuperation_mdp', 'succes'), ('changement_mdp', 'succes'), ('changement_email', 'succes'),
+           ('activation_double_auth', 'succes'), ('desactivation_double_auth', 'succes'),
+           ('connexion_banque', 'succes'), ('deconnexion_banque', 'succes'), ('export_donnees', 'succes'),
+           ('demande_suppression', 'succes'), ('action_admin', 'succes'), ('changement_role', 'succes'),
+           ('acces_refuse', 'succes');
+    RAISE NOTICE 'OK : le journal accepte les 15 types d''événement du dictionnaire de données';
+
+    PERFORM pg_temp.verifier_que_la_base_refuse_cette_instruction(
+        $sql$INSERT INTO evenement_securite (type_evenement, resultat_evenement)
+             VALUES ('type_inconnu', 'succes')$sql$,
+        '23514', 'le journal refuse un type d''événement inconnu');
+END;
+$$;
+
+
 \echo
 \echo 'Tous les tests sont passés. La transaction est annulée : la base reste vide.'
 ROLLBACK;

@@ -84,3 +84,48 @@ Content-Type: application/json
 }
 
 ###
+
+# Fin de la connexion (GR Auth) : si la connexion répond isTwoFactorCodeRequired, envoie ici un code de l'application ou un code de secours.
+# Le cookie de la connexion en attente est renvoyé automatiquement.
+POST {{WalletFlow_Api_SecureAddress}}/api/account/login/two-factor
+Content-Type: application/json
+
+{
+  "code": "123456"
+}
+
+###
+
+# Début de l'activation (GR Auth, SS §2) : il faut être connecté et envoyer le jeton anti-CSRF. Donne le secret à ajouter à l'application.
+POST {{WalletFlow_Api_SecureAddress}}/api/account/two-factor/start-activation
+Content-Type: application/json
+X-CSRF-TOKEN: colle-ici-le-jeton-anti-csrf
+
+{
+  "password": "Exemple-De-Mot-De-Passe-1"
+}
+
+###
+
+# Fin de l'activation : un premier code juste active tout, et donne les 10 codes de secours, cette seule fois.
+POST {{WalletFlow_Api_SecureAddress}}/api/account/two-factor/finish-activation
+Content-Type: application/json
+X-CSRF-TOKEN: colle-ici-le-jeton-anti-csrf
+
+{
+  "code": "123456"
+}
+
+###
+
+# Désactivation : le mot de passe et un code de l'application ou de secours.
+POST {{WalletFlow_Api_SecureAddress}}/api/account/two-factor/deactivate
+Content-Type: application/json
+X-CSRF-TOKEN: colle-ici-le-jeton-anti-csrf
+
+{
+  "password": "Exemple-De-Mot-De-Passe-1",
+  "code": "123456"
+}
+
+###

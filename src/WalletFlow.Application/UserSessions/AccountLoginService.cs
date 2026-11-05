@@ -1,11 +1,13 @@
 using WalletFlow.Application.AccountRecovery;
 using WalletFlow.Application.Security;
+using WalletFlow.Application.TwoFactorAuthentication;
 using WalletFlow.Application.UserAccounts;
 using WalletFlow.Domain.UsersAndSecurity;
 
 namespace WalletFlow.Application.UserSessions;
 
 // Cas d'utilisation : un visiteur se connecte avec son adresse e-mail et son mot de passe (GR Auth, SS §2 et §3).
+// Si la double authentification est activée, le bon mot de passe ne suffit pas : la connexion attend alors son code.
 public class AccountLoginService
 {
     public const string ErrorMessageForWrongLoginCredentials = "Identifiants incorrects";
@@ -14,29 +16,32 @@ public class AccountLoginService
         "Ton adresse e-mail n'est pas encore confirmée. Ouvre le lien reçu par e-mail, ou inscris-toi à nouveau pour en recevoir un autre.";
 
     private readonly IUserAccountRepository repositoryOfTheUserAccountsInDatabase;
-    private readonly IUserSessionRepository repositoryOfTheUserSessionsInDatabase;
     private readonly ISecurityEventRepository repositoryOfTheSecurityEventsInDatabase;
     private readonly IBackgroundEmailRequestQueue queueOfTheEmailsToPrepareInTheBackground;
     private readonly IPasswordHasher hasherOfThePasswordsTypedByVisitors;
     private readonly ISecureTokenGenerator generatorOfTheSecureRandomTokens;
+    private readonly ILoginsWaitingForTheirCodeStore storeOfTheLoginsWaitingForTheirCode;
+    private readonly UserSessionOpeningService serviceThatOpensTheUserSessions;
     private readonly TimeProvider clockThatGivesTheCurrentDateAndTime;
 
     // Reçoit les outils dont la connexion a besoin.
     public AccountLoginService(
         IUserAccountRepository repositoryOfTheUserAccountsInDatabase,
-        IUserSessionRepository repositoryOfTheUserSessionsInDatabase,
         ISecurityEventRepository repositoryOfTheSecurityEventsInDatabase,
         IBackgroundEmailRequestQueue queueOfTheEmailsToPrepareInTheBackground,
         IPasswordHasher hasherOfThePasswordsTypedByVisitors,
         ISecureTokenGenerator generatorOfTheSecureRandomTokens,
+        ILoginsWaitingForTheirCodeStore storeOfTheLoginsWaitingForTheirCode,
+        UserSessionOpeningService serviceThatOpensTheUserSessions,
         TimeProvider clockThatGivesTheCurrentDateAndTime)
     {
         this.repositoryOfTheUserAccountsInDatabase = repositoryOfTheUserAccountsInDatabase;
-        this.repositoryOfTheUserSessionsInDatabase = repositoryOfTheUserSessionsInDatabase;
         this.repositoryOfTheSecurityEventsInDatabase = repositoryOfTheSecurityEventsInDatabase;
         this.queueOfTheEmailsToPrepareInTheBackground = queueOfTheEmailsToPrepareInTheBackground;
         this.hasherOfThePasswordsTypedByVisitors = hasherOfThePasswordsTypedByVisitors;
         this.generatorOfTheSecureRandomTokens = generatorOfTheSecureRandomTokens;
+        this.storeOfTheLoginsWaitingForTheirCode = storeOfTheLoginsWaitingForTheirCode;
+        this.serviceThatOpensTheUserSessions = serviceThatOpensTheUserSessions;
         this.clockThatGivesTheCurrentDateAndTime = clockThatGivesTheCurrentDateAndTime;
     }
 
@@ -93,7 +98,7 @@ public class AccountLoginService
         return new AccountLoginResult { EmailAddressNotConfirmedErrorMessage = ErrorMessageForEmailAddressNotConfirmed };
     }
 
-    // Compte l'essai, vérifie le mot de passe, puis ouvre la session si tout est bon.
+    // Compte l'essai, vérifie le mot de passe, puis ouvre la session si tout est bon, ou attend le code.
     // Pendant un blocage, même le bon mot de passe reçoit le message générique (SS §2).
     private async Task<AccountLoginResult> CheckPasswordThenLogConfirmedAccountInAsync(
         User accountWithEmailAddressAlreadyConfirmed,
@@ -101,12 +106,18 @@ public class AccountLoginService
         LoginAttemptFromVisitor loginAttemptReceivedFromTheVisitor)
     {
         var secureHashOfThePasswordJustChecked = accountWithEmailAddressAlreadyConfirmed.PasswordHash;
+        var encryptedTotpSecretOfTheAccount = accountWithEmailAddressAlreadyConfirmed.EncryptedTotpSecret;
         var resultOfTheCountOfThisAttempt = await TryToCountThisLoginAttemptAsync(accountWithEmailAddressAlreadyConfirmed.Id);
         var passwordIsTheOneOfTheAccount = hasherOfThePasswordsTypedByVisitors.CheckThatPasswordMatchesItsSecureHash(passwordWrittenInItsNormalizedForm, secureHashOfThePasswordJustChecked);
 
         if (resultOfTheCountOfThisAttempt == ResultOfTheCountOfOneLoginAttempt.AttemptRefused || !passwordIsTheOneOfTheAccount)
         {
             return await RefuseAttemptOnConfirmedAccountAsync(accountWithEmailAddressAlreadyConfirmed.Id, resultOfTheCountOfThisAttempt, loginAttemptReceivedFromTheVisitor);
+        }
+
+        if (encryptedTotpSecretOfTheAccount != null)
+        {
+            return await StartWaitingForTheCodeOfThisAccountAsync(accountWithEmailAddressAlreadyConfirmed.Id, secureHashOfThePasswordJustChecked, resultOfTheCountOfThisAttempt, loginAttemptReceivedFromTheVisitor);
         }
 
         return await OpenNewSessionForThisAccountAsync(accountWithEmailAddressAlreadyConfirmed.Id, secureHashOfThePasswordJustChecked, loginAttemptReceivedFromTheVisitor);
@@ -141,144 +152,80 @@ public class AccountLoginService
         return ResultOfTheCountOfOneLoginAttempt.AttemptRefused;
     }
 
-    // Note le refus dans le journal, et le blocage si c'est cet essai qui l'a déclenché : une seule requête
-    // peut l'avoir déclenché, le blocage n'est donc noté qu'une fois, et un seul e-mail de déblocage part (SS §2).
-    // Cet e-mail part en arrière-plan : le temps de réponse ne révèle donc pas que le compte existe.
+    // Note le refus dans le journal, avec le blocage si c'est cet essai qui l'a déclenché.
     private async Task<AccountLoginResult> RefuseAttemptOnConfirmedAccountAsync(
         Guid identifierOfTheAccountAlreadyConfirmed,
         ResultOfTheCountOfOneLoginAttempt resultOfTheCountOfThisAttempt,
         LoginAttemptFromVisitor loginAttemptReceivedFromTheVisitor)
     {
-        if (resultOfTheCountOfThisAttempt == ResultOfTheCountOfOneLoginAttempt.AttemptCountedAndAccountLocked)
-        {
-            await SaveSecurityEventOfThisLoginAttemptAsync(SecurityEventType.Lockout, SecurityEventResult.Success, identifierOfTheAccountAlreadyConfirmed, loginAttemptReceivedFromTheVisitor);
-
-            queueOfTheEmailsToPrepareInTheBackground.AddEmailRequestToTheBackgroundQueue(new BackgroundEmailRequest
-            {
-                TypeOfTheRequestedBackgroundEmail = BackgroundEmailRequestType.AccountUnlock,
-                IdentifierOfTheAccountJustLocked = identifierOfTheAccountAlreadyConfirmed,
-                IpAddressOfTheRequestingVisitor = loginAttemptReceivedFromTheVisitor.IpAddressOfTheVisitor
-            });
-        }
+        await NotifyOwnerIfThisAttemptLockedTheAccountAsync(identifierOfTheAccountAlreadyConfirmed, resultOfTheCountOfThisAttempt, loginAttemptReceivedFromTheVisitor);
 
         return await RefuseLoginAttemptWithWrongCredentialsAsync(identifierOfTheAccountAlreadyConfirmed, loginAttemptReceivedFromTheVisitor);
     }
 
-    // Ouvre une session avec un nouvel identifiant (SS §3), et enregistre l'appareil s'il est nouveau.
+    // Une seule requête peut avoir déclenché le blocage : il n'est donc noté qu'une fois, et un seul e-mail de déblocage part (SS §2).
+    // Cet e-mail part en arrière-plan : le temps de réponse ne révèle donc pas que le compte existe.
+    private async Task NotifyOwnerIfThisAttemptLockedTheAccountAsync(
+        Guid identifierOfTheAccountAlreadyConfirmed,
+        ResultOfTheCountOfOneLoginAttempt resultOfTheCountOfThisAttempt,
+        LoginAttemptFromVisitor loginAttemptReceivedFromTheVisitor)
+    {
+        if (resultOfTheCountOfThisAttempt != ResultOfTheCountOfOneLoginAttempt.AttemptCountedAndAccountLocked)
+        {
+            return;
+        }
+
+        await SaveSecurityEventOfThisLoginAttemptAsync(SecurityEventType.Lockout, SecurityEventResult.Success, identifierOfTheAccountAlreadyConfirmed, loginAttemptReceivedFromTheVisitor);
+
+        queueOfTheEmailsToPrepareInTheBackground.AddEmailRequestToTheBackgroundQueue(new BackgroundEmailRequest
+        {
+            TypeOfTheRequestedBackgroundEmail = BackgroundEmailRequestType.AccountUnlock,
+            IdentifierOfTheAccountJustLocked = identifierOfTheAccountAlreadyConfirmed,
+            IpAddressOfTheRequestingVisitor = loginAttemptReceivedFromTheVisitor.IpAddressOfTheVisitor
+        });
+    }
+
+    // Le mot de passe est bon, mais le compte demande aussi un code : aucune session ne s'ouvre, et l'essai reste compté.
+    // Seul le bon code remet les compteurs à zéro : un attaquant qui a volé le mot de passe finit donc bloqué, et le propriétaire est prévenu (GR Auth).
+    // Si cet essai vient de bloquer le compte, le code reste permis : le vrai propriétaire retrouve l'accès, et ce blocage disparaît.
+    private async Task<AccountLoginResult> StartWaitingForTheCodeOfThisAccountAsync(
+        Guid identifierOfTheAccountLoggingIn,
+        string secureHashOfThePasswordJustChecked,
+        ResultOfTheCountOfOneLoginAttempt resultOfTheCountOfThisAttempt,
+        LoginAttemptFromVisitor loginAttemptReceivedFromTheVisitor)
+    {
+        await NotifyOwnerIfThisAttemptLockedTheAccountAsync(identifierOfTheAccountLoggingIn, resultOfTheCountOfThisAttempt, loginAttemptReceivedFromTheVisitor);
+
+        var generatedTokenOfTheWaitingLogin = generatorOfTheSecureRandomTokens.GenerateNewRandomSecureTokenWithItsHash();
+        storeOfTheLoginsWaitingForTheirCode.SaveNewLoginWaitingForItsCode(generatedTokenOfTheWaitingLogin.HashToStoreInTheDatabase, identifierOfTheAccountLoggingIn, secureHashOfThePasswordJustChecked);
+
+        return new AccountLoginResult { WaitingLoginTokenToPutInTheCookie = generatedTokenOfTheWaitingLogin.TokenGivenOnlyToTheVisitor };
+    }
+
+    // Ouvre la session d'un compte sans double authentification. Si elle vient d'être activée, la connexion est refusée.
     private async Task<AccountLoginResult> OpenNewSessionForThisAccountAsync(
         Guid identifierOfTheAccountLoggingIn,
         string secureHashOfThePasswordJustChecked,
         LoginAttemptFromVisitor loginAttemptReceivedFromTheVisitor)
     {
-        var generatedTokenOfTheNewSession = generatorOfTheSecureRandomTokens.GenerateNewRandomSecureTokenWithItsHash();
-        var generatedTokenOfTheNewDevice = await GenerateDeviceTokenIfThisDeviceIsNewForTheAccountAsync(identifierOfTheAccountLoggingIn, loginAttemptReceivedFromTheVisitor.DeviceTokenReadInTheCookie);
+        var sessionJustOpenedForTheAccount = await serviceThatOpensTheUserSessions.TryToOpenSessionForThisSuccessfulLoginAsync(new SuccessfulLoginToSave
+        {
+            IdentifierOfTheAccountLoggingIn = identifierOfTheAccountLoggingIn,
+            SecureHashOfThePasswordJustChecked = secureHashOfThePasswordJustChecked,
+            IpAddressOfTheVisitor = loginAttemptReceivedFromTheVisitor.IpAddressOfTheVisitor,
+            DeviceTokenReadInTheCookie = loginAttemptReceivedFromTheVisitor.DeviceTokenReadInTheCookie,
+            SessionTokenReadInTheCookie = loginAttemptReceivedFromTheVisitor.SessionTokenReadInTheCookie
+        });
 
-        var loginWasSavedInTheDatabase = await TryToSaveLoginUnlessOtherRequestsKeepChangingTheAccountAsync(
-            identifierOfTheAccountLoggingIn,
-            secureHashOfThePasswordJustChecked,
-            CreateSessionFromThisGeneratedToken(generatedTokenOfTheNewSession, identifierOfTheAccountLoggingIn),
-            CreateDeviceFromThisGeneratedToken(generatedTokenOfTheNewDevice, identifierOfTheAccountLoggingIn),
-            CreateSecurityEventOfThisLoginAttempt(SecurityEventType.Login, SecurityEventResult.Success, identifierOfTheAccountLoggingIn, loginAttemptReceivedFromTheVisitor));
-
-        if (!loginWasSavedInTheDatabase)
+        if (sessionJustOpenedForTheAccount == null)
         {
             return await RefuseLoginAttemptWithWrongCredentialsAsync(identifierOfTheAccountLoggingIn, loginAttemptReceivedFromTheVisitor);
         }
 
-        await CloseOldSessionOfThisBrowserAsync(loginAttemptReceivedFromTheVisitor.SessionTokenReadInTheCookie);
-        return CreateResultForTheSuccessfulLogin(generatedTokenOfTheNewSession, generatedTokenOfTheNewDevice, loginAttemptReceivedFromTheVisitor.DeviceTokenReadInTheCookie);
-    }
-
-    // Enregistre la connexion. Si une autre requête a changé le compte pendant le hachage, relit le compte et recommence.
-    // Renvoie faux si le compte a disparu, s'il change encore au bout de 10 passages, ou si son mot de passe
-    // n'est plus celui qui vient d'être vérifié : une récupération est passée pendant le hachage (SS §3).
-    private async Task<bool> TryToSaveLoginUnlessOtherRequestsKeepChangingTheAccountAsync(
-        Guid identifierOfTheAccountLoggingIn,
-        string secureHashOfThePasswordJustChecked,
-        UserSession newSessionOfTheUserAccount,
-        Device? newDeviceOfTheUserAccount,
-        SecurityEvent securityEventOfTheSuccessfulLogin)
-    {
-        for (var numberOfTheTryBeingDone = 1; numberOfTheTryBeingDone <= AccountLockoutRules.MaximumNumberOfTriesWhileOtherRequestsChangeTheAccount; numberOfTheTryBeingDone++)
-        {
-            var accountReadBeforeSavingTheLogin = await repositoryOfTheUserAccountsInDatabase.FindUserAccountByIdentifierAsync(identifierOfTheAccountLoggingIn);
-            if (accountReadBeforeSavingTheLogin == null || accountReadBeforeSavingTheLogin.PasswordHash != secureHashOfThePasswordJustChecked)
-            {
-                return false;
-            }
-
-            AccountLockoutRules.ResetLoginCountersAfterSuccessfulLogin(accountReadBeforeSavingTheLogin);
-
-            if (await repositoryOfTheUserSessionsInDatabase.TryToSaveSuccessfulLoginOfThisAccountAsync(accountReadBeforeSavingTheLogin, newSessionOfTheUserAccount, newDeviceOfTheUserAccount, securityEventOfTheSuccessfulLogin))
-            {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    // Crée la session à enregistrer. Seule l'empreinte de son identifiant va en base.
-    private UserSession CreateSessionFromThisGeneratedToken(GeneratedSecureToken generatedTokenOfTheNewSession, Guid identifierOfTheAccountLoggingIn)
-    {
-        return new UserSession
-        {
-            Id = generatedTokenOfTheNewSession.HashToStoreInTheDatabase,
-            LastActivityAt = clockThatGivesTheCurrentDateAndTime.GetUtcNow().UtcDateTime,
-            UserId = identifierOfTheAccountLoggingIn
-        };
-    }
-
-    // Tire un nouveau jeton si le navigateur n'a pas de jeton d'appareil, ou s'il n'est pas celui de ce compte.
-    // Renvoie null si l'appareil est déjà connu du compte.
-    private async Task<GeneratedSecureToken?> GenerateDeviceTokenIfThisDeviceIsNewForTheAccountAsync(Guid identifierOfTheAccountLoggingIn, string? deviceTokenReadInTheCookie)
-    {
-        if (deviceTokenReadInTheCookie != null)
-        {
-            var hashOfTheDeviceTokenFromCookie = generatorOfTheSecureRandomTokens.ConvertSecureTokenIntoItsHash(deviceTokenReadInTheCookie);
-
-            if (await repositoryOfTheUserSessionsInDatabase.CheckThatDeviceTokenBelongsToThisAccountAsync(hashOfTheDeviceTokenFromCookie, identifierOfTheAccountLoggingIn))
-            {
-                return null;
-            }
-        }
-
-        return generatorOfTheSecureRandomTokens.GenerateNewRandomSecureTokenWithItsHash();
-    }
-
-    // Crée l'appareil à enregistrer. Seule l'empreinte de son jeton va en base.
-    private static Device? CreateDeviceFromThisGeneratedToken(GeneratedSecureToken? generatedTokenOfTheNewDevice, Guid identifierOfTheAccountLoggingIn)
-    {
-        if (generatedTokenOfTheNewDevice == null)
-        {
-            return null;
-        }
-
-        return new Device { DeviceToken = generatedTokenOfTheNewDevice.HashToStoreInTheDatabase, UserId = identifierOfTheAccountLoggingIn };
-    }
-
-    // Le navigateur reçoit une nouvelle session : l'ancienne ne doit pas rester ouverte sans que personne ne s'en serve.
-    private async Task CloseOldSessionOfThisBrowserAsync(string? sessionTokenReadInTheCookie)
-    {
-        if (sessionTokenReadInTheCookie == null)
-        {
-            return;
-        }
-
-        var hashOfTheOldSessionToken = generatorOfTheSecureRandomTokens.ConvertSecureTokenIntoItsHash(sessionTokenReadInTheCookie);
-        await repositoryOfTheUserSessionsInDatabase.DeleteUserSessionByItsHashAsync(hashOfTheOldSessionToken);
-    }
-
-    // Donne les jetons à écrire dans les cookies : l'appareil garde son jeton s'il est déjà connu du compte.
-    private static AccountLoginResult CreateResultForTheSuccessfulLogin(
-        GeneratedSecureToken generatedTokenOfTheNewSession,
-        GeneratedSecureToken? generatedTokenOfTheNewDevice,
-        string? deviceTokenReadInTheCookie)
-    {
         return new AccountLoginResult
         {
-            SessionTokenToPutInTheCookie = generatedTokenOfTheNewSession.TokenGivenOnlyToTheVisitor,
-            DeviceTokenToPutInTheCookie = generatedTokenOfTheNewDevice?.TokenGivenOnlyToTheVisitor ?? deviceTokenReadInTheCookie
+            SessionTokenToPutInTheCookie = sessionJustOpenedForTheAccount.SessionTokenToPutInTheCookie,
+            DeviceTokenToPutInTheCookie = sessionJustOpenedForTheAccount.DeviceTokenToPutInTheCookie
         };
     }
 

@@ -57,6 +57,7 @@ public class DatabaseCodesOfEnumerationsTests
     [InlineData(SecurityEventType.PasswordChange, "changement_mdp")]
     [InlineData(SecurityEventType.EmailChange, "changement_email")]
     [InlineData(SecurityEventType.TwoFactorActivation, "activation_double_auth")]
+    [InlineData(SecurityEventType.TwoFactorDeactivation, "desactivation_double_auth")]
     [InlineData(SecurityEventType.BankConnection, "connexion_banque")]
     [InlineData(SecurityEventType.BankDisconnection, "deconnexion_banque")]
     [InlineData(SecurityEventType.DataExport, "export_donnees")]

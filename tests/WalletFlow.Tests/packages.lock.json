@@ -447,6 +447,11 @@
           "Npgsql": "10.0.3"
         }
       },
+      "Otp.NET": {
+        "type": "Transitive",
+        "resolved": "1.4.1",
+        "contentHash": "UXjZ80T6BfVACJWmEcz4UFZ93hwX3STKojKvVpPk3qUhubjnLwIiZMsI4Hh91HhYxC0JlatNdNrVK2wkv4O9/Q=="
+      },
       "Sodium.Core": {
         "type": "Transitive",
         "resolved": "1.4.1",
@@ -521,6 +526,7 @@
         "type": "Project",
         "dependencies": {
           "Npgsql.EntityFrameworkCore.PostgreSQL": "[10.0.3, )",
+          "Otp.NET": "[1.4.1, )",
           "Sodium.Core": "[1.4.1, )",
           "WalletFlow.Application": "[1.0.0, )"
         }

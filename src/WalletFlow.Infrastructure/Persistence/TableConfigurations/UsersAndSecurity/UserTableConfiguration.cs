@@ -23,7 +23,6 @@ public class UserTableConfiguration : IEntityTypeConfiguration<User>
         builderOfTheUserTableMapping.Property(nameof(User.Role)).HasColumnName("role_utilisateur")
             .HasConversion(UserRoleDatabaseCodes.ConverterBetweenUserRoleAndDatabaseCode);
         builderOfTheUserTableMapping.Property(nameof(User.IsTwoFactorEnabled)).HasColumnName("double_auth_activee");
-        builderOfTheUserTableMapping.Property(nameof(User.EncryptedTotpSecret)).HasColumnName("secret_totp_chiffre");
         builderOfTheUserTableMapping.Property(nameof(User.NotificationChannel)).HasColumnName("canal_notification")
             .HasConversion(NotificationChannelDatabaseCodes.ConverterBetweenNotificationChannelAndDatabaseCode);
         builderOfTheUserTableMapping.Property(nameof(User.LockoutCount)).HasColumnName("nb_blocages");
@@ -40,6 +39,10 @@ public class UserTableConfiguration : IEntityTypeConfiguration<User>
 
         // Une connexion en cours avec l'ancien mot de passe ne peut pas s'enregistrer après une récupération.
         builderOfTheUserTableMapping.Property(nameof(User.PasswordHash)).HasColumnName("mot_de_passe_hash").IsConcurrencyToken();
+
+        // Une connexion en cours sans code ne peut pas s'enregistrer si la double authentification vient d'être activée,
+        // et deux activations simultanées ne peuvent pas réussir toutes les deux.
+        builderOfTheUserTableMapping.Property(nameof(User.EncryptedTotpSecret)).HasColumnName("secret_totp_chiffre").IsConcurrencyToken();
 
         // Sans ce contrôle, 100 requêtes simultanées liraient toutes « 0 essai » et écriraient toutes « 1 essai »,
         // et le compte ne se bloquerait jamais.

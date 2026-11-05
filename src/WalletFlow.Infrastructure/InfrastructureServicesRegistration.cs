@@ -3,6 +3,7 @@ using Microsoft.Extensions.DependencyInjection;
 using WalletFlow.Application.AccountRecovery;
 using WalletFlow.Application.Emails;
 using WalletFlow.Application.Security;
+using WalletFlow.Application.TwoFactorAuthentication;
 using WalletFlow.Application.UserAccounts;
 using WalletFlow.Application.UserSessions;
 using WalletFlow.Infrastructure.Emails;
@@ -28,17 +29,32 @@ public static class InfrastructureServicesRegistration
         servicesOfTheWalletFlowApplication.AddScoped<IUserAccountRepository, UserAccountRepository>();
         servicesOfTheWalletFlowApplication.AddScoped<IUserSessionRepository, UserSessionRepository>();
         servicesOfTheWalletFlowApplication.AddScoped<ISecurityEventRepository, SecurityEventRepository>();
+        servicesOfTheWalletFlowApplication.AddScoped<ITwoFactorAuthenticationRepository, TwoFactorAuthenticationRepository>();
 
         return servicesOfTheWalletFlowApplication;
     }
 
-    // Ajoute le hachage des mots de passe, la création des jetons et les limites par adresse e-mail.
+    // Ajoute le hachage des mots de passe, la création des jetons, les limites par adresse e-mail et les outils de la double authentification.
     public static IServiceCollection AddWalletFlowSecurityToolsToTheServices(this IServiceCollection servicesOfTheWalletFlowApplication)
     {
         servicesOfTheWalletFlowApplication.AddSingleton<IPasswordHasher, LibsodiumPasswordHasher>();
         servicesOfTheWalletFlowApplication.AddSingleton<ISecureTokenGenerator, RandomSecureTokenGenerator>();
         servicesOfTheWalletFlowApplication.AddSingleton<IEmailAddressRequestLimiter, InMemoryEmailAddressRequestLimiter>();
         servicesOfTheWalletFlowApplication.AddSingleton<IPasswordRecoveryRequestLimiter, InMemoryPasswordRecoveryRequestLimiter>();
+        servicesOfTheWalletFlowApplication.AddSingleton<IAuthenticatorCodeTool, OtpNetAuthenticatorCodeTool>();
+        servicesOfTheWalletFlowApplication.AddSingleton<ILoginsWaitingForTheirCodeStore, InMemoryLoginsWaitingForTheirCodeStore>();
+        servicesOfTheWalletFlowApplication.AddSingleton<ISecretsWaitingForActivationStore, InMemorySecretsWaitingForActivationStore>();
+        servicesOfTheWalletFlowApplication.AddSingleton<IUsedAuthenticatorCodesRegister, InMemoryUsedAuthenticatorCodesRegister>();
+
+        return servicesOfTheWalletFlowApplication;
+    }
+
+    // Ajoute le chiffrement des secrets de double authentification, avec cette clé écrite en Base64.
+    public static IServiceCollection AddTotpSecretEncryptionToTheServices(
+        this IServiceCollection servicesOfTheWalletFlowApplication,
+        string encryptionKeyWrittenInBase64)
+    {
+        servicesOfTheWalletFlowApplication.AddSingleton<ITotpSecretProtector>(new AesGcmTotpSecretProtector(encryptionKeyWrittenInBase64));
 
         return servicesOfTheWalletFlowApplication;
     }

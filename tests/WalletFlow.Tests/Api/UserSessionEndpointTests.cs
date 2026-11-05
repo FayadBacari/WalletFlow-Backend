@@ -10,10 +10,12 @@ using WalletFlow.Api.Configuration;
 using WalletFlow.Api.Controllers;
 using WalletFlow.Application.AccountRecovery;
 using WalletFlow.Application.Security;
+using WalletFlow.Application.TwoFactorAuthentication;
 using WalletFlow.Application.UserSessions;
 using WalletFlow.Infrastructure.Emails;
 using WalletFlow.Infrastructure.Persistence.Repositories;
 using WalletFlow.Infrastructure.Security;
+using WalletFlow.Tests.Fakes;
 using static WalletFlow.Tests.Api.LoginRequestTestValues;
 using static WalletFlow.Tests.Api.RegistrationRequestTestValues;
 
@@ -420,12 +422,22 @@ public class UserSessionEndpointTests
         {
             // Cette base n'est jamais contactée par ce test : les tâches de fond notent seulement leur panne dans le journal technique.
             builderOfTheApiWithItsRealServices.UseSetting("ConnectionStrings:WalletFlowDatabase", "Host=localhost;Database=base_jamais_contactee");
+            builderOfTheApiWithItsRealServices.UseSetting("TwoFactorSecretEncryptionKey", TwoFactorTestTools.CreateNewEncryptionKeyForOneTest());
         });
 
         using var scopeOfTheRealServicesOfTheApi = apiStartedWithItsRealServices.Services.CreateScope();
 
         Assert.IsType<UserSessionRepository>(scopeOfTheRealServicesOfTheApi.ServiceProvider.GetRequiredService<IUserSessionRepository>());
         Assert.IsType<SecurityEventRepository>(scopeOfTheRealServicesOfTheApi.ServiceProvider.GetRequiredService<ISecurityEventRepository>());
+        Assert.IsType<TwoFactorAuthenticationRepository>(scopeOfTheRealServicesOfTheApi.ServiceProvider.GetRequiredService<ITwoFactorAuthenticationRepository>());
+        Assert.IsType<OtpNetAuthenticatorCodeTool>(scopeOfTheRealServicesOfTheApi.ServiceProvider.GetRequiredService<IAuthenticatorCodeTool>());
+        Assert.IsType<AesGcmTotpSecretProtector>(scopeOfTheRealServicesOfTheApi.ServiceProvider.GetRequiredService<ITotpSecretProtector>());
+        Assert.IsType<InMemoryLoginsWaitingForTheirCodeStore>(scopeOfTheRealServicesOfTheApi.ServiceProvider.GetRequiredService<ILoginsWaitingForTheirCodeStore>());
+        Assert.IsType<InMemorySecretsWaitingForActivationStore>(scopeOfTheRealServicesOfTheApi.ServiceProvider.GetRequiredService<ISecretsWaitingForActivationStore>());
+        Assert.IsType<InMemoryUsedAuthenticatorCodesRegister>(scopeOfTheRealServicesOfTheApi.ServiceProvider.GetRequiredService<IUsedAuthenticatorCodesRegister>());
+        Assert.NotNull(scopeOfTheRealServicesOfTheApi.ServiceProvider.GetRequiredService<TwoFactorLoginService>());
+        Assert.NotNull(scopeOfTheRealServicesOfTheApi.ServiceProvider.GetRequiredService<TwoFactorActivationService>());
+        Assert.NotNull(scopeOfTheRealServicesOfTheApi.ServiceProvider.GetRequiredService<TwoFactorDeactivationService>());
         Assert.NotNull(scopeOfTheRealServicesOfTheApi.ServiceProvider.GetRequiredService<AccountLoginService>());
         Assert.NotNull(scopeOfTheRealServicesOfTheApi.ServiceProvider.GetRequiredService<UserSessionService>());
         Assert.NotNull(scopeOfTheRealServicesOfTheApi.ServiceProvider.GetRequiredService<ExpiredUserSessionsCleanupService>());
@@ -466,20 +478,20 @@ public class UserSessionEndpointTests
 
     // Ajouter une route publique doit être un choix conscient : ce test oblige à la déclarer ici.
     [Fact]
-    public void OnlyTheSixExpectedRoutesCanBeCalledWithoutSession()
+    public void OnlyTheSevenExpectedRoutesCanBeCalledWithoutSession()
     {
         using var apiStartedInMemoryForThisTest = new ApiFactoryWithFakeRepositoryAndEmails();
-        var routesExpectedToBePublicInTheApi = new List<string> { "api/account/confirm-email", "api/account/forgot-password", "api/account/login", "api/account/register", "api/account/reset-password", "api/account/unlock" };
+        var routesExpectedToBePublicInTheApi = new List<string> { "api/account/confirm-email", "api/account/forgot-password", "api/account/login", "api/account/login/two-factor", "api/account/register", "api/account/reset-password", "api/account/unlock" };
 
         Assert.Equal(routesExpectedToBePublicInTheApi, ListRoutesCarryingThisAttribute<Microsoft.AspNetCore.Authorization.IAllowAnonymous>(apiStartedInMemoryForThisTest));
     }
 
     // SS §6 : seules les routes appelées sans session n'ont pas besoin du jeton anti-CSRF.
     [Fact]
-    public void OnlyTheSixExpectedRoutesIgnoreTheCsrfToken()
+    public void OnlyTheSevenExpectedRoutesIgnoreTheCsrfToken()
     {
         using var apiStartedInMemoryForThisTest = new ApiFactoryWithFakeRepositoryAndEmails();
-        var routesExpectedToBePublicInTheApi = new List<string> { "api/account/confirm-email", "api/account/forgot-password", "api/account/login", "api/account/register", "api/account/reset-password", "api/account/unlock" };
+        var routesExpectedToBePublicInTheApi = new List<string> { "api/account/confirm-email", "api/account/forgot-password", "api/account/login", "api/account/login/two-factor", "api/account/register", "api/account/reset-password", "api/account/unlock" };
 
         Assert.Equal(routesExpectedToBePublicInTheApi, ListRoutesCarryingThisAttribute<IgnoreAntiforgeryTokenAttribute>(apiStartedInMemoryForThisTest));
     }

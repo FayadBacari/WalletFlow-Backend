@@ -2,6 +2,7 @@ using System.Buffers.Text;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
+using WalletFlow.Domain.UsersAndSecurity;
 using WalletFlow.Infrastructure.Security;
 
 namespace WalletFlow.Tests.Infrastructure;
@@ -10,6 +11,34 @@ namespace WalletFlow.Tests.Infrastructure;
 public class RandomSecureTokenGeneratorTests
 {
     private readonly RandomSecureTokenGenerator generatorBeingTestedWithRealRandomness = new RandomSecureTokenGenerator();
+
+    [Fact]
+    public void BackupCodeHasTheExpectedFormatAndNeverComesBackTwice()
+    {
+        var backupCodesAlreadyDrawnInThisTest = new HashSet<string>();
+
+        for (var numberOfTheBackupCodeBeingDrawn = 1; numberOfTheBackupCodeBeingDrawn <= 1000; numberOfTheBackupCodeBeingDrawn++)
+        {
+            var backupCodeDrawnByTheGeneratorJustNow = generatorBeingTestedWithRealRandomness.GenerateNewRandomBackupCodeInItsCleanForm();
+
+            Assert.True(TwoFactorAuthenticationRules.CheckThatTextHasTheFormatOfOneBackupCode(backupCodeDrawnByTheGeneratorJustNow));
+            Assert.True(backupCodesAlreadyDrawnInThisTest.Add(backupCodeDrawnByTheGeneratorJustNow));
+        }
+    }
+
+    // Sur 10 000 caractères, chacun des 32 caractères permis doit sortir : un tirage réduit à quelques-uns donnerait des codes faciles à deviner.
+    [Fact]
+    public void EveryAllowedCharacterComesOutOfTheBackupCodes()
+    {
+        var charactersSeenInTheBackupCodes = new HashSet<char>();
+
+        for (var numberOfTheBackupCodeBeingDrawn = 1; numberOfTheBackupCodeBeingDrawn <= 1000; numberOfTheBackupCodeBeingDrawn++)
+        {
+            charactersSeenInTheBackupCodes.UnionWith(generatorBeingTestedWithRealRandomness.GenerateNewRandomBackupCodeInItsCleanForm());
+        }
+
+        Assert.Equal(32, charactersSeenInTheBackupCodes.Count);
+    }
 
     [Fact]
     public void TokenContainsAtLeast128RandomBitsAndCanBePlacedInLink()
