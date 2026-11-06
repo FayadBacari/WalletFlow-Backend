@@ -1,4 +1,5 @@
 using WalletFlow.Application.AccountRecovery;
+using WalletFlow.Domain.UsersAndSecurity;
 
 namespace WalletFlow.Api.BackgroundTasks;
 
