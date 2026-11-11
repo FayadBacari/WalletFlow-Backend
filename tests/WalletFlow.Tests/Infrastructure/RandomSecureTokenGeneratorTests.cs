@@ -10,19 +10,19 @@ namespace WalletFlow.Tests.Infrastructure;
 // Vérifie la création des jetons des liens envoyés par e-mail (SS §2).
 public class RandomSecureTokenGeneratorTests
 {
-    private readonly RandomSecureTokenGenerator generatorBeingTestedWithRealRandomness = new RandomSecureTokenGenerator();
+    private readonly RandomSecureTokenGenerator generator = new RandomSecureTokenGenerator();
 
     [Fact]
     public void BackupCodeHasTheExpectedFormatAndNeverComesBackTwice()
     {
-        var backupCodesAlreadyDrawnInThisTest = new HashSet<string>();
+        var backupCodes = new HashSet<string>();
 
-        for (var numberOfTheBackupCodeBeingDrawn = 1; numberOfTheBackupCodeBeingDrawn <= 1000; numberOfTheBackupCodeBeingDrawn++)
+        for (var codeNumber = 1; codeNumber <= 1000; codeNumber++)
         {
-            var backupCodeDrawnByTheGeneratorJustNow = generatorBeingTestedWithRealRandomness.GenerateNewRandomBackupCodeInItsCleanForm();
+            var backupCode = generator.GenerateBackupCode();
 
-            Assert.True(TwoFactorAuthenticationRules.CheckThatTextHasTheFormatOfOneBackupCode(backupCodeDrawnByTheGeneratorJustNow));
-            Assert.True(backupCodesAlreadyDrawnInThisTest.Add(backupCodeDrawnByTheGeneratorJustNow));
+            Assert.True(TwoFactorAuthenticationRules.HasBackupCodeFormat(backupCode));
+            Assert.True(backupCodes.Add(backupCode));
         }
     }
 
@@ -30,55 +30,55 @@ public class RandomSecureTokenGeneratorTests
     [Fact]
     public void EveryAllowedCharacterComesOutOfTheBackupCodes()
     {
-        var charactersSeenInTheBackupCodes = new HashSet<char>();
+        var seenCharacters = new HashSet<char>();
 
-        for (var numberOfTheBackupCodeBeingDrawn = 1; numberOfTheBackupCodeBeingDrawn <= 1000; numberOfTheBackupCodeBeingDrawn++)
+        for (var codeNumber = 1; codeNumber <= 1000; codeNumber++)
         {
-            charactersSeenInTheBackupCodes.UnionWith(generatorBeingTestedWithRealRandomness.GenerateNewRandomBackupCodeInItsCleanForm());
+            seenCharacters.UnionWith(generator.GenerateBackupCode());
         }
 
-        Assert.Equal(32, charactersSeenInTheBackupCodes.Count);
+        Assert.Equal(32, seenCharacters.Count);
     }
 
     [Fact]
     public void TokenContainsAtLeast128RandomBitsAndCanBePlacedInLink()
     {
-        var generatedSecureTokenBeingTestedHere = generatorBeingTestedWithRealRandomness.GenerateNewRandomSecureTokenWithItsHash();
+        var generatedToken = generator.GenerateToken();
 
-        var randomBytesInsideTheGeneratedToken = Base64Url.DecodeFromChars(generatedSecureTokenBeingTestedHere.TokenGivenOnlyToTheVisitor);
-        Assert.True(randomBytesInsideTheGeneratedToken.Length * 8 >= 128);
-        Assert.Matches(new Regex("^[A-Za-z0-9_-]+$"), generatedSecureTokenBeingTestedHere.TokenGivenOnlyToTheVisitor);
+        var randomBytes = Base64Url.DecodeFromChars(generatedToken.Token);
+        Assert.True(randomBytes.Length * 8 >= 128);
+        Assert.Matches(new Regex("^[A-Za-z0-9_-]+$"), generatedToken.Token);
     }
 
     [Fact]
     public void StoredHashIsTheSha256OfTheTokenAndFitsInTheDatabaseColumn()
     {
-        var generatedSecureTokenBeingTestedHere = generatorBeingTestedWithRealRandomness.GenerateNewRandomSecureTokenWithItsHash();
+        var generatedToken = generator.GenerateToken();
 
-        var hashBytesComputedByThisTest = SHA256.HashData(Encoding.UTF8.GetBytes(generatedSecureTokenBeingTestedHere.TokenGivenOnlyToTheVisitor));
-        Assert.Equal(Convert.ToHexStringLower(hashBytesComputedByThisTest), generatedSecureTokenBeingTestedHere.HashToStoreInTheDatabase);
+        var hashBytes = SHA256.HashData(Encoding.UTF8.GetBytes(generatedToken.Token));
+        Assert.Equal(Convert.ToHexStringLower(hashBytes), generatedToken.Hash);
 
         // La colonne empreinte_jeton contient exactement 64 caractères (MPD).
-        Assert.Equal(64, generatedSecureTokenBeingTestedHere.HashToStoreInTheDatabase.Length);
+        Assert.Equal(64, generatedToken.Hash.Length);
     }
 
     // Le jeton reçu dans le lien doit redonner l'empreinte enregistrée : sinon, aucun lien ne marcherait.
     [Fact]
     public void TokenReceivedInTheLinkGivesBackTheStoredHash()
     {
-        var generatedSecureTokenBeingTestedHere = generatorBeingTestedWithRealRandomness.GenerateNewRandomSecureTokenWithItsHash();
+        var generatedToken = generator.GenerateToken();
 
-        var hashComputedFromTheTokenOfTheLink = generatorBeingTestedWithRealRandomness.ConvertSecureTokenIntoItsHash(generatedSecureTokenBeingTestedHere.TokenGivenOnlyToTheVisitor);
+        var hash = generator.HashToken(generatedToken.Token);
 
-        Assert.Equal(generatedSecureTokenBeingTestedHere.HashToStoreInTheDatabase, hashComputedFromTheTokenOfTheLink);
+        Assert.Equal(generatedToken.Hash, hash);
     }
 
     [Fact]
     public void TwoGeneratedTokensAreAlwaysDifferentFromEachOther()
     {
-        var firstGeneratedTokenBeingComparedHere = generatorBeingTestedWithRealRandomness.GenerateNewRandomSecureTokenWithItsHash();
-        var secondGeneratedTokenBeingComparedHere = generatorBeingTestedWithRealRandomness.GenerateNewRandomSecureTokenWithItsHash();
+        var firstToken = generator.GenerateToken();
+        var secondToken = generator.GenerateToken();
 
-        Assert.NotEqual(firstGeneratedTokenBeingComparedHere.TokenGivenOnlyToTheVisitor, secondGeneratedTokenBeingComparedHere.TokenGivenOnlyToTheVisitor);
+        Assert.NotEqual(firstToken.Token, secondToken.Token);
     }
 }

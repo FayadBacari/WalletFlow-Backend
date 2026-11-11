@@ -8,96 +8,95 @@ namespace WalletFlow.Tests.Infrastructure;
 // Vérifie la file des e-mails préparés en arrière-plan.
 public class InMemoryBackgroundEmailRequestQueueTests
 {
-    private readonly LoggerProviderThatKeepsTheMessages providerThatKeepsTheLogMessages = new LoggerProviderThatKeepsTheMessages();
+    private readonly MemoryLoggerProvider loggerProvider = new MemoryLoggerProvider();
 
     // Crée la file à tester, avec un journal technique qui garde ses messages.
-    private InMemoryBackgroundEmailRequestQueue CreateQueueWithItsTechnicalLog()
+    private InMemoryBackgroundEmailRequestQueue CreateQueueWithLog()
     {
-        var factoryOfTheLoggersOfThisTest = new LoggerFactory(new ILoggerProvider[] { providerThatKeepsTheLogMessages });
+        var loggerFactory = new LoggerFactory(new ILoggerProvider[] { loggerProvider });
 
-        return new InMemoryBackgroundEmailRequestQueue(new Logger<InMemoryBackgroundEmailRequestQueue>(factoryOfTheLoggersOfThisTest));
+        return new InMemoryBackgroundEmailRequestQueue(new Logger<InMemoryBackgroundEmailRequestQueue>(loggerFactory));
     }
 
     // Crée une demande de récupération pour cette adresse.
-    private static BackgroundEmailRequest CreateRecoveryRequestForThisEmailAddress(string emailAddressOfTheRecoveryRequest)
+    private static BackgroundEmailRequest CreateRecoveryRequest(string emailAddress)
     {
-        return new BackgroundEmailRequest
+        return new BackgroundEmailRequest.PasswordRecovery
         {
-            TypeOfTheRequestedBackgroundEmail = BackgroundEmailRequestType.PasswordRecovery,
-            EmailAddressOfTheRecoveryRequest = emailAddressOfTheRecoveryRequest
+            EmailAddress = emailAddress
         };
     }
 
     [Fact]
     public async Task RequestsComeOutInTheOrderTheyWentIn()
     {
-        var queueBeingTestedWithItsLog = CreateQueueWithItsTechnicalLog();
-        queueBeingTestedWithItsLog.AddEmailRequestToTheBackgroundQueue(CreateRecoveryRequestForThisEmailAddress("premier@exemple.test"));
-        queueBeingTestedWithItsLog.AddEmailRequestToTheBackgroundQueue(CreateRecoveryRequestForThisEmailAddress("second@exemple.test"));
+        var queue = CreateQueueWithLog();
+        queue.Add(CreateRecoveryRequest("premier@exemple.test"));
+        queue.Add(CreateRecoveryRequest("second@exemple.test"));
 
-        var firstRequestOutOfTheQueue = await queueBeingTestedWithItsLog.WaitForNextEmailRequestOfTheQueueAsync(CancellationToken.None);
-        var secondRequestOutOfTheQueue = await queueBeingTestedWithItsLog.WaitForNextEmailRequestOfTheQueueAsync(CancellationToken.None);
+        var firstRequest = await queue.WaitForNextAsync(CancellationToken.None);
+        var secondRequest = await queue.WaitForNextAsync(CancellationToken.None);
 
-        Assert.Equal("premier@exemple.test", firstRequestOutOfTheQueue.EmailAddressOfTheRecoveryRequest);
-        Assert.Equal("second@exemple.test", secondRequestOutOfTheQueue.EmailAddressOfTheRecoveryRequest);
+        Assert.Equal("premier@exemple.test", Assert.IsType<BackgroundEmailRequest.PasswordRecovery>(firstRequest).EmailAddress);
+        Assert.Equal("second@exemple.test", Assert.IsType<BackgroundEmailRequest.PasswordRecovery>(secondRequest).EmailAddress);
     }
 
     // La mémoire ne peut pas grossir sans fin : au-delà de la limite, la demande est perdue et la panne est notée.
     [Fact]
     public async Task FullQueueLosesTheRequestAndWritesTheFailureWithoutTheAddress()
     {
-        var queueBeingTestedWithItsLog = CreateQueueWithItsTechnicalLog();
+        var queue = CreateQueueWithLog();
 
-        for (var numberOfTheRequestBeingAdded = 1; numberOfTheRequestBeingAdded <= InMemoryBackgroundEmailRequestQueue.MaximumNumberOfRequestsWaitingInTheQueue; numberOfTheRequestBeingAdded++)
+        for (var requestNumber = 1; requestNumber <= InMemoryBackgroundEmailRequestQueue.QueueCapacity; requestNumber++)
         {
-            queueBeingTestedWithItsLog.AddEmailRequestToTheBackgroundQueue(CreateRecoveryRequestForThisEmailAddress("garde@exemple.test"));
+            queue.Add(CreateRecoveryRequest("garde@exemple.test"));
         }
 
-        Assert.Empty(providerThatKeepsTheLogMessages.MessagesWrittenInTheLog);
+        Assert.Empty(loggerProvider.Messages);
 
-        queueBeingTestedWithItsLog.AddEmailRequestToTheBackgroundQueue(CreateRecoveryRequestForThisEmailAddress("perdue@exemple.test"));
+        queue.Add(CreateRecoveryRequest("perdue@exemple.test"));
 
-        var messageWrittenInTheTechnicalLog = Assert.Single(providerThatKeepsTheLogMessages.MessagesWrittenInTheLog);
-        Assert.StartsWith("Error", messageWrittenInTheTechnicalLog);
-        Assert.Contains("pleine", messageWrittenInTheTechnicalLog);
-        Assert.DoesNotContain("perdue@exemple.test", messageWrittenInTheTechnicalLog);
+        var message = Assert.Single(loggerProvider.Messages);
+        Assert.StartsWith("Error", message);
+        Assert.Contains("pleine", message);
+        Assert.DoesNotContain("perdue@exemple.test", message);
 
-        var numberOfRequestsTakenOutOfTheQueue = 0;
-        for (var numberOfTheRequestBeingTaken = 1; numberOfTheRequestBeingTaken <= InMemoryBackgroundEmailRequestQueue.MaximumNumberOfRequestsWaitingInTheQueue; numberOfTheRequestBeingTaken++)
+        var takenCount = 0;
+        for (var requestNumber = 1; requestNumber <= InMemoryBackgroundEmailRequestQueue.QueueCapacity; requestNumber++)
         {
-            var requestTakenOutOfTheQueue = await queueBeingTestedWithItsLog.WaitForNextEmailRequestOfTheQueueAsync(CancellationToken.None);
-            Assert.Equal("garde@exemple.test", requestTakenOutOfTheQueue.EmailAddressOfTheRecoveryRequest);
-            numberOfRequestsTakenOutOfTheQueue = numberOfRequestsTakenOutOfTheQueue + 1;
+            var request = await queue.WaitForNextAsync(CancellationToken.None);
+            Assert.Equal("garde@exemple.test", Assert.IsType<BackgroundEmailRequest.PasswordRecovery>(request).EmailAddress);
+            takenCount = takenCount + 1;
         }
 
-        Assert.Equal(1000, numberOfRequestsTakenOutOfTheQueue);
+        Assert.Equal(1000, takenCount);
     }
 
     // La tâche de fond attend sans consommer de ressources, et elle est réveillée par la demande suivante.
     [Fact]
     public async Task WaitingForARequestEndsWhenARequestArrives()
     {
-        var queueBeingTestedWithItsLog = CreateQueueWithItsTechnicalLog();
-        var waitForTheNextRequestOfTheQueue = queueBeingTestedWithItsLog.WaitForNextEmailRequestOfTheQueueAsync(CancellationToken.None).AsTask();
+        var queue = CreateQueueWithLog();
+        var waitTask = queue.WaitForNextAsync(CancellationToken.None).AsTask();
 
-        Assert.False(waitForTheNextRequestOfTheQueue.IsCompleted);
+        Assert.False(waitTask.IsCompleted);
 
-        queueBeingTestedWithItsLog.AddEmailRequestToTheBackgroundQueue(CreateRecoveryRequestForThisEmailAddress("visiteur@exemple.test"));
-        var requestTakenOutOfTheQueue = await waitForTheNextRequestOfTheQueue.WaitAsync(TimeSpan.FromSeconds(5));
+        queue.Add(CreateRecoveryRequest("visiteur@exemple.test"));
+        var request = await waitTask.WaitAsync(TimeSpan.FromSeconds(5));
 
-        Assert.Equal("visiteur@exemple.test", requestTakenOutOfTheQueue.EmailAddressOfTheRecoveryRequest);
+        Assert.Equal("visiteur@exemple.test", Assert.IsType<BackgroundEmailRequest.PasswordRecovery>(request).EmailAddress);
     }
 
     // L'arrêt de l'API doit interrompre l'attente, sinon elle ne s'arrêterait jamais proprement.
     [Fact]
     public async Task StoppingTheApiInterruptsTheWait()
     {
-        var queueBeingTestedWithItsLog = CreateQueueWithItsTechnicalLog();
-        using var sourceThatStopsTheWaitForRequests = new CancellationTokenSource();
-        var waitForTheNextRequestOfTheQueue = queueBeingTestedWithItsLog.WaitForNextEmailRequestOfTheQueueAsync(sourceThatStopsTheWaitForRequests.Token).AsTask();
+        var queue = CreateQueueWithLog();
+        using var cancellationSource = new CancellationTokenSource();
+        var waitTask = queue.WaitForNextAsync(cancellationSource.Token).AsTask();
 
-        sourceThatStopsTheWaitForRequests.Cancel();
+        cancellationSource.Cancel();
 
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => waitForTheNextRequestOfTheQueue);
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => waitTask);
     }
 }

@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using WalletFlow.Application.AccountRecovery;
 using WalletFlow.Application.Emails;
+using WalletFlow.Application.Persistence;
 using WalletFlow.Application.Security;
 using WalletFlow.Application.TwoFactorAuthentication;
 using WalletFlow.Application.UserAccounts;
@@ -17,63 +18,76 @@ namespace WalletFlow.Infrastructure;
 public static class InfrastructureServicesRegistration
 {
     // Branche EF Core sur la base PostgreSQL désignée par la chaîne de connexion.
-    public static IServiceCollection AddWalletFlowDatabaseAccessToTheServices(
-        this IServiceCollection servicesOfTheWalletFlowApplication,
-        string connectionStringOfTheWalletFlowDatabase)
+    public static IServiceCollection AddWalletFlowDatabase(
+        this IServiceCollection services,
+        string connectionString)
     {
-        servicesOfTheWalletFlowApplication.AddDbContext<WalletFlowDatabaseContext>(optionsOfTheDatabaseContextToConfigure =>
+        services.AddDbContext<WalletFlowDatabaseContext>(options =>
         {
-            optionsOfTheDatabaseContextToConfigure.UseNpgsql(connectionStringOfTheWalletFlowDatabase);
+            options.UseNpgsql(connectionString);
         });
 
-        servicesOfTheWalletFlowApplication.AddScoped<IUserAccountRepository, UserAccountRepository>();
-        servicesOfTheWalletFlowApplication.AddScoped<IUserSessionRepository, UserSessionRepository>();
-        servicesOfTheWalletFlowApplication.AddScoped<ISecurityEventRepository, SecurityEventRepository>();
-        servicesOfTheWalletFlowApplication.AddScoped<ITwoFactorAuthenticationRepository, TwoFactorAuthenticationRepository>();
+        services.AddScoped<IDatabaseUnitOfWork, EntityFrameworkDatabaseUnitOfWork>();
+        services.AddScoped<IUserAccountRepository, UserAccountRepository>();
+        services.AddScoped<IUserSessionRepository, UserSessionRepository>();
+        services.AddScoped<ISecurityEventRepository, SecurityEventRepository>();
+        services.AddScoped<ITwoFactorAuthenticationRepository, TwoFactorAuthenticationRepository>();
 
-        return servicesOfTheWalletFlowApplication;
+        return services;
     }
 
-    // Ajoute le hachage des mots de passe, la création des jetons, les limites par adresse e-mail et les outils de la double authentification.
-    public static IServiceCollection AddWalletFlowSecurityToolsToTheServices(this IServiceCollection servicesOfTheWalletFlowApplication)
+    // Ajoute le hachage des mots de passe et des codes de secours, la création des jetons, les limites par adresse e-mail
+    // et les outils de la double authentification.
+    public static IServiceCollection AddWalletFlowSecurityTools(this IServiceCollection services)
     {
-        servicesOfTheWalletFlowApplication.AddSingleton<IPasswordHasher, LibsodiumPasswordHasher>();
-        servicesOfTheWalletFlowApplication.AddSingleton<ISecureTokenGenerator, RandomSecureTokenGenerator>();
-        servicesOfTheWalletFlowApplication.AddSingleton<IEmailAddressRequestLimiter, InMemoryEmailAddressRequestLimiter>();
-        servicesOfTheWalletFlowApplication.AddSingleton<IPasswordRecoveryRequestLimiter, InMemoryPasswordRecoveryRequestLimiter>();
-        servicesOfTheWalletFlowApplication.AddSingleton<IAuthenticatorCodeTool, OtpNetAuthenticatorCodeTool>();
-        servicesOfTheWalletFlowApplication.AddSingleton<ILoginsWaitingForTheirCodeStore, InMemoryLoginsWaitingForTheirCodeStore>();
-        servicesOfTheWalletFlowApplication.AddSingleton<ISecretsWaitingForActivationStore, InMemorySecretsWaitingForActivationStore>();
-        servicesOfTheWalletFlowApplication.AddSingleton<IUsedAuthenticatorCodesRegister, InMemoryUsedAuthenticatorCodesRegister>();
+        // Un seul limiteur pour tous les calculs Argon2id : autant de calculs à la fois que de cœurs, pas plus.
+        services.AddSingleton(new ArgonComputationsLimiter(Environment.ProcessorCount));
+        services.AddSingleton<IPasswordHasher, LibsodiumPasswordHasher>();
+        services.AddSingleton<IBackupCodeHasher, LibsodiumBackupCodeHasher>();
+        services.AddSingleton<ISecureTokenGenerator, RandomSecureTokenGenerator>();
+        services.AddSingleton<IEmailAddressRequestLimiter, InMemoryEmailAddressRequestLimiter>();
+        services.AddSingleton<IPasswordRecoveryRequestLimiter, InMemoryPasswordRecoveryRequestLimiter>();
+        services.AddSingleton<IAuthenticatorCodeTool, OtpNetAuthenticatorCodeTool>();
+        services.AddSingleton<IWaitingLoginStore, InMemoryWaitingLoginStore>();
+        services.AddSingleton<IWaitingSecretStore, InMemoryWaitingSecretStore>();
+        services.AddSingleton<IUsedAuthenticatorCodesRegister, InMemoryUsedAuthenticatorCodesRegister>();
 
-        return servicesOfTheWalletFlowApplication;
+        return services;
     }
 
     // Ajoute le chiffrement des secrets de double authentification, avec cette clé écrite en Base64.
-    public static IServiceCollection AddTotpSecretEncryptionToTheServices(
-        this IServiceCollection servicesOfTheWalletFlowApplication,
-        string encryptionKeyWrittenInBase64)
+    public static IServiceCollection AddTotpSecretEncryption(
+        this IServiceCollection services,
+        string base64Key)
     {
-        servicesOfTheWalletFlowApplication.AddSingleton<ITotpSecretProtector>(new AesGcmTotpSecretProtector(encryptionKeyWrittenInBase64));
+        services.AddSingleton<ITotpSecretProtector>(new AesGcmTotpSecretProtector(base64Key));
 
-        return servicesOfTheWalletFlowApplication;
+        return services;
     }
 
     // Ajoute la file des e-mails préparés en arrière-plan.
-    public static IServiceCollection AddBackgroundEmailRequestQueueToTheServices(this IServiceCollection servicesOfTheWalletFlowApplication)
+    public static IServiceCollection AddEmailQueue(this IServiceCollection services)
     {
-        servicesOfTheWalletFlowApplication.AddSingleton<IBackgroundEmailRequestQueue, InMemoryBackgroundEmailRequestQueue>();
+        services.AddSingleton<IBackgroundEmailRequestQueue, InMemoryBackgroundEmailRequestQueue>();
 
-        return servicesOfTheWalletFlowApplication;
+        return services;
+    }
+
+    // Ajoute le texte en français des e-mails envoyés aux utilisateurs, quel que soit le moyen de les envoyer.
+    public static IServiceCollection AddEmailTexts(this IServiceCollection services)
+    {
+        services.AddSingleton<IAccountRegistrationEmails, FrenchAccountRegistrationEmails>();
+        services.AddSingleton<IAccountRecoveryEmails, FrenchAccountRecoveryEmails>();
+        return services;
     }
 
     // Écrit les e-mails dans un dossier local, au lieu de les envoyer (développement seulement).
-    public static IServiceCollection AddEmailsWrittenToLocalFolderToTheServices(
-        this IServiceCollection servicesOfTheWalletFlowApplication,
-        string pathOfTheFolderThatReceivesTheEmails)
+    public static IServiceCollection AddLocalFolderEmails(
+        this IServiceCollection services,
+        string folderPath)
     {
-        servicesOfTheWalletFlowApplication.AddSingleton<IEmailSender>(new LocalFolderEmailSender(pathOfTheFolderThatReceivesTheEmails));
+        services.AddSingleton<IEmailSender>(new LocalFolderEmailSender(folderPath));
 
-        return servicesOfTheWalletFlowApplication;
+        return services;
     }
 }

@@ -13,178 +13,178 @@ namespace WalletFlow.Tests.Api;
 public class AccountUnlockEndpointTests
 {
     // Fait les 5 mauvais essais qui bloquent le compte, attend l'e-mail, et renvoie le jeton de son lien.
-    private static async Task<string> LockTheAccountThenReadTheTokenOfTheUnlockLinkAsync(ApiFactoryWithFakeRepositoryAndEmails apiStartedInMemoryForThisTest, HttpClient clientThatCallsTheApiInMemory)
+    private static async Task<string> LockAccountThenReadUnlockTokenAsync(ApiFactoryWithFakes api, HttpClient client)
     {
-        var numberOfEmailsBeforeTheLockout = apiStartedInMemoryForThisTest.SenderThatKeepsTheEmailsInMemory.SentEmails.Count;
+        var emailCount = api.EmailSender.SentEmails.Count;
 
-        for (var numberOfTheWrongPasswordBeingTried = 1; numberOfTheWrongPasswordBeingTried <= 5; numberOfTheWrongPasswordBeingTried++)
+        for (var attemptNumber = 1; attemptNumber <= 5; attemptNumber++)
         {
-            await SendLoginRequestToTheApiAsync(clientThatCallsTheApiInMemory, EmailAddressOfTheLoginTests, WrongPasswordTypedInTheLoginTests);
+            await SendLoginRequestAsync(client, Email, WrongPassword);
         }
 
-        await WaitUntilThisConditionBecomesTrueAsync(() => apiStartedInMemoryForThisTest.SenderThatKeepsTheEmailsInMemory.SentEmails.Count == numberOfEmailsBeforeTheLockout + 1);
+        await WaitUntilAsync(() => api.EmailSender.SentEmails.Count == emailCount + 1);
 
-        return ReadTokenWrittenInTheConfirmationLink(apiStartedInMemoryForThisTest.SenderThatKeepsTheEmailsInMemory.SentEmails.Last().Body);
+        return ReadConfirmationToken(api.EmailSender.SentEmails.Last().Body);
     }
 
     [Fact]
     public async Task FifthWrongPasswordSendsTheUnlockEmailInTheBackground()
     {
-        using var apiStartedInMemoryForThisTest = new ApiFactoryWithFakeRepositoryAndEmails();
-        AddAccountToTheFakeRepositoryOfTheApi(apiStartedInMemoryForThisTest);
-        var clientThatKeepsTheCookiesOfTheBrowser = CreateClientThatKeepsCookiesLikeABrowser(apiStartedInMemoryForThisTest);
+        using var api = new ApiFactoryWithFakes();
+        await AddAccountAsync(api);
+        var browserClient = CreateBrowserClient(api);
 
-        await LockTheAccountThenReadTheTokenOfTheUnlockLinkAsync(apiStartedInMemoryForThisTest, clientThatKeepsTheCookiesOfTheBrowser);
+        await LockAccountThenReadUnlockTokenAsync(api, browserClient);
 
-        var emailReceivedByTheAddressOwner = Assert.Single(apiStartedInMemoryForThisTest.SenderThatKeepsTheEmailsInMemory.SentEmails);
-        Assert.Equal(EmailAddressOfTheLoginTests, emailReceivedByTheAddressOwner.RecipientAddress);
-        Assert.Equal("Ton compte WalletFlow est bloqué", emailReceivedByTheAddressOwner.Subject);
-        Assert.Contains("/unlock-account#token=", emailReceivedByTheAddressOwner.Body);
-        Assert.Contains("pendant 15 minutes", emailReceivedByTheAddressOwner.Body);
+        var email = Assert.Single(api.EmailSender.SentEmails);
+        Assert.Equal(Email, email.RecipientAddress);
+        Assert.Equal("Ton compte WalletFlow est bloqué", email.Subject);
+        Assert.Contains("/unlock-account#token=", email.Body);
+        Assert.Contains("pendant 15 minutes", email.Body);
     }
 
     // GR Auth : le lien débloque le compte, mais ne connecte pas l'utilisateur.
     [Fact]
     public async Task UnlockLinkOpensTheAccountWithoutLoggingIn()
     {
-        using var apiStartedInMemoryForThisTest = new ApiFactoryWithFakeRepositoryAndEmails();
-        var accountUsedByThisLoginTest = AddAccountToTheFakeRepositoryOfTheApi(apiStartedInMemoryForThisTest);
-        var clientThatKeepsTheCookiesOfTheBrowser = CreateClientThatKeepsCookiesLikeABrowser(apiStartedInMemoryForThisTest);
-        var tokenReadInTheUnlockLink = await LockTheAccountThenReadTheTokenOfTheUnlockLinkAsync(apiStartedInMemoryForThisTest, clientThatKeepsTheCookiesOfTheBrowser);
-        Assert.Equal(HttpStatusCode.Unauthorized, (await SendLoginRequestToTheApiAsync(clientThatKeepsTheCookiesOfTheBrowser)).StatusCode);
+        using var api = new ApiFactoryWithFakes();
+        var account = await AddAccountAsync(api);
+        var browserClient = CreateBrowserClient(api);
+        var linkToken = await LockAccountThenReadUnlockTokenAsync(api, browserClient);
+        Assert.Equal(HttpStatusCode.Unauthorized, (await SendLoginRequestAsync(browserClient)).StatusCode);
 
-        var answerToTheAccountUnlockRequest = await SendAccountUnlockRequestToTheApiAsync(clientThatKeepsTheCookiesOfTheBrowser, tokenReadInTheUnlockLink);
+        var response = await SendUnlockRequestAsync(browserClient, linkToken);
 
-        Assert.Equal(HttpStatusCode.OK, answerToTheAccountUnlockRequest.StatusCode);
-        Assert.Equal(AccountUnlockController.MessageSentWhenTheAccountIsUnlocked, JsonDocument.Parse(await answerToTheAccountUnlockRequest.Content.ReadAsStringAsync()).RootElement.GetProperty("message").GetString());
-        Assert.False(answerToTheAccountUnlockRequest.Headers.Contains("Set-Cookie"));
-        Assert.Empty(apiStartedInMemoryForThisTest.RepositoryThatKeepsSessionsInMemory.SavedSessions);
-        Assert.Equal(1, accountUsedByThisLoginTest.LockoutCount);
-        SecurityHeadersAssertions.CheckThatAnswerCarriesTheExactSecurityHeaders(answerToTheAccountUnlockRequest);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(AccountUnlockController.UnlockedMessage, JsonDocument.Parse(await response.Content.ReadAsStringAsync()).RootElement.GetProperty("message").GetString());
+        Assert.False(response.Headers.Contains("Set-Cookie"));
+        Assert.Empty(api.SessionRepository.SavedSessions);
+        Assert.Equal(1, account.LockoutCount);
+        SecurityHeadersAssertions.AssertExactSecurityHeaders(response);
 
-        Assert.Equal(HttpStatusCode.OK, (await SendLoginRequestToTheApiAsync(clientThatKeepsTheCookiesOfTheBrowser)).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await SendLoginRequestAsync(browserClient)).StatusCode);
     }
 
     // SS §2 : un seul e-mail par blocage, pour qu'un attaquant ne puisse pas inonder la boîte de la victime.
     [Fact]
     public async Task AttemptsDuringTheLockoutSendNoOtherEmail()
     {
-        using var apiStartedInMemoryForThisTest = new ApiFactoryWithFakeRepositoryAndEmails();
-        AddAccountToTheFakeRepositoryOfTheApi(apiStartedInMemoryForThisTest);
-        var clientThatKeepsTheCookiesOfTheBrowser = CreateClientThatKeepsCookiesLikeABrowser(apiStartedInMemoryForThisTest);
-        await LockTheAccountThenReadTheTokenOfTheUnlockLinkAsync(apiStartedInMemoryForThisTest, clientThatKeepsTheCookiesOfTheBrowser);
+        using var api = new ApiFactoryWithFakes();
+        await AddAccountAsync(api);
+        var browserClient = CreateBrowserClient(api);
+        await LockAccountThenReadUnlockTokenAsync(api, browserClient);
 
-        await SendLoginRequestToTheApiAsync(clientThatKeepsTheCookiesOfTheBrowser, EmailAddressOfTheLoginTests, WrongPasswordTypedInTheLoginTests);
-        await SendLoginRequestToTheApiAsync(clientThatKeepsTheCookiesOfTheBrowser);
+        await SendLoginRequestAsync(browserClient, Email, WrongPassword);
+        await SendLoginRequestAsync(browserClient);
 
         // On envoie une dernière demande qui passe par la même file : quand son e-mail arrive, tout ce qui la précède a été traité.
-        AddAccountToTheFakeRepositoryOfTheApi(apiStartedInMemoryForThisTest, "temoin@exemple.test");
-        await RequestRecoveryThenReadTheTokenOfTheLinkAsync(apiStartedInMemoryForThisTest, clientThatKeepsTheCookiesOfTheBrowser, "temoin@exemple.test");
+        await AddAccountAsync(api, "temoin@exemple.test");
+        await RequestRecoveryThenReadTokenAsync(api, browserClient, "temoin@exemple.test");
 
-        Assert.Equal(1, apiStartedInMemoryForThisTest.SenderThatKeepsTheEmailsInMemory.SentEmails.Count(emailKeptInMemoryByTheFakeSender => emailKeptInMemoryByTheFakeSender.RecipientAddress == EmailAddressOfTheLoginTests));
+        Assert.Equal(1, api.EmailSender.SentEmails.Count(email => email.RecipientAddress == Email));
     }
 
     [Fact]
     public async Task UnlockLinkCanOnlyBeUsedOnce()
     {
-        using var apiStartedInMemoryForThisTest = new ApiFactoryWithFakeRepositoryAndEmails();
-        AddAccountToTheFakeRepositoryOfTheApi(apiStartedInMemoryForThisTest);
-        var clientThatKeepsTheCookiesOfTheBrowser = CreateClientThatKeepsCookiesLikeABrowser(apiStartedInMemoryForThisTest);
-        var tokenReadInTheUnlockLink = await LockTheAccountThenReadTheTokenOfTheUnlockLinkAsync(apiStartedInMemoryForThisTest, clientThatKeepsTheCookiesOfTheBrowser);
-        await SendAccountUnlockRequestToTheApiAsync(clientThatKeepsTheCookiesOfTheBrowser, tokenReadInTheUnlockLink);
+        using var api = new ApiFactoryWithFakes();
+        await AddAccountAsync(api);
+        var browserClient = CreateBrowserClient(api);
+        var linkToken = await LockAccountThenReadUnlockTokenAsync(api, browserClient);
+        await SendUnlockRequestAsync(browserClient, linkToken);
 
-        var answerToTheSecondClickOnTheLink = await SendAccountUnlockRequestToTheApiAsync(clientThatKeepsTheCookiesOfTheBrowser, tokenReadInTheUnlockLink);
+        var response = await SendUnlockRequestAsync(browserClient, linkToken);
 
-        Assert.Equal(HttpStatusCode.BadRequest, answerToTheSecondClickOnTheLink.StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
     }
 
     [Fact]
     public async Task UnknownLinkIsRefusedOnItsFieldWithTheExactMessage()
     {
-        using var apiStartedInMemoryForThisTest = new ApiFactoryWithFakeRepositoryAndEmails();
-        var clientThatKeepsTheCookiesOfTheBrowser = CreateClientThatKeepsCookiesLikeABrowser(apiStartedInMemoryForThisTest);
+        using var api = new ApiFactoryWithFakes();
+        var browserClient = CreateBrowserClient(api);
 
-        var answerToTheUnknownLinkOfThisTest = await SendAccountUnlockRequestToTheApiAsync(clientThatKeepsTheCookiesOfTheBrowser, "jeton-invente");
+        var response = await SendUnlockRequestAsync(browserClient, "jeton-invente");
 
-        Assert.Equal(HttpStatusCode.BadRequest, answerToTheUnknownLinkOfThisTest.StatusCode);
-        Assert.Equal("Ce lien n'est plus valable. Si ton compte est encore bloqué, utilise « Mot de passe oublié ».", await ReadErrorMessageOfThisRequestFieldAsync(answerToTheUnknownLinkOfThisTest, "Token"));
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal("Ce lien n'est plus valable. Si ton compte est encore bloqué, utilise « Mot de passe oublié ».", await ReadFieldErrorAsync(response, "Token"));
     }
 
     // Un lien ne sert jamais à un autre usage : un lien de déblocage ne doit jamais changer un mot de passe.
     [Fact]
     public async Task UnlockLinkIsRefusedOnThePasswordResetRoute()
     {
-        using var apiStartedInMemoryForThisTest = new ApiFactoryWithFakeRepositoryAndEmails();
-        AddAccountToTheFakeRepositoryOfTheApi(apiStartedInMemoryForThisTest);
-        var clientThatKeepsTheCookiesOfTheBrowser = CreateClientThatKeepsCookiesLikeABrowser(apiStartedInMemoryForThisTest);
-        var tokenReadInTheUnlockLink = await LockTheAccountThenReadTheTokenOfTheUnlockLinkAsync(apiStartedInMemoryForThisTest, clientThatKeepsTheCookiesOfTheBrowser);
+        using var api = new ApiFactoryWithFakes();
+        await AddAccountAsync(api);
+        var browserClient = CreateBrowserClient(api);
+        var linkToken = await LockAccountThenReadUnlockTokenAsync(api, browserClient);
 
-        var answerOnThePasswordResetRoute = await SendResetPasswordRequestToTheApiAsync(clientThatKeepsTheCookiesOfTheBrowser, tokenReadInTheUnlockLink);
+        var response = await SendResetPasswordRequestAsync(browserClient, linkToken);
 
-        Assert.Equal(HttpStatusCode.BadRequest, answerOnThePasswordResetRoute.StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
     }
 
     [Fact]
     public async Task RecoveryLinkIsRefusedOnTheUnlockRoute()
     {
-        using var apiStartedInMemoryForThisTest = new ApiFactoryWithFakeRepositoryAndEmails();
-        AddAccountToTheFakeRepositoryOfTheApi(apiStartedInMemoryForThisTest);
-        var clientThatKeepsTheCookiesOfTheBrowser = CreateClientThatKeepsCookiesLikeABrowser(apiStartedInMemoryForThisTest);
-        var tokenReadInTheRecoveryLink = await RequestRecoveryThenReadTheTokenOfTheLinkAsync(apiStartedInMemoryForThisTest, clientThatKeepsTheCookiesOfTheBrowser, EmailAddressOfTheLoginTests);
+        using var api = new ApiFactoryWithFakes();
+        await AddAccountAsync(api);
+        var browserClient = CreateBrowserClient(api);
+        var linkToken = await RequestRecoveryThenReadTokenAsync(api, browserClient, Email);
 
-        var answerGivenOnTheUnlockRoute = await SendAccountUnlockRequestToTheApiAsync(clientThatKeepsTheCookiesOfTheBrowser, tokenReadInTheRecoveryLink);
+        var response = await SendUnlockRequestAsync(browserClient, linkToken);
 
-        Assert.Equal(HttpStatusCode.BadRequest, answerGivenOnTheUnlockRoute.StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
     }
 
     // Un nouveau blocage envoie un nouveau lien : l'ancien ne marche plus (SS §2).
     [Fact]
     public async Task NewLockoutReplacesTheOldUnlockLink()
     {
-        using var apiStartedInMemoryForThisTest = new ApiFactoryWithFakeRepositoryAndEmails();
-        AddAccountToTheFakeRepositoryOfTheApi(apiStartedInMemoryForThisTest);
-        var clientThatKeepsTheCookiesOfTheBrowser = CreateClientThatKeepsCookiesLikeABrowser(apiStartedInMemoryForThisTest);
-        var tokenOfTheFirstUnlockLink = await LockTheAccountThenReadTheTokenOfTheUnlockLinkAsync(apiStartedInMemoryForThisTest, clientThatKeepsTheCookiesOfTheBrowser);
+        using var api = new ApiFactoryWithFakes();
+        await AddAccountAsync(api);
+        var browserClient = CreateBrowserClient(api);
+        var firstUnlockToken = await LockAccountThenReadUnlockTokenAsync(api, browserClient);
 
-        apiStartedInMemoryForThisTest.ClockThatOnlyMovesWhenTestsAskIt.MoveFakeClockForwardByThisDuration(TimeSpan.FromMinutes(15));
-        var tokenOfTheSecondUnlockLink = await LockTheAccountThenReadTheTokenOfTheUnlockLinkAsync(apiStartedInMemoryForThisTest, clientThatKeepsTheCookiesOfTheBrowser);
+        api.Clock.Advance(TimeSpan.FromMinutes(15));
+        var secondUnlockToken = await LockAccountThenReadUnlockTokenAsync(api, browserClient);
 
-        Assert.Contains("pendant 30 minutes", apiStartedInMemoryForThisTest.SenderThatKeepsTheEmailsInMemory.SentEmails.Last().Body);
-        Assert.Equal(HttpStatusCode.BadRequest, (await SendAccountUnlockRequestToTheApiAsync(clientThatKeepsTheCookiesOfTheBrowser, tokenOfTheFirstUnlockLink)).StatusCode);
-        Assert.Equal(HttpStatusCode.OK, (await SendAccountUnlockRequestToTheApiAsync(clientThatKeepsTheCookiesOfTheBrowser, tokenOfTheSecondUnlockLink)).StatusCode);
+        Assert.Contains("pendant 30 minutes", api.EmailSender.SentEmails.Last().Body);
+        Assert.Equal(HttpStatusCode.BadRequest, (await SendUnlockRequestAsync(browserClient, firstUnlockToken)).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await SendUnlockRequestAsync(browserClient, secondUnlockToken)).StatusCode);
     }
 
     // La panne de l'e-mail ne change pas la réponse de la connexion : elle révélerait que le compte existe (SS §2).
     [Fact]
     public async Task EmailFailureDoesNotChangeTheLoginAnswerAndIsWrittenInTheTechnicalLog()
     {
-        using var apiStartedInMemoryForThisTest = new ApiFactoryWithFakeRepositoryAndEmails();
-        AddAccountToTheFakeRepositoryOfTheApi(apiStartedInMemoryForThisTest);
-        apiStartedInMemoryForThisTest.SenderThatKeepsTheEmailsInMemory.EveryEmailFailsDuringThisTest = true;
-        var clientThatKeepsTheCookiesOfTheBrowser = CreateClientThatKeepsCookiesLikeABrowser(apiStartedInMemoryForThisTest);
+        using var api = new ApiFactoryWithFakes();
+        await AddAccountAsync(api);
+        api.EmailSender.AlwaysFails = true;
+        var browserClient = CreateBrowserClient(api);
 
-        for (var numberOfTheWrongPasswordBeingTried = 1; numberOfTheWrongPasswordBeingTried <= 5; numberOfTheWrongPasswordBeingTried++)
+        for (var attemptNumber = 1; attemptNumber <= 5; attemptNumber++)
         {
-            var answerToTheWrongPasswordOfThisTest = await SendLoginRequestToTheApiAsync(clientThatKeepsTheCookiesOfTheBrowser, EmailAddressOfTheLoginTests, WrongPasswordTypedInTheLoginTests);
-            await CheckThatAnswerIsProblemWithThisExactTitleAsync(answerToTheWrongPasswordOfThisTest, HttpStatusCode.Unauthorized, "Identifiants incorrects");
+            var response = await SendLoginRequestAsync(browserClient, Email, WrongPassword);
+            await AssertProblemTitleAsync(response, HttpStatusCode.Unauthorized, "Identifiants incorrects");
         }
 
-        await WaitUntilThisConditionBecomesTrueAsync(() => apiStartedInMemoryForThisTest.LoggerThatKeepsTheMessagesInMemory.MessagesWrittenInTheLog.Any(messageWrittenInTheTechnicalLog =>
-            messageWrittenInTheTechnicalLog.StartsWith("Error") && messageWrittenInTheTechnicalLog.Contains("n'a pas pu partir")));
+        await WaitUntilAsync(() => api.LoggerProvider.Messages.Any(message =>
+            message.StartsWith("Error") && message.Contains("n'a pas pu partir")));
     }
 
     [Fact]
     public async Task UnlockIsLimitedToTenAttemptsPerHourAndPerIpAddress()
     {
-        using var apiStartedInMemoryForThisTest = new ApiFactoryWithFakeRepositoryAndEmails();
-        var clientThatKeepsTheCookiesOfTheBrowser = CreateClientThatKeepsCookiesLikeABrowser(apiStartedInMemoryForThisTest);
+        using var api = new ApiFactoryWithFakes();
+        var browserClient = CreateBrowserClient(api);
 
-        for (var numberOfTheAttemptBeingSent = 1; numberOfTheAttemptBeingSent <= 10; numberOfTheAttemptBeingSent++)
+        for (var attemptNumber = 1; attemptNumber <= 10; attemptNumber++)
         {
-            Assert.Equal(HttpStatusCode.BadRequest, (await SendAccountUnlockRequestToTheApiAsync(clientThatKeepsTheCookiesOfTheBrowser, "jeton-invente")).StatusCode);
+            Assert.Equal(HttpStatusCode.BadRequest, (await SendUnlockRequestAsync(browserClient, "jeton-invente")).StatusCode);
         }
 
-        Assert.Equal(HttpStatusCode.TooManyRequests, (await SendAccountUnlockRequestToTheApiAsync(clientThatKeepsTheCookiesOfTheBrowser, "jeton-invente")).StatusCode);
+        Assert.Equal(HttpStatusCode.TooManyRequests, (await SendUnlockRequestAsync(browserClient, "jeton-invente")).StatusCode);
     }
 
     // Aucune de ces valeurs ne doit provoquer d'erreur 500 ni apparaître dans la réponse.
@@ -197,64 +197,64 @@ public class AccountUnlockEndpointTests
     [InlineData("""{}""")]
     [InlineData("[]")]
     [InlineData("pas du JSON")]
-    public async Task HostileUnlockRequestIsRefusedWithoutAnyErrorOrInternalName(string rawJsonSentByTheTest)
+    public async Task HostileUnlockRequestIsRefusedWithoutAnyErrorOrInternalName(string rawJson)
     {
-        using var apiStartedInMemoryForThisTest = new ApiFactoryWithFakeRepositoryAndEmails();
-        var clientThatKeepsTheCookiesOfTheBrowser = CreateClientThatKeepsCookiesLikeABrowser(apiStartedInMemoryForThisTest);
+        using var api = new ApiFactoryWithFakes();
+        var browserClient = CreateBrowserClient(api);
 
-        var answerToTheRequestWithHostileValues = await clientThatKeepsTheCookiesOfTheBrowser.PostAsync(
-            AddressOfTheAccountUnlockEndpoint,
-            new StringContent(rawJsonSentByTheTest, Encoding.UTF8, "application/json"));
+        var response = await browserClient.PostAsync(
+            UnlockEndpoint,
+            new StringContent(rawJson, Encoding.UTF8, "application/json"));
 
-        Assert.Equal(HttpStatusCode.BadRequest, answerToTheRequestWithHostileValues.StatusCode);
-        var textOfTheApiAnswerToCheck = await answerToTheRequestWithHostileValues.Content.ReadAsStringAsync();
-        Assert.DoesNotContain("requestSentByTheVisitor", textOfTheApiAnswerToCheck);
-        Assert.DoesNotContain("UnlockAccountRequest", textOfTheApiAnswerToCheck);
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var responseText = await response.Content.ReadAsStringAsync();
+        Assert.DoesNotContain("requestSentByTheVisitor", responseText);
+        Assert.DoesNotContain("UnlockAccountRequest", responseText);
     }
 
     [Fact]
     public async Task MissingTokenIsRefusedWithItsFrenchMessage()
     {
-        using var apiStartedInMemoryForThisTest = new ApiFactoryWithFakeRepositoryAndEmails();
-        var clientThatKeepsTheCookiesOfTheBrowser = CreateClientThatKeepsCookiesLikeABrowser(apiStartedInMemoryForThisTest);
+        using var api = new ApiFactoryWithFakes();
+        var browserClient = CreateBrowserClient(api);
 
-        var answerToTheRequestOfThisTest = await clientThatKeepsTheCookiesOfTheBrowser.PostAsync(AddressOfTheAccountUnlockEndpoint, new StringContent("{}", Encoding.UTF8, "application/json"));
+        var response = await browserClient.PostAsync(UnlockEndpoint, new StringContent("{}", Encoding.UTF8, "application/json"));
 
-        Assert.Equal("Le lien de déblocage est obligatoire.", await ReadErrorMessageOfThisRequestFieldAsync(answerToTheRequestOfThisTest, "Token"));
+        Assert.Equal("Le lien de déblocage est obligatoire.", await ReadFieldErrorAsync(response, "Token"));
     }
 
     [Fact]
     public async Task SuccessfulUnlockIsWrittenInTheSecurityJournalWithTheIpAddress()
     {
-        using var apiStartedInMemoryForThisTest = new ApiFactoryWithFakeRepositoryAndEmails();
-        var accountUsedByThisLoginTest = AddAccountToTheFakeRepositoryOfTheApi(apiStartedInMemoryForThisTest);
-        var clientThatKeepsTheCookiesOfTheBrowser = CreateClientThatKeepsCookiesLikeABrowser(apiStartedInMemoryForThisTest);
-        clientThatKeepsTheCookiesOfTheBrowser.DefaultRequestHeaders.Add(StartupFilterThatReadsTheVisitorAddress.NameOfTheHeaderGivingTheVisitorAddress, "203.0.113.7");
-        var tokenReadInTheUnlockLink = await LockTheAccountThenReadTheTokenOfTheUnlockLinkAsync(apiStartedInMemoryForThisTest, clientThatKeepsTheCookiesOfTheBrowser);
+        using var api = new ApiFactoryWithFakes();
+        var account = await AddAccountAsync(api);
+        var browserClient = CreateBrowserClient(api);
+        browserClient.DefaultRequestHeaders.Add(VisitorAddressStartupFilter.VisitorAddressHeader, "203.0.113.7");
+        var linkToken = await LockAccountThenReadUnlockTokenAsync(api, browserClient);
 
-        await SendAccountUnlockRequestToTheApiAsync(clientThatKeepsTheCookiesOfTheBrowser, tokenReadInTheUnlockLink);
+        await SendUnlockRequestAsync(browserClient, linkToken);
 
-        var securityEventOfTheAccountUnlock = Assert.Single(apiStartedInMemoryForThisTest.RepositoryThatKeepsAccountsInMemory.SecurityEventsSavedWithTheLinks);
-        Assert.Equal(SecurityEventType.Unlock, securityEventOfTheAccountUnlock.Type);
-        Assert.Equal(accountUsedByThisLoginTest.Id, securityEventOfTheAccountUnlock.UserId);
-        Assert.Equal(IPAddress.Parse("203.0.113.7"), securityEventOfTheAccountUnlock.IpAddress);
+        var securityEvent = Assert.Single(api.SecurityEventRepository.SavedSecurityEvents, securityEvent => securityEvent.Type == SecurityEventType.Unlock);
+        Assert.Equal(SecurityEventType.Unlock, securityEvent.Type);
+        Assert.Equal(account.Id, securityEvent.UserId);
+        Assert.Equal(IPAddress.Parse("203.0.113.7"), securityEvent.IpAddress);
     }
 
     // Au niveau le plus détaillé, le journal technique ne contient jamais de secret (SS §7).
     [Fact]
     public async Task TechnicalLogNeverContainsTheSecretsOfTheUnlock()
     {
-        using var apiWithTheMostDetailedLog = new ApiFactoryLoggingEverything();
-        AddAccountToTheFakeRepositoryOfTheApi(apiWithTheMostDetailedLog);
-        var clientThatKeepsTheCookiesOfTheBrowser = CreateClientThatKeepsCookiesLikeABrowser(apiWithTheMostDetailedLog);
-        var tokenReadInTheUnlockLink = await LockTheAccountThenReadTheTokenOfTheUnlockLinkAsync(apiWithTheMostDetailedLog, clientThatKeepsTheCookiesOfTheBrowser);
+        using var api = new ApiFactoryLoggingEverything();
+        await AddAccountAsync(api);
+        var browserClient = CreateBrowserClient(api);
+        var linkToken = await LockAccountThenReadUnlockTokenAsync(api, browserClient);
 
-        await SendAccountUnlockRequestToTheApiAsync(clientThatKeepsTheCookiesOfTheBrowser, tokenReadInTheUnlockLink);
+        await SendUnlockRequestAsync(browserClient, linkToken);
 
-        var textOfTheWholeTechnicalLog = string.Join("\n", apiWithTheMostDetailedLog.LoggerThatKeepsTheMessagesInMemory.MessagesWrittenInTheLog);
-        Assert.NotEmpty(textOfTheWholeTechnicalLog);
-        Assert.DoesNotContain(EmailAddressOfTheLoginTests, textOfTheWholeTechnicalLog);
-        Assert.DoesNotContain(tokenReadInTheUnlockLink, textOfTheWholeTechnicalLog);
-        Assert.DoesNotContain(WrongPasswordTypedInTheLoginTests, textOfTheWholeTechnicalLog);
+        var logText = string.Join("\n", api.LoggerProvider.Messages);
+        Assert.NotEmpty(logText);
+        Assert.DoesNotContain(Email, logText);
+        Assert.DoesNotContain(linkToken, logText);
+        Assert.DoesNotContain(WrongPassword, logText);
     }
 }

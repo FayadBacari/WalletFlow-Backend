@@ -5,14 +5,14 @@ namespace WalletFlow.Domain.UsersAndSecurity;
 public class Device
 {
     // id_appareil
-    public Guid Id { get; set; } = Guid.NewGuid();
+    public Guid Id { get; init; } = Guid.NewGuid();
 
     // jeton_appareil : jeton aléatoire et durable, gardé par le navigateur ou le téléphone.
-    public string DeviceToken { get; set; } = string.Empty;
+    public string DeviceToken { get; init; } = string.Empty;
 
     // jeton_push : fourni par l'application mobile si l'utilisateur accepte les notifications.
-    public string? PushToken { get; set; }
+    public string? PushToken { get; init; }
 
     // id_utilisateur
-    public Guid UserId { get; set; }
+    public Guid UserId { get; init; }
 }

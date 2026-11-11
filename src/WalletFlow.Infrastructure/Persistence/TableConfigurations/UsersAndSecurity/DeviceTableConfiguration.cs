@@ -8,20 +8,20 @@ namespace WalletFlow.Infrastructure.Persistence.TableConfigurations.UsersAndSecu
 public class DeviceTableConfiguration : IEntityTypeConfiguration<Device>
 {
     // Appelée par EF Core au démarrage (nom imposé par le framework).
-    public void Configure(EntityTypeBuilder<Device> builderOfTheDeviceTableMapping)
+    public void Configure(EntityTypeBuilder<Device> builder)
     {
-        builderOfTheDeviceTableMapping.ToTable("appareil");
+        builder.ToTable("appareil");
 
         // L'identifiant est créé par l'entité elle-même, jamais par EF Core.
-        builderOfTheDeviceTableMapping.HasKey(nameof(Device.Id));
-        builderOfTheDeviceTableMapping.Property(nameof(Device.Id)).HasColumnName("id_appareil").ValueGeneratedNever();
+        builder.HasKey(nameof(Device.Id));
+        builder.Property(nameof(Device.Id)).HasColumnName("id_appareil").ValueGeneratedNever();
 
-        builderOfTheDeviceTableMapping.Property(nameof(Device.DeviceToken)).HasColumnName("jeton_appareil");
-        builderOfTheDeviceTableMapping.Property(nameof(Device.PushToken)).HasColumnName("jeton_push");
-        builderOfTheDeviceTableMapping.Property(nameof(Device.UserId)).HasColumnName("id_utilisateur");
+        builder.Property(nameof(Device.DeviceToken)).HasColumnName("jeton_appareil").HasColumnType("char(64)");
+        builder.Property(nameof(Device.PushToken)).HasColumnName("jeton_push");
+        builder.Property(nameof(Device.UserId)).HasColumnName("id_utilisateur");
 
         // Un appareil appartient à un utilisateur et disparaît avec lui (ON DELETE CASCADE).
-        builderOfTheDeviceTableMapping.HasOne<User>().WithMany()
+        builder.HasOne<User>().WithMany()
             .HasForeignKey(nameof(Device.UserId))
             .OnDelete(DeleteBehavior.Cascade);
     }

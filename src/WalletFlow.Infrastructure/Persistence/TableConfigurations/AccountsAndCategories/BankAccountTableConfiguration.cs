@@ -8,23 +8,23 @@ namespace WalletFlow.Infrastructure.Persistence.TableConfigurations.AccountsAndC
 public class BankAccountTableConfiguration : IEntityTypeConfiguration<BankAccount>
 {
     // Appelée par EF Core au démarrage (nom imposé par le framework).
-    public void Configure(EntityTypeBuilder<BankAccount> builderOfTheBankAccountTableMapping)
+    public void Configure(EntityTypeBuilder<BankAccount> builder)
     {
-        builderOfTheBankAccountTableMapping.ToTable("compte_bancaire");
+        builder.ToTable("compte_bancaire");
 
         // L'identifiant est créé par l'entité elle-même, jamais par EF Core.
-        builderOfTheBankAccountTableMapping.HasKey(nameof(BankAccount.Id));
-        builderOfTheBankAccountTableMapping.Property(nameof(BankAccount.Id)).HasColumnName("id_compte").ValueGeneratedNever();
+        builder.HasKey(nameof(BankAccount.Id));
+        builder.Property(nameof(BankAccount.Id)).HasColumnName("id_compte").ValueGeneratedNever();
 
-        builderOfTheBankAccountTableMapping.Property(nameof(BankAccount.ExternalAccountId)).HasColumnName("id_compte_externe");
-        builderOfTheBankAccountTableMapping.Property(nameof(BankAccount.Name)).HasColumnName("nom_compte");
-        builderOfTheBankAccountTableMapping.Property(nameof(BankAccount.BalanceInCents)).HasColumnName("solde_compte");
-        builderOfTheBankAccountTableMapping.Property(nameof(BankAccount.BalanceUpdatedAt)).HasColumnName("date_solde");
-        builderOfTheBankAccountTableMapping.Property(nameof(BankAccount.BankConnectionId)).HasColumnName("id_connexion");
+        builder.Property(nameof(BankAccount.ExternalAccountId)).HasColumnName("id_compte_externe");
+        builder.Property(nameof(BankAccount.Name)).HasColumnName("nom_compte");
+        builder.Property(nameof(BankAccount.BalanceInCents)).HasColumnName("solde_compte");
+        builder.Property(nameof(BankAccount.BalanceUpdatedAt)).HasColumnName("date_solde");
+        builder.Property(nameof(BankAccount.BankConnectionId)).HasColumnName("id_connexion");
 
         // Un compte vient d'une connexion bancaire, et disparaît quand l'utilisateur
         // déconnecte cette banque (ON DELETE CASCADE).
-        builderOfTheBankAccountTableMapping.HasOne<BankConnection>().WithMany()
+        builder.HasOne<BankConnection>().WithMany()
             .HasForeignKey(nameof(BankAccount.BankConnectionId))
             .OnDelete(DeleteBehavior.Cascade);
     }

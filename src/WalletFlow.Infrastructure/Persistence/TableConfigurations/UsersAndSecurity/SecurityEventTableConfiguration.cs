@@ -9,25 +9,25 @@ namespace WalletFlow.Infrastructure.Persistence.TableConfigurations.UsersAndSecu
 public class SecurityEventTableConfiguration : IEntityTypeConfiguration<SecurityEvent>
 {
     // Appelée par EF Core au démarrage (nom imposé par le framework).
-    public void Configure(EntityTypeBuilder<SecurityEvent> builderOfTheSecurityEventTableMapping)
+    public void Configure(EntityTypeBuilder<SecurityEvent> builder)
     {
-        builderOfTheSecurityEventTableMapping.ToTable("evenement_securite");
+        builder.ToTable("evenement_securite");
 
         // L'identifiant est créé par l'entité elle-même, jamais par EF Core.
-        builderOfTheSecurityEventTableMapping.HasKey(nameof(SecurityEvent.Id));
-        builderOfTheSecurityEventTableMapping.Property(nameof(SecurityEvent.Id)).HasColumnName("id_evenement").ValueGeneratedNever();
+        builder.HasKey(nameof(SecurityEvent.Id));
+        builder.Property(nameof(SecurityEvent.Id)).HasColumnName("id_evenement").ValueGeneratedNever();
 
-        builderOfTheSecurityEventTableMapping.Property(nameof(SecurityEvent.Type)).HasColumnName("type_evenement")
-            .HasConversion(SecurityEventTypeDatabaseCodes.ConverterBetweenSecurityEventTypeAndDatabaseCode);
-        builderOfTheSecurityEventTableMapping.Property(nameof(SecurityEvent.Result)).HasColumnName("resultat_evenement")
-            .HasConversion(SecurityEventResultDatabaseCodes.ConverterBetweenSecurityEventResultAndDatabaseCode);
-        builderOfTheSecurityEventTableMapping.Property(nameof(SecurityEvent.OccurredAt)).HasColumnName("date_evenement");
-        builderOfTheSecurityEventTableMapping.Property(nameof(SecurityEvent.IpAddress)).HasColumnName("adresse_ip_evenement");
-        builderOfTheSecurityEventTableMapping.Property(nameof(SecurityEvent.UserId)).HasColumnName("id_utilisateur");
+        builder.Property(nameof(SecurityEvent.Type)).HasColumnName("type_evenement")
+            .HasConversion(SecurityEventTypeDatabaseCodes.Table.Converter);
+        builder.Property(nameof(SecurityEvent.Result)).HasColumnName("resultat_evenement")
+            .HasConversion(SecurityEventResultDatabaseCodes.Table.Converter);
+        builder.Property(nameof(SecurityEvent.OccurredAt)).HasColumnName("date_evenement");
+        builder.Property(nameof(SecurityEvent.IpAddress)).HasColumnName("adresse_ip_evenement");
+        builder.Property(nameof(SecurityEvent.UserId)).HasColumnName("id_utilisateur");
 
         // Un événement reste dans le journal quand son utilisateur est supprimé,
         // mais perd le lien vers lui (ON DELETE SET NULL).
-        builderOfTheSecurityEventTableMapping.HasOne<User>().WithMany()
+        builder.HasOne<User>().WithMany()
             .HasForeignKey(nameof(SecurityEvent.UserId))
             .OnDelete(DeleteBehavior.SetNull);
     }

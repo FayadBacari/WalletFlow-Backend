@@ -15,8 +15,8 @@ namespace WalletFlow.Infrastructure.Persistence;
 public class WalletFlowDatabaseContext : DbContext
 {
     // Reçoit les options (fournisseur PostgreSQL, chaîne de connexion) préparées au démarrage.
-    public WalletFlowDatabaseContext(DbContextOptions<WalletFlowDatabaseContext> optionsOfTheWalletFlowDatabaseContext)
-        : base(optionsOfTheWalletFlowDatabaseContext)
+    public WalletFlowDatabaseContext(DbContextOptions<WalletFlowDatabaseContext> options)
+        : base(options)
     {
     }
 
@@ -46,45 +46,40 @@ public class WalletFlowDatabaseContext : DbContext
     public DbSet<SupportRequest> SupportRequests => Set<SupportRequest>();
     public DbSet<SupportResponse> SupportResponses => Set<SupportResponse>();
 
-    // Enregistre les changements. Renvoie faux si une autre requête vient de modifier ou d'effacer les mêmes lignes :
-    // EF Core annule alors toute la transaction, et les objets sont oubliés pour pouvoir tout relire.
-    public async Task<bool> TryToSaveChangesUnlessAnotherRequestChangedTheSameRowsAsync()
+    // Une écriture immédiate (journal d'un refus, remplacement d'un lien) appelle SaveChangesAsync, qui enregistre tout ce qui attend.
+    // Elle refuse donc de partir si des changements attendent l'unité de travail : ils ne partent qu'avec elle (voir IDatabaseUnitOfWork).
+    public void ThrowIfChangesArePending()
     {
-        try
+        if (ChangeTracker.HasChanges())
         {
-            await SaveChangesAsync();
-            return true;
-        }
-        catch (DbUpdateConcurrencyException)
-        {
-            ChangeTracker.Clear();
-            return false;
+            throw new InvalidOperationException(
+                "Des changements attendent l'unité de travail : une écriture immédiate les enregistrerait aussi.");
         }
     }
 
     // Applique la correspondance de chaque entité avec sa table (nom imposé par le framework).
-    protected override void OnModelCreating(ModelBuilder builderOfTheCompleteDatabaseModel)
+    protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
-        builderOfTheCompleteDatabaseModel.ApplyConfiguration(new UserTableConfiguration());
-        builderOfTheCompleteDatabaseModel.ApplyConfiguration(new BackupCodeTableConfiguration());
-        builderOfTheCompleteDatabaseModel.ApplyConfiguration(new EmailTokenTableConfiguration());
-        builderOfTheCompleteDatabaseModel.ApplyConfiguration(new DeviceTableConfiguration());
-        builderOfTheCompleteDatabaseModel.ApplyConfiguration(new UserSessionTableConfiguration());
-        builderOfTheCompleteDatabaseModel.ApplyConfiguration(new SecurityEventTableConfiguration());
+        modelBuilder.ApplyConfiguration(new UserTableConfiguration());
+        modelBuilder.ApplyConfiguration(new BackupCodeTableConfiguration());
+        modelBuilder.ApplyConfiguration(new EmailTokenTableConfiguration());
+        modelBuilder.ApplyConfiguration(new DeviceTableConfiguration());
+        modelBuilder.ApplyConfiguration(new UserSessionTableConfiguration());
+        modelBuilder.ApplyConfiguration(new SecurityEventTableConfiguration());
 
-        builderOfTheCompleteDatabaseModel.ApplyConfiguration(new BankConnectionTableConfiguration());
-        builderOfTheCompleteDatabaseModel.ApplyConfiguration(new BankAccountTableConfiguration());
-        builderOfTheCompleteDatabaseModel.ApplyConfiguration(new BankTransactionTableConfiguration());
-        builderOfTheCompleteDatabaseModel.ApplyConfiguration(new CategoryTableConfiguration());
-        builderOfTheCompleteDatabaseModel.ApplyConfiguration(new CategorizationRuleTableConfiguration());
+        modelBuilder.ApplyConfiguration(new BankConnectionTableConfiguration());
+        modelBuilder.ApplyConfiguration(new BankAccountTableConfiguration());
+        modelBuilder.ApplyConfiguration(new BankTransactionTableConfiguration());
+        modelBuilder.ApplyConfiguration(new CategoryTableConfiguration());
+        modelBuilder.ApplyConfiguration(new CategorizationRuleTableConfiguration());
 
-        builderOfTheCompleteDatabaseModel.ApplyConfiguration(new BagTableConfiguration());
-        builderOfTheCompleteDatabaseModel.ApplyConfiguration(new BagMovementTableConfiguration());
-        builderOfTheCompleteDatabaseModel.ApplyConfiguration(new SavingsSuggestionTableConfiguration());
+        modelBuilder.ApplyConfiguration(new BagTableConfiguration());
+        modelBuilder.ApplyConfiguration(new BagMovementTableConfiguration());
+        modelBuilder.ApplyConfiguration(new SavingsSuggestionTableConfiguration());
 
-        builderOfTheCompleteDatabaseModel.ApplyConfiguration(new AlertTypeTableConfiguration());
-        builderOfTheCompleteDatabaseModel.ApplyConfiguration(new AlertPreferenceTableConfiguration());
-        builderOfTheCompleteDatabaseModel.ApplyConfiguration(new SupportRequestTableConfiguration());
-        builderOfTheCompleteDatabaseModel.ApplyConfiguration(new SupportResponseTableConfiguration());
+        modelBuilder.ApplyConfiguration(new AlertTypeTableConfiguration());
+        modelBuilder.ApplyConfiguration(new AlertPreferenceTableConfiguration());
+        modelBuilder.ApplyConfiguration(new SupportRequestTableConfiguration());
+        modelBuilder.ApplyConfiguration(new SupportResponseTableConfiguration());
     }
 }

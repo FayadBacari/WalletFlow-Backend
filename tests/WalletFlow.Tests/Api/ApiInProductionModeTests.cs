@@ -14,38 +14,38 @@ public class ApiInProductionModeTests
     [Fact]
     public async Task UnexpectedFailureIsAnsweredWithoutAnyTechnicalDetail()
     {
-        using var apiStartedLikeInProductionForThisTest = new ApiFactoryRunningLikeInProduction();
-        apiStartedLikeInProductionForThisTest.RepositoryThatKeepsAccountsInMemory.DatabaseIsDownDuringThisTest = true;
-        var clientThatCallsTheApiInProductionMode = apiStartedLikeInProductionForThisTest.CreateClient();
+        using var productionApi = new ApiFactoryInProduction();
+        productionApi.AccountRepository.IsDown = true;
+        var client = productionApi.CreateClient();
 
-        var answerToTheRequestDuringTheDatabaseFailure = await clientThatCallsTheApiInProductionMode.PostAsJsonAsync(
-            AddressOfTheAccountRegistrationEndpoint,
-            new { email = "visiteur@exemple.test", password = ValidPasswordChosenInTheseTests });
+        var response = await client.PostAsJsonAsync(
+            RegistrationEndpoint,
+            new { email = "visiteur@exemple.test", password = ValidPassword });
 
-        Assert.Equal(HttpStatusCode.InternalServerError, answerToTheRequestDuringTheDatabaseFailure.StatusCode);
-        var textOfTheAnswerDuringTheDatabaseFailure = await answerToTheRequestDuringTheDatabaseFailure.Content.ReadAsStringAsync();
-        Assert.DoesNotContain(FakeUserAccountRepository.TechnicalDetailOfTheSimulatedDatabaseFailure, textOfTheAnswerDuringTheDatabaseFailure);
-        Assert.DoesNotContain(nameof(FakeUserAccountRepository), textOfTheAnswerDuringTheDatabaseFailure);
-        SecurityHeadersAssertions.CheckThatAnswerCarriesTheExactSecurityHeaders(answerToTheRequestDuringTheDatabaseFailure);
+        Assert.Equal(HttpStatusCode.InternalServerError, response.StatusCode);
+        var responseText = await response.Content.ReadAsStringAsync();
+        Assert.DoesNotContain(FakeUserAccountRepository.FailureDetail, responseText);
+        Assert.DoesNotContain(nameof(FakeUserAccountRepository), responseText);
+        SecurityHeadersAssertions.AssertExactSecurityHeaders(response);
     }
 
     // HSTS : le navigateur n'utilise plus que HTTPS pendant un an, sous-domaines compris (SS §6).
     [Fact]
     public async Task AnswerOverHttpsCarriesTheStrictTransportSecurityHeader()
     {
-        using var apiStartedLikeInProductionForThisTest = new ApiFactoryRunningLikeInProduction();
+        using var productionApi = new ApiFactoryInProduction();
 
         // ASP.NET Core n'envoie jamais HSTS à localhost : le client utilise donc un vrai nom de domaine, en HTTPS.
-        var clientThatCallsTheApiOverHttps = apiStartedLikeInProductionForThisTest.CreateClient(
+        var client = productionApi.CreateClient(
             new WebApplicationFactoryClientOptions { BaseAddress = new Uri("https://walletflow.test") });
 
-        var answerToTheRequestSentOverHttps = await clientThatCallsTheApiOverHttps.PostAsJsonAsync(
-            AddressOfTheAccountRegistrationEndpoint,
-            new { email = "visiteur@exemple.test", password = ValidPasswordChosenInTheseTests });
+        var response = await client.PostAsJsonAsync(
+            RegistrationEndpoint,
+            new { email = "visiteur@exemple.test", password = ValidPassword });
 
-        Assert.Equal(HttpStatusCode.OK, answerToTheRequestSentOverHttps.StatusCode);
-        SecurityHeadersAssertions.CheckThatHeaderOfTheAnswerHasThisExactValue(
-            answerToTheRequestSentOverHttps,
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        SecurityHeadersAssertions.AssertHeaderValue(
+            response,
             "Strict-Transport-Security",
             "max-age=31536000; includeSubDomains");
     }
@@ -54,31 +54,31 @@ public class ApiInProductionModeTests
     [Fact]
     public async Task RequestOverHttpIsRedirectedToHttpsWithoutSavingAnything()
     {
-        using var apiStartedLikeInProductionForThisTest = new ApiFactoryRunningLikeInProduction();
-        using var apiWithItsHttpsPortConfigured = apiStartedLikeInProductionForThisTest.WithWebHostBuilder(builderOfTheApiWithItsHttpsPort =>
-            builderOfTheApiWithItsHttpsPort.UseSetting("https_port", "443"));
-        var clientThatDoesNotFollowRedirections = apiWithItsHttpsPortConfigured.CreateClient(
+        using var productionApi = new ApiFactoryInProduction();
+        using var httpsApi = productionApi.WithWebHostBuilder(apiBuilder =>
+            apiBuilder.UseSetting("https_port", "443"));
+        var client = httpsApi.CreateClient(
             new WebApplicationFactoryClientOptions { AllowAutoRedirect = false, BaseAddress = new Uri("http://walletflow.test") });
 
-        var answerToTheRequestSentOverHttp = await clientThatDoesNotFollowRedirections.PostAsJsonAsync(
-            AddressOfTheAccountRegistrationEndpoint,
-            new { email = "visiteur@exemple.test", password = ValidPasswordChosenInTheseTests });
+        var response = await client.PostAsJsonAsync(
+            RegistrationEndpoint,
+            new { email = "visiteur@exemple.test", password = ValidPassword });
 
-        Assert.Equal(HttpStatusCode.TemporaryRedirect, answerToTheRequestSentOverHttp.StatusCode);
-        Assert.Equal("https://walletflow.test" + AddressOfTheAccountRegistrationEndpoint, answerToTheRequestSentOverHttp.Headers.Location!.ToString());
-        Assert.Empty(apiStartedLikeInProductionForThisTest.RepositoryThatKeepsAccountsInMemory.SavedUsers);
+        Assert.Equal(HttpStatusCode.TemporaryRedirect, response.StatusCode);
+        Assert.Equal("https://walletflow.test" + RegistrationEndpoint, response.Headers.Location!.ToString());
+        Assert.Empty(productionApi.AccountRepository.SavedUsers);
     }
 
     // La description de l'API n'est publiée qu'en développement.
     [Fact]
     public async Task OpenApiDescriptionIsNotPublishedInProduction()
     {
-        using var apiStartedLikeInProductionForThisTest = new ApiFactoryRunningLikeInProduction();
-        var clientThatCallsTheApiInProductionMode = apiStartedLikeInProductionForThisTest.CreateClient();
+        using var productionApi = new ApiFactoryInProduction();
+        var client = productionApi.CreateClient();
 
-        var answerToTheOpenApiRequest = await clientThatCallsTheApiInProductionMode.GetAsync("/openapi/v1.json");
+        var response = await client.GetAsync("/openapi/v1.json");
 
-        Assert.Equal(HttpStatusCode.NotFound, answerToTheOpenApiRequest.StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
     }
 
     // L'API refuse de démarrer si un réglage obligatoire manque, au lieu de tourner à moitié configurée.
@@ -87,13 +87,13 @@ public class ApiInProductionModeTests
     [InlineData("LocalEmailsFolder", "LocalEmailsFolder")]
     [InlineData("PublicWebsiteAddress", "PublicWebsiteAddress")]
     [InlineData("TwoFactorSecretEncryptionKey", "TwoFactorSecretEncryptionKey")]
-    public void ApiRefusesToStartWithoutItsRequiredSetting(string nameOfTheSettingLeftEmptyForThisTest, string textExpectedInTheStartupError)
+    public void ApiRefusesToStartWithoutItsRequiredSetting(string emptySettingName, string text)
     {
-        using var apiStartedWithoutOneRequiredSetting = new ApiFactoryWithOneEmptySetting(nameOfTheSettingLeftEmptyForThisTest);
+        using var api = new ApiFactoryWithEmptySetting(emptySettingName);
 
-        var errorRaisedByTheApiStartup = Assert.Throws<InvalidOperationException>(() => apiStartedWithoutOneRequiredSetting.CreateClient());
+        var exception = Assert.Throws<InvalidOperationException>(() => api.CreateClient());
 
-        Assert.Contains(textExpectedInTheStartupError, errorRaisedByTheApiStartup.Message);
+        Assert.Contains(text, exception.Message);
     }
 
     // Une clé absente ou vide reçoit le message qui dit quoi faire : elle ne doit pas arriver jusqu'au contrôle de sa forme.
@@ -101,30 +101,30 @@ public class ApiInProductionModeTests
     [InlineData(null)]
     [InlineData("")]
     [InlineData("   ")]
-    public void ApiRefusesToStartWithoutTheEncryptionKeyAndSaysThatItIsMissing(string? valueOfTheSettingInThisTest)
+    public void ApiRefusesToStartWithoutTheEncryptionKeyAndSaysThatItIsMissing(string? settingValue)
     {
-        using var apiStartedLikeInProductionForThisTest = new ApiFactoryRunningLikeInProduction();
-        using var apiStartedWithoutTheEncryptionKeyOfTheSecrets = apiStartedLikeInProductionForThisTest.WithWebHostBuilder(builderOfTheApiWithoutTheKey =>
-            builderOfTheApiWithoutTheKey.UseSetting("TwoFactorSecretEncryptionKey", valueOfTheSettingInThisTest));
+        using var productionApi = new ApiFactoryInProduction();
+        using var apiWithoutKey = productionApi.WithWebHostBuilder(apiBuilder =>
+            apiBuilder.UseSetting("TwoFactorSecretEncryptionKey", settingValue));
 
-        var errorRaisedByTheApiStartup = Assert.Throws<InvalidOperationException>(() => apiStartedWithoutTheEncryptionKeyOfTheSecrets.CreateClient());
+        var exception = Assert.Throws<InvalidOperationException>(() => apiWithoutKey.CreateClient());
 
-        Assert.Contains("« TwoFactorSecretEncryptionKey » est absent", errorRaisedByTheApiStartup.Message);
+        Assert.Contains("« TwoFactorSecretEncryptionKey » est absent", exception.Message);
     }
 
     // Une clé trop courte ou mal écrite empêche aussi de démarrer, et le message ne la cite pas : il part dans les journaux (SS §7).
     [Theory]
     [InlineData("cle-trop-courte")]
     [InlineData("AAAAAAAAAAAAAAAAAAAAAA==")]
-    public void ApiRefusesToStartWithABadEncryptionKeyWithoutQuotingIt(string badKeyWrittenInTheSetting)
+    public void ApiRefusesToStartWithABadEncryptionKeyWithoutQuotingIt(string badKey)
     {
-        using var apiStartedLikeInProductionForThisTest = new ApiFactoryRunningLikeInProduction();
-        using var apiStartedWithABadKey = apiStartedLikeInProductionForThisTest.WithWebHostBuilder(builderOfTheApiWithABadKey =>
-            builderOfTheApiWithABadKey.UseSetting("TwoFactorSecretEncryptionKey", badKeyWrittenInTheSetting));
+        using var productionApi = new ApiFactoryInProduction();
+        using var apiWithBadKey = productionApi.WithWebHostBuilder(apiBuilder =>
+            apiBuilder.UseSetting("TwoFactorSecretEncryptionKey", badKey));
 
-        var errorRaisedByTheApiStartup = Assert.Throws<InvalidOperationException>(() => apiStartedWithABadKey.CreateClient());
+        var exception = Assert.Throws<InvalidOperationException>(() => apiWithBadKey.CreateClient());
 
-        Assert.Contains("TwoFactorSecretEncryptionKey", errorRaisedByTheApiStartup.Message);
-        Assert.DoesNotContain(badKeyWrittenInTheSetting, errorRaisedByTheApiStartup.Message);
+        Assert.Contains("TwoFactorSecretEncryptionKey", exception.Message);
+        Assert.DoesNotContain(badKey, exception.Message);
     }
 }

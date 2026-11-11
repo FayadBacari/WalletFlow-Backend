@@ -8,28 +8,28 @@ namespace WalletFlow.Infrastructure.Security;
 // L'identifiant du compte entre dans le calcul : un secret copié sur un autre compte en base ne se déchiffre pas.
 public class AesGcmTotpSecretProtector : ITotpSecretProtector
 {
-    private const int NumberOfBytesInTheEncryptionKey = 32;
-    private const int NumberOfBytesInTheRandomNonce = 12;
-    private const int NumberOfBytesInTheAuthenticationTag = 16;
+    private const int KeyLength = 32;
+    private const int NonceLength = 12;
+    private const int TagLength = 16;
 
-    private readonly byte[] keyThatEncryptsTheTotpSecrets;
+    private readonly byte[] encryptionKey;
 
     // Reçoit la clé écrite en Base64. Une clé mal formée empêche l'API de démarrer : le message ne cite jamais sa valeur.
-    public AesGcmTotpSecretProtector(string encryptionKeyWrittenInBase64)
+    public AesGcmTotpSecretProtector(string base64Key)
     {
-        keyThatEncryptsTheTotpSecrets = ConvertEncryptionKeyIntoItsBytes(encryptionKeyWrittenInBase64);
+        encryptionKey = DecodeKey(base64Key);
     }
 
     // Transforme la clé en octets, et vérifie qu'elle fait bien 256 bits.
-    private static byte[] ConvertEncryptionKeyIntoItsBytes(string encryptionKeyWrittenInBase64)
+    private static byte[] DecodeKey(string base64Key)
     {
         try
         {
-            var bytesOfTheKeyThatEncryptsTheSecrets = Convert.FromBase64String(encryptionKeyWrittenInBase64);
+            var keyBytes = Convert.FromBase64String(base64Key);
 
-            if (bytesOfTheKeyThatEncryptsTheSecrets.Length == NumberOfBytesInTheEncryptionKey)
+            if (keyBytes.Length == KeyLength)
             {
-                return bytesOfTheKeyThatEncryptsTheSecrets;
+                return keyBytes;
             }
         }
         catch (FormatException)
@@ -41,36 +41,36 @@ public class AesGcmTotpSecretProtector : ITotpSecretProtector
     }
 
     // Chiffre le secret avec un nombre aléatoire tiré pour l'occasion. Le texte obtenu contient, dans l'ordre : ce nombre, le sceau et le secret chiffré.
-    public string EncryptSecretOfThisUserAccount(string secretSharedWithTheAuthenticatorApplication, Guid identifierOfTheAccountOwningTheSecret)
+    public string Encrypt(string secret, Guid accountId)
     {
-        var bytesOfTheSecretInClear = Encoding.UTF8.GetBytes(secretSharedWithTheAuthenticatorApplication);
-        var bytesOfTheRandomNonceOfTheEncryption = RandomNumberGenerator.GetBytes(NumberOfBytesInTheRandomNonce);
-        var bytesOfTheAuthenticationTagOfTheSecret = new byte[NumberOfBytesInTheAuthenticationTag];
-        var bytesOfTheSecretOnceItIsEncrypted = new byte[bytesOfTheSecretInClear.Length];
+        var plaintext = Encoding.UTF8.GetBytes(secret);
+        var nonce = RandomNumberGenerator.GetBytes(NonceLength);
+        var tag = new byte[TagLength];
+        var ciphertext = new byte[plaintext.Length];
 
-        using var encryptionToolThatHoldsTheSecretsKey = new AesGcm(keyThatEncryptsTheTotpSecrets, NumberOfBytesInTheAuthenticationTag);
-        encryptionToolThatHoldsTheSecretsKey.Encrypt(bytesOfTheRandomNonceOfTheEncryption, bytesOfTheSecretInClear, bytesOfTheSecretOnceItIsEncrypted, bytesOfTheAuthenticationTagOfTheSecret, identifierOfTheAccountOwningTheSecret.ToByteArray());
+        using var aesGcm = new AesGcm(encryptionKey, TagLength);
+        aesGcm.Encrypt(nonce, plaintext, ciphertext, tag, accountId.ToByteArray());
 
-        var bytesOfTheSecretWrittenInTheDatabase = new byte[NumberOfBytesInTheRandomNonce + NumberOfBytesInTheAuthenticationTag + bytesOfTheSecretOnceItIsEncrypted.Length];
-        bytesOfTheRandomNonceOfTheEncryption.CopyTo(bytesOfTheSecretWrittenInTheDatabase, 0);
-        bytesOfTheAuthenticationTagOfTheSecret.CopyTo(bytesOfTheSecretWrittenInTheDatabase, NumberOfBytesInTheRandomNonce);
-        bytesOfTheSecretOnceItIsEncrypted.CopyTo(bytesOfTheSecretWrittenInTheDatabase, NumberOfBytesInTheRandomNonce + NumberOfBytesInTheAuthenticationTag);
+        var storedBytes = new byte[NonceLength + TagLength + ciphertext.Length];
+        nonce.CopyTo(storedBytes, 0);
+        tag.CopyTo(storedBytes, NonceLength);
+        ciphertext.CopyTo(storedBytes, NonceLength + TagLength);
 
-        return Convert.ToBase64String(bytesOfTheSecretWrittenInTheDatabase);
+        return Convert.ToBase64String(storedBytes);
     }
 
     // Déchiffre le secret. Le sceau échoue si la clé a changé, si le texte a été modifié, ou s'il appartient à un autre compte.
-    public string DecryptSecretOfThisUserAccount(string secretOfThePhoneEncryptedInTheDatabase, Guid identifierOfTheAccountOwningTheSecret)
+    public string Decrypt(string encryptedSecret, Guid accountId)
     {
-        var bytesOfTheSecretReadInTheDatabase = Convert.FromBase64String(secretOfThePhoneEncryptedInTheDatabase);
-        var bytesOfTheRandomNonceOfTheEncryption = bytesOfTheSecretReadInTheDatabase.AsSpan(0, NumberOfBytesInTheRandomNonce);
-        var bytesOfTheAuthenticationTagOfTheSecret = bytesOfTheSecretReadInTheDatabase.AsSpan(NumberOfBytesInTheRandomNonce, NumberOfBytesInTheAuthenticationTag);
-        var bytesOfTheSecretOnceItIsEncrypted = bytesOfTheSecretReadInTheDatabase.AsSpan(NumberOfBytesInTheRandomNonce + NumberOfBytesInTheAuthenticationTag);
-        var bytesOfTheSecretInClear = new byte[bytesOfTheSecretOnceItIsEncrypted.Length];
+        var storedBytes = Convert.FromBase64String(encryptedSecret);
+        var nonce = storedBytes.AsSpan(0, NonceLength);
+        var tag = storedBytes.AsSpan(NonceLength, TagLength);
+        var ciphertext = storedBytes.AsSpan(NonceLength + TagLength);
+        var plaintext = new byte[ciphertext.Length];
 
-        using var encryptionToolThatHoldsTheSecretsKey = new AesGcm(keyThatEncryptsTheTotpSecrets, NumberOfBytesInTheAuthenticationTag);
-        encryptionToolThatHoldsTheSecretsKey.Decrypt(bytesOfTheRandomNonceOfTheEncryption, bytesOfTheSecretOnceItIsEncrypted, bytesOfTheAuthenticationTagOfTheSecret, bytesOfTheSecretInClear, identifierOfTheAccountOwningTheSecret.ToByteArray());
+        using var aesGcm = new AesGcm(encryptionKey, TagLength);
+        aesGcm.Decrypt(nonce, ciphertext, tag, plaintext, accountId.ToByteArray());
 
-        return Encoding.UTF8.GetString(bytesOfTheSecretInClear);
+        return Encoding.UTF8.GetString(plaintext);
     }
 }

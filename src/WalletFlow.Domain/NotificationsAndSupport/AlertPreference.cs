@@ -5,11 +5,11 @@ namespace WalletFlow.Domain.NotificationsAndSupport;
 public class AlertPreference
 {
     // id_utilisateur
-    public Guid UserId { get; set; }
+    public Guid UserId { get; init; }
 
     // code_type_alerte
-    public string AlertTypeCode { get; set; } = string.Empty;
+    public string AlertTypeCode { get; init; } = string.Empty;
 
     // alerte_activee : vrai par défaut, et toujours vrai pour une alerte de sécurité.
-    public bool IsEnabled { get; set; } = true;
+    public bool IsEnabled { get; init; } = true;
 }

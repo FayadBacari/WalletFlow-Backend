@@ -1,6 +1,7 @@
 using WalletFlow.Application.Configuration;
 using WalletFlow.Application.UserAccounts;
 using WalletFlow.Domain.UsersAndSecurity;
+using WalletFlow.Infrastructure.Emails;
 using WalletFlow.Tests.Fakes;
 
 namespace WalletFlow.Tests.Application;
@@ -8,380 +9,380 @@ namespace WalletFlow.Tests.Application;
 // Vérifie le cas d'utilisation de l'inscription (GR Auth, SS §2), avec de faux outils.
 public class AccountRegistrationServiceTests
 {
-    private const string EmailAddressTypedByTheVisitorInTheseTests = " Nouvel.Utilisateur@Exemple.test ";
-    private const string EmailAddressInStoredFormInTheseTests = "nouvel.utilisateur@exemple.test";
-    private const string ValidPasswordChosenInTheseTests = "Mot-De-Passe-Valide-1";
-    private const string OldSecureHashOfTheExistingAccount = "ancienne-empreinte-du-compte";
+    private const string TypedEmail = " Nouvel.Utilisateur@Exemple.test ";
+    private const string Email = "nouvel.utilisateur@exemple.test";
+    private const string ValidPassword = "Mot-De-Passe-Valide-1";
+    private const string OldHash = "ancienne-empreinte-du-compte";
 
-    private readonly FakeUserAccountRepository repositoryThatKeepsAccountsInMemory = new FakeUserAccountRepository();
-    private readonly FakePasswordHasher hasherThatCountsTheHashedPasswords = new FakePasswordHasher();
-    private readonly FakeEmailSender senderThatKeepsTheEmailsInMemory = new FakeEmailSender();
-    private readonly FakeEmailAddressRequestLimiter limiterThatCountsTheEmailAddresses = new FakeEmailAddressRequestLimiter();
-    private readonly FakeTimeProviderForTests clockThatOnlyMovesWhenTestsAskIt = new FakeTimeProviderForTests();
+    private readonly FakeUserAccountRepository accountRepository = new FakeUserAccountRepository();
+    private readonly FakePasswordHasher passwordHasher = new FakePasswordHasher();
+    private readonly FakeEmailSender emailSender = new FakeEmailSender();
+    private readonly FakeEmailAddressRequestLimiter requestLimiter = new FakeEmailAddressRequestLimiter();
+    private readonly FakeTimeProvider clock = new FakeTimeProvider();
 
     // Crée le service à tester, avec ses faux outils.
-    private AccountRegistrationService CreateRegistrationServiceWithFakeTools()
+    private AccountRegistrationService CreateRegistrationService()
     {
         return new AccountRegistrationService(
-            repositoryThatKeepsAccountsInMemory,
-            hasherThatCountsTheHashedPasswords,
+            accountRepository,
+            new FakeDatabaseUnitOfWork(accountRepository),
+            passwordHasher,
             new FakeSecureTokenGenerator(),
-            senderThatKeepsTheEmailsInMemory,
+            emailSender,
+            new FrenchAccountRegistrationEmails(),
             new PublicWebsiteSettings("https://walletflow.test/"),
-            limiterThatCountsTheEmailAddresses,
-            clockThatOnlyMovesWhenTestsAskIt);
+            requestLimiter,
+            clock);
     }
 
     // Le mot de passe est normalisé avant le hachage : tapé sur un autre appareil, il donnera le même résultat (SS §2).
     [Fact]
     public async Task PasswordTypedWithDecomposedAccentIsHashedInItsNormalizedForm()
     {
-        var serviceBeingTestedWithFakeTools = CreateRegistrationServiceWithFakeTools();
+        var service = CreateRegistrationService();
 
-        await serviceBeingTestedWithFakeTools.RegisterNewAccountForVisitorAsync(EmailAddressTypedByTheVisitorInTheseTests, "Mot-De-Passé-1");
+        await service.RegisterAsync(TypedEmail, "Mot-De-Passé-1");
 
-        Assert.Equal(FakePasswordHasher.PrefixOfTheFakePasswordHashes + "Mot-De-Passé-1", repositoryThatKeepsAccountsInMemory.SavedUsers[0].PasswordHash);
+        Assert.Equal(FakePasswordHasher.HashPrefix + "Mot-De-Passé-1", accountRepository.SavedUsers[0].PasswordHash);
     }
 
     // Le mot de passe est normalisé avant les règles : 12 signes sans normalisation, mais 11 vrais caractères (SS §2).
     [Fact]
     public async Task PasswordLengthIsCountedAfterTheNormalization()
     {
-        var serviceBeingTestedWithFakeTools = CreateRegistrationServiceWithFakeTools();
+        var service = CreateRegistrationService();
 
-        var resultOfTheVisitorAccountRegistration = await serviceBeingTestedWithFakeTools.RegisterNewAccountForVisitorAsync(EmailAddressTypedByTheVisitorInTheseTests, "Abcdefgh-1é");
+        var result = await service.RegisterAsync(TypedEmail, "Abcdefgh-1é");
 
-        Assert.False(resultOfTheVisitorAccountRegistration.IsAccepted);
-        Assert.Equal(AccountRegistrationService.ErrorMessageForPasswordBreakingTheRules, resultOfTheVisitorAccountRegistration.PasswordErrorMessage);
+        var refusal = Assert.IsType<AccountRegistrationResult.RefusedByRules>(result);
+        Assert.True(refusal.IsPasswordInvalid);
     }
 
     // Ajoute à la fausse base un compte qui utilise déjà l'adresse de ces tests, avec son ancien jeton.
-    private User AddExistingAccountToTheFakeDatabase(bool emailAddressOfTheAccountIsAlreadyConfirmed)
+    private User AddExistingAccount(bool isEmailConfirmed)
     {
-        var existingAccountAlreadyUsingTheAddress = new User
+        var existingAccount = new User
         {
-            Email = EmailAddressInStoredFormInTheseTests,
-            PasswordHash = OldSecureHashOfTheExistingAccount,
-            IsEmailConfirmed = emailAddressOfTheAccountIsAlreadyConfirmed
+            Email = Email,
+            PasswordHash = OldHash,
+            IsEmailConfirmed = isEmailConfirmed
         };
-        repositoryThatKeepsAccountsInMemory.SavedUsers.Add(existingAccountAlreadyUsingTheAddress);
-        repositoryThatKeepsAccountsInMemory.SavedEmailTokens.Add(new EmailToken
+        accountRepository.SavedUsers.Add(existingAccount);
+        accountRepository.SavedEmailTokens.Add(new EmailToken
         {
             Type = EmailTokenType.SignupConfirmation,
             TokenHash = "ancienne-empreinte-du-jeton",
-            UserId = existingAccountAlreadyUsingTheAddress.Id
+            UserId = existingAccount.Id
         });
 
-        return existingAccountAlreadyUsingTheAddress;
+        return existingAccount;
     }
 
     [Fact]
     public async Task NewAccountIsSavedWithItsStoredEmailAndItsHashedPassword()
     {
-        var serviceBeingTestedWithFakeTools = CreateRegistrationServiceWithFakeTools();
+        var service = CreateRegistrationService();
 
-        var resultOfTheVisitorAccountRegistration = await serviceBeingTestedWithFakeTools.RegisterNewAccountForVisitorAsync(
-            EmailAddressTypedByTheVisitorInTheseTests, ValidPasswordChosenInTheseTests);
+        var result = await service.RegisterAsync(
+            TypedEmail, ValidPassword);
 
-        Assert.True(resultOfTheVisitorAccountRegistration.IsAccepted);
-        var userSavedByTheRegistrationService = Assert.Single(repositoryThatKeepsAccountsInMemory.SavedUsers);
-        Assert.Equal(EmailAddressInStoredFormInTheseTests, userSavedByTheRegistrationService.Email);
-        Assert.Equal(FakePasswordHasher.PrefixOfTheFakePasswordHashes + ValidPasswordChosenInTheseTests, userSavedByTheRegistrationService.PasswordHash);
-        Assert.Equal(UserRole.User, userSavedByTheRegistrationService.Role);
-        Assert.False(userSavedByTheRegistrationService.IsEmailConfirmed);
+        Assert.IsType<AccountRegistrationResult.Accepted>(result);
+        var user = Assert.Single(accountRepository.SavedUsers);
+        Assert.Equal(Email, user.Email);
+        Assert.Equal(FakePasswordHasher.HashPrefix + ValidPassword, user.PasswordHash);
+        Assert.Equal(UserRole.User, user.Role);
+        Assert.False(user.IsEmailConfirmed);
     }
 
     [Fact]
     public async Task NewAccountReceivesItsEightCategoriesAndItsConfirmationToken()
     {
-        var serviceBeingTestedWithFakeTools = CreateRegistrationServiceWithFakeTools();
+        var service = CreateRegistrationService();
 
-        await serviceBeingTestedWithFakeTools.RegisterNewAccountForVisitorAsync(
-            EmailAddressTypedByTheVisitorInTheseTests, ValidPasswordChosenInTheseTests);
+        await service.RegisterAsync(
+            TypedEmail, ValidPassword);
 
-        var userSavedByTheRegistrationService = Assert.Single(repositoryThatKeepsAccountsInMemory.SavedUsers);
-        Assert.Equal(8, repositoryThatKeepsAccountsInMemory.SavedCategories.Count);
+        var user = Assert.Single(accountRepository.SavedUsers);
+        Assert.Equal(8, accountRepository.SavedCategories.Count);
 
         // Chaque catégorie appartient bien au nouvel utilisateur.
-        foreach (var categorySavedByTheRegistrationService in repositoryThatKeepsAccountsInMemory.SavedCategories)
+        foreach (var category in accountRepository.SavedCategories)
         {
-            Assert.Equal(userSavedByTheRegistrationService.Id, categorySavedByTheRegistrationService.UserId);
+            Assert.Equal(user.Id, category.UserId);
         }
 
         // Seule l'empreinte du jeton va en base, jamais le jeton lui-même (SS §2).
-        var tokenSavedByTheRegistrationService = Assert.Single(repositoryThatKeepsAccountsInMemory.SavedEmailTokens);
-        Assert.Equal(EmailTokenType.SignupConfirmation, tokenSavedByTheRegistrationService.Type);
-        Assert.Equal(FakeSecureTokenGenerator.HashAlwaysReturnedByThisFakeGenerator, tokenSavedByTheRegistrationService.TokenHash);
-        Assert.Equal(userSavedByTheRegistrationService.Id, tokenSavedByTheRegistrationService.UserId);
+        var token = Assert.Single(accountRepository.SavedEmailTokens);
+        Assert.Equal(EmailTokenType.SignupConfirmation, token.Type);
+        Assert.Equal(FakeSecureTokenGenerator.FixedHash, token.TokenHash);
+        Assert.Equal(user.Id, token.UserId);
 
         // Le lien de confirmation est valable exactement 24 heures.
-        Assert.Equal(clockThatOnlyMovesWhenTestsAskIt.GetUtcNow().UtcDateTime.AddHours(24), tokenSavedByTheRegistrationService.ExpiresAt);
+        Assert.Equal(clock.GetUtcNow().UtcDateTime.AddHours(24), token.ExpiresAt);
     }
 
     [Fact]
     public async Task NewAccountReceivesConfirmationEmailContainingTheTokenLink()
     {
-        var serviceBeingTestedWithFakeTools = CreateRegistrationServiceWithFakeTools();
+        var service = CreateRegistrationService();
 
-        await serviceBeingTestedWithFakeTools.RegisterNewAccountForVisitorAsync(
-            EmailAddressTypedByTheVisitorInTheseTests, ValidPasswordChosenInTheseTests);
+        await service.RegisterAsync(
+            TypedEmail, ValidPassword);
 
-        var emailSentByTheRegistrationService = Assert.Single(senderThatKeepsTheEmailsInMemory.SentEmails);
-        Assert.Equal(EmailAddressInStoredFormInTheseTests, emailSentByTheRegistrationService.RecipientAddress);
+        var email = Assert.Single(emailSender.SentEmails);
+        Assert.Equal(Email, email.RecipientAddress);
         Assert.Contains(
-            "https://walletflow.test/confirm-email#token=" + FakeSecureTokenGenerator.TokenAlwaysReturnedByThisFakeGenerator,
-            emailSentByTheRegistrationService.Body);
+            "https://walletflow.test/confirm-email#token=" + FakeSecureTokenGenerator.FixedToken,
+            email.Body);
 
         // L'e-mail dit qu'il faudra saisir le mot de passe, et annonce la vraie durée du lien (GR Auth, SS §2).
-        Assert.Contains("saisis le mot de passe", emailSentByTheRegistrationService.Body);
-        Assert.Contains("valable 24 heures", emailSentByTheRegistrationService.Body);
+        Assert.Contains("saisis le mot de passe", email.Body);
+        Assert.Contains("valable 24 heures", email.Body);
 
         // Un e-mail ne contient jamais de mot de passe (SS §9).
-        Assert.DoesNotContain(ValidPasswordChosenInTheseTests, emailSentByTheRegistrationService.Body);
+        Assert.DoesNotContain(ValidPassword, email.Body);
     }
 
     // Une adresse confirmée ne change jamais : son propriétaire est seulement prévenu (SS §2).
     [Fact]
     public async Task ConfirmedAddressChangesNothingAndWarnsItsOwner()
     {
-        var serviceBeingTestedWithFakeTools = CreateRegistrationServiceWithFakeTools();
-        var existingAccountAlreadyConfirmedInThisTest = AddExistingAccountToTheFakeDatabase(emailAddressOfTheAccountIsAlreadyConfirmed: true);
+        var service = CreateRegistrationService();
+        var confirmedAccount = AddExistingAccount(isEmailConfirmed: true);
 
-        var resultOfTheVisitorAccountRegistration = await serviceBeingTestedWithFakeTools.RegisterNewAccountForVisitorAsync(
-            EmailAddressTypedByTheVisitorInTheseTests, ValidPasswordChosenInTheseTests);
+        var result = await service.RegisterAsync(
+            TypedEmail, ValidPassword);
 
         // La réponse reste la même : seul le propriétaire de l'adresse apprend qu'elle est déjà utilisée.
-        Assert.True(resultOfTheVisitorAccountRegistration.IsAccepted);
-        Assert.Single(repositoryThatKeepsAccountsInMemory.SavedUsers);
-        Assert.Equal(OldSecureHashOfTheExistingAccount, existingAccountAlreadyConfirmedInThisTest.PasswordHash);
-        Assert.Equal("ancienne-empreinte-du-jeton", Assert.Single(repositoryThatKeepsAccountsInMemory.SavedEmailTokens).TokenHash);
-        var emailSentByTheRegistrationService = Assert.Single(senderThatKeepsTheEmailsInMemory.SentEmails);
-        Assert.Equal(EmailAddressInStoredFormInTheseTests, emailSentByTheRegistrationService.RecipientAddress);
-        Assert.DoesNotContain("confirm-email", emailSentByTheRegistrationService.Body);
+        Assert.IsType<AccountRegistrationResult.Accepted>(result);
+        Assert.Single(accountRepository.SavedUsers);
+        Assert.Equal(OldHash, confirmedAccount.PasswordHash);
+        Assert.Equal("ancienne-empreinte-du-jeton", Assert.Single(accountRepository.SavedEmailTokens).TokenHash);
+        var email = Assert.Single(emailSender.SentEmails);
+        Assert.Equal(Email, email.RecipientAddress);
+        Assert.DoesNotContain("confirm-email", email.Body);
     }
 
     // Tant que l'adresse n'est pas confirmée, une nouvelle inscription remplace le mot de passe et le lien (GR Auth).
     [Fact]
     public async Task UnconfirmedAddressReceivesNewLinkAndItsPasswordIsReplaced()
     {
-        var serviceBeingTestedWithFakeTools = CreateRegistrationServiceWithFakeTools();
-        var existingAccountNotYetConfirmedInThisTest = AddExistingAccountToTheFakeDatabase(emailAddressOfTheAccountIsAlreadyConfirmed: false);
+        var service = CreateRegistrationService();
+        var unconfirmedAccount = AddExistingAccount(isEmailConfirmed: false);
 
-        var resultOfTheVisitorAccountRegistration = await serviceBeingTestedWithFakeTools.RegisterNewAccountForVisitorAsync(
-            EmailAddressTypedByTheVisitorInTheseTests, ValidPasswordChosenInTheseTests);
+        var result = await service.RegisterAsync(
+            TypedEmail, ValidPassword);
 
-        Assert.True(resultOfTheVisitorAccountRegistration.IsAccepted);
-        Assert.Single(repositoryThatKeepsAccountsInMemory.SavedUsers);
-        Assert.Equal(FakePasswordHasher.PrefixOfTheFakePasswordHashes + ValidPasswordChosenInTheseTests, existingAccountNotYetConfirmedInThisTest.PasswordHash);
-        Assert.Empty(repositoryThatKeepsAccountsInMemory.SavedCategories);
+        Assert.IsType<AccountRegistrationResult.Accepted>(result);
+        Assert.Single(accountRepository.SavedUsers);
+        Assert.Equal(FakePasswordHasher.HashPrefix + ValidPassword, unconfirmedAccount.PasswordHash);
+        Assert.Empty(accountRepository.SavedCategories);
 
-        var tokenLeftAfterTheNewRegistration = Assert.Single(repositoryThatKeepsAccountsInMemory.SavedEmailTokens);
-        Assert.Equal(FakeSecureTokenGenerator.HashAlwaysReturnedByThisFakeGenerator, tokenLeftAfterTheNewRegistration.TokenHash);
-        Assert.Equal(existingAccountNotYetConfirmedInThisTest.Id, tokenLeftAfterTheNewRegistration.UserId);
-        Assert.Equal(clockThatOnlyMovesWhenTestsAskIt.GetUtcNow().UtcDateTime.AddHours(24), tokenLeftAfterTheNewRegistration.ExpiresAt);
+        var token = Assert.Single(accountRepository.SavedEmailTokens);
+        Assert.Equal(FakeSecureTokenGenerator.FixedHash, token.TokenHash);
+        Assert.Equal(unconfirmedAccount.Id, token.UserId);
+        Assert.Equal(clock.GetUtcNow().UtcDateTime.AddHours(24), token.ExpiresAt);
 
-        var emailSentByTheRegistrationService = Assert.Single(senderThatKeepsTheEmailsInMemory.SentEmails);
-        Assert.Contains("confirm-email#token=" + FakeSecureTokenGenerator.TokenAlwaysReturnedByThisFakeGenerator, emailSentByTheRegistrationService.Body);
+        var email = Assert.Single(emailSender.SentEmails);
+        Assert.Contains("confirm-email#token=" + FakeSecureTokenGenerator.FixedToken, email.Body);
     }
 
     // Le mot de passe est haché dans les trois cas : sinon, la durée de la réponse révélerait l'état de l'adresse.
     [Theory]
     [InlineData(true)]
     [InlineData(false)]
-    public async Task ExistingAddressStillHashesThePasswordToKeepTheSameDuration(bool emailAddressOfTheAccountIsAlreadyConfirmed)
+    public async Task ExistingAddressStillHashesThePasswordToKeepTheSameDuration(bool isEmailConfirmed)
     {
-        var serviceBeingTestedWithFakeTools = CreateRegistrationServiceWithFakeTools();
-        AddExistingAccountToTheFakeDatabase(emailAddressOfTheAccountIsAlreadyConfirmed);
+        var service = CreateRegistrationService();
+        AddExistingAccount(isEmailConfirmed);
 
-        await serviceBeingTestedWithFakeTools.RegisterNewAccountForVisitorAsync(
-            EmailAddressTypedByTheVisitorInTheseTests, ValidPasswordChosenInTheseTests);
+        await service.RegisterAsync(
+            TypedEmail, ValidPassword);
 
-        Assert.Equal(1, hasherThatCountsTheHashedPasswords.NumberOfPasswordsHashed);
+        Assert.Equal(1, passwordHasher.HashedPasswordCount);
     }
 
     // Deux inscriptions en même temps sur une adresse libre : la dernière remplace la première.
     [Fact]
     public async Task AddressTakenJustBeforeTheSaveByUnconfirmedAccountReceivesNewLink()
     {
-        var serviceBeingTestedWithFakeTools = CreateRegistrationServiceWithFakeTools();
-        var accountSavedByTheOtherRequest = new User { Email = EmailAddressInStoredFormInTheseTests, PasswordHash = OldSecureHashOfTheExistingAccount };
-        repositoryThatKeepsAccountsInMemory.AccountSavedByAnotherRequestJustBeforeTheSave = accountSavedByTheOtherRequest;
+        var service = CreateRegistrationService();
+        var account = new User { Email = Email, PasswordHash = OldHash };
+        accountRepository.ConcurrentAccount = account;
 
-        var resultOfTheVisitorAccountRegistration = await serviceBeingTestedWithFakeTools.RegisterNewAccountForVisitorAsync(
-            EmailAddressTypedByTheVisitorInTheseTests, ValidPasswordChosenInTheseTests);
+        var result = await service.RegisterAsync(
+            TypedEmail, ValidPassword);
 
-        Assert.True(resultOfTheVisitorAccountRegistration.IsAccepted);
-        Assert.Equal(FakePasswordHasher.PrefixOfTheFakePasswordHashes + ValidPasswordChosenInTheseTests, accountSavedByTheOtherRequest.PasswordHash);
-        Assert.Contains("confirm-email", Assert.Single(senderThatKeepsTheEmailsInMemory.SentEmails).Body);
+        Assert.IsType<AccountRegistrationResult.Accepted>(result);
+        Assert.Equal(FakePasswordHasher.HashPrefix + ValidPassword, account.PasswordHash);
+        Assert.Contains("confirm-email", Assert.Single(emailSender.SentEmails).Body);
     }
 
     [Fact]
     public async Task AddressTakenJustBeforeTheSaveByConfirmedAccountWarnsItsOwner()
     {
-        var serviceBeingTestedWithFakeTools = CreateRegistrationServiceWithFakeTools();
-        var accountSavedByTheOtherRequest = new User
+        var service = CreateRegistrationService();
+        var account = new User
         {
-            Email = EmailAddressInStoredFormInTheseTests,
-            PasswordHash = OldSecureHashOfTheExistingAccount,
+            Email = Email,
+            PasswordHash = OldHash,
             IsEmailConfirmed = true
         };
-        repositoryThatKeepsAccountsInMemory.AccountSavedByAnotherRequestJustBeforeTheSave = accountSavedByTheOtherRequest;
+        accountRepository.ConcurrentAccount = account;
 
-        var resultOfTheVisitorAccountRegistration = await serviceBeingTestedWithFakeTools.RegisterNewAccountForVisitorAsync(
-            EmailAddressTypedByTheVisitorInTheseTests, ValidPasswordChosenInTheseTests);
+        var result = await service.RegisterAsync(
+            TypedEmail, ValidPassword);
 
-        Assert.True(resultOfTheVisitorAccountRegistration.IsAccepted);
-        Assert.Equal(OldSecureHashOfTheExistingAccount, accountSavedByTheOtherRequest.PasswordHash);
-        Assert.DoesNotContain("confirm-email", Assert.Single(senderThatKeepsTheEmailsInMemory.SentEmails).Body);
+        Assert.IsType<AccountRegistrationResult.Accepted>(result);
+        Assert.Equal(OldHash, account.PasswordHash);
+        Assert.DoesNotContain("confirm-email", Assert.Single(emailSender.SentEmails).Body);
     }
 
     // Si le compte est confirmé au même instant, son mot de passe ne change pas : le propriétaire est prévenu.
     [Fact]
     public async Task AccountConfirmedJustBeforeThePasswordChangeOnlyWarnsItsOwner()
     {
-        var serviceBeingTestedWithFakeTools = CreateRegistrationServiceWithFakeTools();
-        var existingAccountNotYetConfirmedInThisTest = AddExistingAccountToTheFakeDatabase(emailAddressOfTheAccountIsAlreadyConfirmed: false);
-        repositoryThatKeepsAccountsInMemory.AccountIsConfirmedJustBeforeThePasswordChange = true;
+        var service = CreateRegistrationService();
+        var unconfirmedAccount = AddExistingAccount(isEmailConfirmed: false);
+        accountRepository.ConfirmBeforePasswordChange = true;
 
-        var resultOfTheVisitorAccountRegistration = await serviceBeingTestedWithFakeTools.RegisterNewAccountForVisitorAsync(
-            EmailAddressTypedByTheVisitorInTheseTests, ValidPasswordChosenInTheseTests);
+        var result = await service.RegisterAsync(
+            TypedEmail, ValidPassword);
 
-        Assert.True(resultOfTheVisitorAccountRegistration.IsAccepted);
-        Assert.Equal(OldSecureHashOfTheExistingAccount, existingAccountNotYetConfirmedInThisTest.PasswordHash);
-        Assert.DoesNotContain("confirm-email", Assert.Single(senderThatKeepsTheEmailsInMemory.SentEmails).Body);
+        Assert.IsType<AccountRegistrationResult.Accepted>(result);
+        Assert.Equal(OldHash, unconfirmedAccount.PasswordHash);
+        Assert.DoesNotContain("confirm-email", Assert.Single(emailSender.SentEmails).Body);
     }
 
     // Si l'e-mail ne part pas, le visiteur est prévenu et le compte reste non confirmé (GR Auth).
     [Fact]
     public async Task EmailFailureForNewAccountIsReportedAndTheAccountStaysUnconfirmed()
     {
-        var serviceBeingTestedWithFakeTools = CreateRegistrationServiceWithFakeTools();
-        senderThatKeepsTheEmailsInMemory.EveryEmailFailsDuringThisTest = true;
+        var service = CreateRegistrationService();
+        emailSender.AlwaysFails = true;
 
-        var resultOfTheVisitorAccountRegistration = await serviceBeingTestedWithFakeTools.RegisterNewAccountForVisitorAsync(
-            EmailAddressTypedByTheVisitorInTheseTests, ValidPasswordChosenInTheseTests);
+        var result = await service.RegisterAsync(
+            TypedEmail, ValidPassword);
 
-        Assert.False(resultOfTheVisitorAccountRegistration.IsAccepted);
-        Assert.True(resultOfTheVisitorAccountRegistration.EmailCouldNotBeSent);
-        var userSavedByTheRegistrationService = Assert.Single(repositoryThatKeepsAccountsInMemory.SavedUsers);
-        Assert.False(userSavedByTheRegistrationService.IsEmailConfirmed);
-        Assert.Equal(userSavedByTheRegistrationService.Id, resultOfTheVisitorAccountRegistration.UserIdentifierForTheTechnicalLog);
+        var emailNotSent = Assert.IsType<AccountRegistrationResult.EmailCouldNotBeSent>(result);
+        var user = Assert.Single(accountRepository.SavedUsers);
+        Assert.False(user.IsEmailConfirmed);
+        Assert.Equal(user.Id, emailNotSent.UserId);
     }
 
     // Une panne touche aussi l'e-mail de la nouvelle inscription et l'avertissement : rien ne distingue les adresses (SS §2).
     [Theory]
     [InlineData(true)]
     [InlineData(false)]
-    public async Task EmailFailureForExistingAddressIsReportedTheSameWay(bool emailAddressOfTheAccountIsAlreadyConfirmed)
+    public async Task EmailFailureForExistingAddressIsReportedTheSameWay(bool isEmailConfirmed)
     {
-        var serviceBeingTestedWithFakeTools = CreateRegistrationServiceWithFakeTools();
-        var existingAccountAlreadyUsingTheAddress = AddExistingAccountToTheFakeDatabase(emailAddressOfTheAccountIsAlreadyConfirmed);
-        senderThatKeepsTheEmailsInMemory.EveryEmailFailsDuringThisTest = true;
+        var service = CreateRegistrationService();
+        var existingAccount = AddExistingAccount(isEmailConfirmed);
+        emailSender.AlwaysFails = true;
 
-        var resultOfTheVisitorAccountRegistration = await serviceBeingTestedWithFakeTools.RegisterNewAccountForVisitorAsync(
-            EmailAddressTypedByTheVisitorInTheseTests, ValidPasswordChosenInTheseTests);
+        var result = await service.RegisterAsync(
+            TypedEmail, ValidPassword);
 
-        Assert.True(resultOfTheVisitorAccountRegistration.EmailCouldNotBeSent);
-        Assert.Equal(existingAccountAlreadyUsingTheAddress.Id, resultOfTheVisitorAccountRegistration.UserIdentifierForTheTechnicalLog);
+        var emailNotSent = Assert.IsType<AccountRegistrationResult.EmailCouldNotBeSent>(result);
+        Assert.Equal(existingAccount.Id, emailNotSent.UserId);
     }
 
     // Après une panne de l'e-mail, une nouvelle inscription envoie un lien : le compte n'est jamais bloqué (GR Auth).
     [Fact]
     public async Task NewRegistrationAfterEmailFailureSendsNewLink()
     {
-        var serviceBeingTestedWithFakeTools = CreateRegistrationServiceWithFakeTools();
-        senderThatKeepsTheEmailsInMemory.EveryEmailFailsDuringThisTest = true;
-        await serviceBeingTestedWithFakeTools.RegisterNewAccountForVisitorAsync(EmailAddressTypedByTheVisitorInTheseTests, ValidPasswordChosenInTheseTests);
+        var service = CreateRegistrationService();
+        emailSender.AlwaysFails = true;
+        await service.RegisterAsync(TypedEmail, ValidPassword);
 
-        senderThatKeepsTheEmailsInMemory.EveryEmailFailsDuringThisTest = false;
-        var resultOfTheSecondVisitorRegistration = await serviceBeingTestedWithFakeTools.RegisterNewAccountForVisitorAsync(
-            EmailAddressTypedByTheVisitorInTheseTests, ValidPasswordChosenInTheseTests);
+        emailSender.AlwaysFails = false;
+        var result = await service.RegisterAsync(
+            TypedEmail, ValidPassword);
 
-        Assert.True(resultOfTheSecondVisitorRegistration.IsAccepted);
-        Assert.Contains("confirm-email", Assert.Single(senderThatKeepsTheEmailsInMemory.SentEmails).Body);
+        Assert.IsType<AccountRegistrationResult.Accepted>(result);
+        Assert.Contains("confirm-email", Assert.Single(emailSender.SentEmails).Body);
     }
 
     // Au-delà de la limite par adresse, rien n'est haché, enregistré ni envoyé (SS §6).
     [Fact]
     public async Task RequestOverTheLimitOfTheAddressIsRefusedWithoutDoingAnything()
     {
-        var serviceBeingTestedWithFakeTools = CreateRegistrationServiceWithFakeTools();
-        limiterThatCountsTheEmailAddresses.EveryRequestIsRefusedDuringThisTest = true;
+        var service = CreateRegistrationService();
+        requestLimiter.RefusesEveryRequest = true;
 
-        var resultOfTheVisitorAccountRegistration = await serviceBeingTestedWithFakeTools.RegisterNewAccountForVisitorAsync(
-            EmailAddressTypedByTheVisitorInTheseTests, ValidPasswordChosenInTheseTests);
+        var result = await service.RegisterAsync(
+            TypedEmail, ValidPassword);
 
-        Assert.False(resultOfTheVisitorAccountRegistration.IsAccepted);
-        Assert.True(resultOfTheVisitorAccountRegistration.TooManyRequestsForThisEmailAddress);
-        Assert.Equal(0, hasherThatCountsTheHashedPasswords.NumberOfPasswordsHashed);
-        Assert.Empty(repositoryThatKeepsAccountsInMemory.SavedUsers);
-        Assert.Empty(senderThatKeepsTheEmailsInMemory.SentEmails);
+        Assert.IsType<AccountRegistrationResult.TooManyRequests>(result);
+        Assert.Equal(0, passwordHasher.HashedPasswordCount);
+        Assert.Empty(accountRepository.SavedUsers);
+        Assert.Empty(emailSender.SentEmails);
     }
 
     // La limite compte la forme enregistrée : changer les majuscules ne la contourne pas.
     [Fact]
     public async Task LimitOfTheAddressCountsItsStoredForm()
     {
-        var serviceBeingTestedWithFakeTools = CreateRegistrationServiceWithFakeTools();
+        var service = CreateRegistrationService();
 
-        await serviceBeingTestedWithFakeTools.RegisterNewAccountForVisitorAsync(
-            EmailAddressTypedByTheVisitorInTheseTests, ValidPasswordChosenInTheseTests);
+        await service.RegisterAsync(
+            TypedEmail, ValidPassword);
 
-        Assert.Equal(EmailAddressInStoredFormInTheseTests, Assert.Single(limiterThatCountsTheEmailAddresses.EmailAddressesCounted));
+        Assert.Equal(Email, Assert.Single(requestLimiter.CountedAddresses));
     }
 
     // Une demande refusée par les règles n'envoie aucun e-mail : elle ne compte pas dans la limite de l'adresse.
     [Fact]
     public async Task RequestBreakingTheRulesIsNotCountedInTheLimitOfTheAddress()
     {
-        var serviceBeingTestedWithFakeTools = CreateRegistrationServiceWithFakeTools();
+        var service = CreateRegistrationService();
 
-        await serviceBeingTestedWithFakeTools.RegisterNewAccountForVisitorAsync(EmailAddressTypedByTheVisitorInTheseTests, "trop-court");
+        await service.RegisterAsync(TypedEmail, "trop-court");
 
-        Assert.Empty(limiterThatCountsTheEmailAddresses.EmailAddressesCounted);
+        Assert.Empty(requestLimiter.CountedAddresses);
     }
 
     [Fact]
     public async Task InvalidEmailAddressIsRefusedWithoutSavingOrSendingAnything()
     {
-        var serviceBeingTestedWithFakeTools = CreateRegistrationServiceWithFakeTools();
+        var service = CreateRegistrationService();
 
-        var resultOfTheVisitorAccountRegistration = await serviceBeingTestedWithFakeTools.RegisterNewAccountForVisitorAsync(
-            "adresse-sans-arobase", ValidPasswordChosenInTheseTests);
+        var result = await service.RegisterAsync(
+            "adresse-sans-arobase", ValidPassword);
 
-        Assert.False(resultOfTheVisitorAccountRegistration.IsAccepted);
-        Assert.Equal(AccountRegistrationService.ErrorMessageForInvalidEmailAddressFormat, resultOfTheVisitorAccountRegistration.EmailAddressErrorMessage);
-        Assert.Null(resultOfTheVisitorAccountRegistration.PasswordErrorMessage);
-        Assert.Empty(repositoryThatKeepsAccountsInMemory.SavedUsers);
-        Assert.Empty(senderThatKeepsTheEmailsInMemory.SentEmails);
+        var refusal = Assert.IsType<AccountRegistrationResult.RefusedByRules>(result);
+        Assert.True(refusal.IsEmailInvalid);
+        Assert.False(refusal.IsPasswordInvalid);
+        Assert.Empty(accountRepository.SavedUsers);
+        Assert.Empty(emailSender.SentEmails);
     }
 
     [Fact]
     public async Task PasswordBreakingTheRulesIsRefusedWithoutHashingOrSavingAnything()
     {
-        var serviceBeingTestedWithFakeTools = CreateRegistrationServiceWithFakeTools();
+        var service = CreateRegistrationService();
 
-        var resultOfTheVisitorAccountRegistration = await serviceBeingTestedWithFakeTools.RegisterNewAccountForVisitorAsync(
-            EmailAddressTypedByTheVisitorInTheseTests, "trop-court");
+        var result = await service.RegisterAsync(
+            TypedEmail, "trop-court");
 
-        Assert.False(resultOfTheVisitorAccountRegistration.IsAccepted);
-        Assert.Equal(AccountRegistrationService.ErrorMessageForPasswordBreakingTheRules, resultOfTheVisitorAccountRegistration.PasswordErrorMessage);
-        Assert.Null(resultOfTheVisitorAccountRegistration.EmailAddressErrorMessage);
-        Assert.Equal(0, hasherThatCountsTheHashedPasswords.NumberOfPasswordsHashed);
-        Assert.Empty(repositoryThatKeepsAccountsInMemory.SavedUsers);
-        Assert.Empty(senderThatKeepsTheEmailsInMemory.SentEmails);
+        var refusal = Assert.IsType<AccountRegistrationResult.RefusedByRules>(result);
+        Assert.True(refusal.IsPasswordInvalid);
+        Assert.False(refusal.IsEmailInvalid);
+        Assert.Equal(0, passwordHasher.HashedPasswordCount);
+        Assert.Empty(accountRepository.SavedUsers);
+        Assert.Empty(emailSender.SentEmails);
     }
 
     [Fact]
     public async Task BothErrorsAreReturnedTogetherWhenEmailAndPasswordAreInvalid()
     {
-        var serviceBeingTestedWithFakeTools = CreateRegistrationServiceWithFakeTools();
+        var service = CreateRegistrationService();
 
-        var resultOfTheVisitorAccountRegistration = await serviceBeingTestedWithFakeTools.RegisterNewAccountForVisitorAsync(
+        var result = await service.RegisterAsync(
             "adresse-sans-arobase", "trop-court");
 
-        Assert.False(resultOfTheVisitorAccountRegistration.IsAccepted);
-        Assert.NotNull(resultOfTheVisitorAccountRegistration.EmailAddressErrorMessage);
-        Assert.NotNull(resultOfTheVisitorAccountRegistration.PasswordErrorMessage);
+        var refusal = Assert.IsType<AccountRegistrationResult.RefusedByRules>(result);
+        Assert.True(refusal.IsEmailInvalid);
+        Assert.True(refusal.IsPasswordInvalid);
     }
 }

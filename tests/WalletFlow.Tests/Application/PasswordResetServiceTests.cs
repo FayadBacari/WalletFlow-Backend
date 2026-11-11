@@ -1,6 +1,8 @@
 using System.Net;
 using WalletFlow.Application.AccountRecovery;
 using WalletFlow.Application.UserAccounts;
+using WalletFlow.Application.Persistence;
+using WalletFlow.Application.Security;
 using WalletFlow.Domain.UsersAndSecurity;
 using WalletFlow.Tests.Fakes;
 
@@ -9,74 +11,83 @@ namespace WalletFlow.Tests.Application;
 // Vérifie le choix d'un nouveau mot de passe avec le lien reçu (GR Auth, SS §2, §3 et §11), avec de faux outils.
 public class PasswordResetServiceTests
 {
-    private const string NewPasswordChosenInTheseTests = "Nouveau-Mot-De-Passe-2";
-    private const string TokenOfTheRecoveryLinkInTheseTests = FakeSecureTokenGenerator.TokenAlwaysReturnedByThisFakeGenerator;
-    private const string OldHashOfTheAccountInTheseTests = "ancienne-empreinte-du-compte";
+    private const string NewPassword = "Nouveau-Mot-De-Passe-2";
+    private const string LinkToken = FakeSecureTokenGenerator.FixedToken;
+    private const string OldHash = "ancienne-empreinte-du-compte";
 
-    private static readonly IPAddress IpAddressOfTheVisitorInTheseTests = IPAddress.Parse("203.0.113.7");
+    private static readonly IPAddress IpAddress = IPAddress.Parse("203.0.113.7");
 
-    private readonly FakeUserAccountRepository repositoryThatKeepsAccountsInMemory = new FakeUserAccountRepository();
-    private readonly FakeUserSessionRepository repositoryThatKeepsSessionsInMemory = new FakeUserSessionRepository(new FakeSecurityEventRepository());
-    private readonly FakePasswordHasher hasherThatCountsTheHashedPasswords = new FakePasswordHasher();
-    private readonly FakeTimeProviderForTests clockThatOnlyMovesWhenTestsAskIt = new FakeTimeProviderForTests();
+    private readonly FakeUserAccountRepository accountRepository = new FakeUserAccountRepository();
+    private readonly FakeUserSessionRepository sessionRepository = new FakeUserSessionRepository();
+    private readonly FakeSecurityEventRepository securityEventRepository = new FakeSecurityEventRepository();
+    private readonly FakePasswordHasher passwordHasher = new FakePasswordHasher();
+    private readonly FakeTimeProvider clock = new FakeTimeProvider();
 
     // Crée le service à tester, avec ses faux outils.
-    private PasswordResetService CreatePasswordResetServiceWithFakeTools()
+    private PasswordResetService CreatePasswordResetService()
     {
         return new PasswordResetService(
-            repositoryThatKeepsAccountsInMemory,
-            repositoryThatKeepsSessionsInMemory,
-            hasherThatCountsTheHashedPasswords,
+            accountRepository,
+            sessionRepository,
+            new DatabaseChangesSavingService(new FakeDatabaseUnitOfWork(accountRepository, sessionRepository, securityEventRepository)),
+            new SecurityJournalService(securityEventRepository, clock),
+            passwordHasher,
             new FakeSecureTokenGenerator(),
-            clockThatOnlyMovesWhenTestsAskIt);
+            clock);
     }
 
     // Ajoute à la fausse base un compte confirmé, avec son lien de récupération valable 30 minutes.
-    private User AddAccountWithItsRecoveryLinkToTheFakeDatabase(bool emailAddressOfTheAccountIsConfirmed = true, EmailTokenType typeOfTheLinkOfTheAccount = EmailTokenType.PasswordRecovery)
+    private User AddAccountWithRecoveryLink(
+        bool isEmailConfirmed = true,
+        EmailTokenType linkType = EmailTokenType.PasswordRecovery,
+        short failedAttemptCount = 0,
+        short lockoutCount = 0,
+        DateTime? lockoutEndsAt = null)
     {
-        var accountAddedToTheFakeDatabase = new User
+        var account = new User
         {
             Email = "utilisateur@exemple.test",
-            PasswordHash = OldHashOfTheAccountInTheseTests,
-            IsEmailConfirmed = emailAddressOfTheAccountIsConfirmed
+            PasswordHash = OldHash,
+            IsEmailConfirmed = isEmailConfirmed,
+            FailedLoginAttemptCount = failedAttemptCount,
+            LockoutCount = lockoutCount,
+            LockoutEndsAt = lockoutEndsAt
         };
-        repositoryThatKeepsAccountsInMemory.SavedUsers.Add(accountAddedToTheFakeDatabase);
-        repositoryThatKeepsAccountsInMemory.SavedEmailTokens.Add(new EmailToken
+        accountRepository.SavedUsers.Add(account);
+        accountRepository.SavedEmailTokens.Add(new EmailToken
         {
-            Type = typeOfTheLinkOfTheAccount,
-            TokenHash = FakeSecureTokenGenerator.HashAlwaysReturnedByThisFakeGenerator,
-            ExpiresAt = clockThatOnlyMovesWhenTestsAskIt.GetUtcNow().UtcDateTime.AddMinutes(30),
-            UserId = accountAddedToTheFakeDatabase.Id
+            Type = linkType,
+            TokenHash = FakeSecureTokenGenerator.FixedHash,
+            ExpiresAt = clock.GetUtcNow().UtcDateTime.AddMinutes(30),
+            UserId = account.Id
         });
 
-        return accountAddedToTheFakeDatabase;
+        return account;
     }
 
     // Ajoute à la fausse base une session de ce compte.
-    private void AddSessionOfThisAccountToTheFakeDatabase(Guid identifierOfTheAccountThatOwnsTheSession)
+    private void AddSessionForAccount(Guid accountId)
     {
-        repositoryThatKeepsSessionsInMemory.SavedSessions.Add(new UserSession
+        sessionRepository.SavedSessions.Add(new UserSession
         {
             Id = Guid.NewGuid().ToString(),
-            LastActivityAt = clockThatOnlyMovesWhenTestsAskIt.GetUtcNow().UtcDateTime,
-            UserId = identifierOfTheAccountThatOwnsTheSession
+            LastActivityAt = clock.GetUtcNow().UtcDateTime,
+            UserId = accountId
         });
     }
 
     // Envoie un nouveau mot de passe avec le lien de ces tests.
-    private async Task<PasswordResetResult> ResetPasswordWithTheLinkOfTheseTestsAsync(string newPasswordTypedInThisTest = NewPasswordChosenInTheseTests)
+    private async Task<PasswordResetResult> ResetPasswordAsync(string newPassword = NewPassword)
     {
-        return await CreatePasswordResetServiceWithFakeTools().ResetPasswordWithLinkTokenAsync(TokenOfTheRecoveryLinkInTheseTests, newPasswordTypedInThisTest, IpAddressOfTheVisitorInTheseTests);
+        return await CreatePasswordResetService().ResetAsync(LinkToken, newPassword, IpAddress);
     }
 
     // Vérifie que le lien a été refusé, et que rien n'a changé.
-    private void CheckThatLinkWasRefusedAndNothingChanged(PasswordResetResult resultOfThePasswordResetToCheck, User accountThatMustNotHaveChanged)
+    private void AssertLinkRefusedAndNothingChanged(PasswordResetResult result, User account)
     {
-        Assert.False(resultOfThePasswordResetToCheck.IsPasswordChanged);
-        Assert.Equal(PasswordResetService.ErrorMessageForRecoveryLinkNoLongerValid, resultOfThePasswordResetToCheck.LinkErrorMessage);
-        Assert.Null(resultOfThePasswordResetToCheck.PasswordErrorMessage);
-        Assert.Equal(OldHashOfTheAccountInTheseTests, accountThatMustNotHaveChanged.PasswordHash);
-        Assert.Empty(repositoryThatKeepsAccountsInMemory.SecurityEventsSavedWithTheLinks);
+        Assert.Equal(PasswordResetResult.LinkNoLongerValid, result);
+        Assert.Equal(OldHash, account.PasswordHash);
+        Assert.Empty(securityEventRepository.SavedSecurityEvents);
     }
 
     // --- Changement réussi
@@ -84,82 +95,82 @@ public class PasswordResetServiceTests
     [Fact]
     public async Task RightLinkChangesThePasswordAndUsesTheLink()
     {
-        var accountBeingTestedInThisReset = AddAccountWithItsRecoveryLinkToTheFakeDatabase();
+        var account = AddAccountWithRecoveryLink();
 
-        var resultOfThePasswordResetRequest = await ResetPasswordWithTheLinkOfTheseTestsAsync();
+        var result = await ResetPasswordAsync();
 
-        Assert.True(resultOfThePasswordResetRequest.IsPasswordChanged);
-        Assert.Equal(FakePasswordHasher.PrefixOfTheFakePasswordHashes + NewPasswordChosenInTheseTests, accountBeingTestedInThisReset.PasswordHash);
-        Assert.Equal(clockThatOnlyMovesWhenTestsAskIt.GetUtcNow().UtcDateTime, repositoryThatKeepsAccountsInMemory.SavedEmailTokens[0].UsedAt);
+        Assert.Equal(PasswordResetResult.PasswordChanged, result);
+        Assert.Equal(FakePasswordHasher.HashPrefix + NewPassword, account.PasswordHash);
+        Assert.Equal(clock.GetUtcNow().UtcDateTime, accountRepository.SavedEmailTokens[0].UsedAt);
     }
 
     // GR Auth : une récupération réussie débloque aussi le compte, sans effacer le nombre de blocages.
     [Fact]
     public async Task SuccessfulResetUnlocksTheAccountAndKeepsTheNumberOfLockouts()
     {
-        var accountBeingTestedInThisReset = AddAccountWithItsRecoveryLinkToTheFakeDatabase();
-        accountBeingTestedInThisReset.FailedLoginAttemptCount = 5;
-        accountBeingTestedInThisReset.LockoutCount = 3;
-        accountBeingTestedInThisReset.LockoutEndsAt = clockThatOnlyMovesWhenTestsAskIt.GetUtcNow().UtcDateTime.AddHours(1);
+        var account = AddAccountWithRecoveryLink(
+            failedAttemptCount: 5,
+            lockoutCount: 3,
+            lockoutEndsAt: clock.GetUtcNow().UtcDateTime.AddHours(1));
 
-        await ResetPasswordWithTheLinkOfTheseTestsAsync();
+        await ResetPasswordAsync();
 
-        Assert.Equal(0, accountBeingTestedInThisReset.FailedLoginAttemptCount);
-        Assert.Null(accountBeingTestedInThisReset.LockoutEndsAt);
-        Assert.Equal(3, accountBeingTestedInThisReset.LockoutCount);
+        Assert.Equal(0, account.FailedLoginAttemptCount);
+        Assert.Null(account.LockoutEndsAt);
+        Assert.Equal(3, account.LockoutCount);
     }
 
     // SS §3 : après une récupération, toutes les sessions du compte sont fermées, et seulement les siennes.
     [Fact]
     public async Task SuccessfulResetClosesEverySessionOfTheAccountAndOnlyThose()
     {
-        var accountBeingTestedInThisReset = AddAccountWithItsRecoveryLinkToTheFakeDatabase();
-        var identifierOfAnotherAccountOfTheTest = Guid.NewGuid();
-        AddSessionOfThisAccountToTheFakeDatabase(accountBeingTestedInThisReset.Id);
-        AddSessionOfThisAccountToTheFakeDatabase(accountBeingTestedInThisReset.Id);
-        AddSessionOfThisAccountToTheFakeDatabase(identifierOfAnotherAccountOfTheTest);
+        var account = AddAccountWithRecoveryLink();
+        var otherAccountId = Guid.NewGuid();
+        AddSessionForAccount(account.Id);
+        AddSessionForAccount(account.Id);
+        AddSessionForAccount(otherAccountId);
 
-        await ResetPasswordWithTheLinkOfTheseTestsAsync();
+        await ResetPasswordAsync();
 
-        Assert.Equal(identifierOfAnotherAccountOfTheTest, Assert.Single(repositoryThatKeepsSessionsInMemory.SavedSessions).UserId);
+        Assert.Equal(otherAccountId, Assert.Single(sessionRepository.SavedSessions).UserId);
     }
 
     // GR Auth : la récupération ne connecte personne. L'utilisateur se connecte avec son nouveau mot de passe.
     [Fact]
     public async Task SuccessfulResetOpensNoSessionForTheVisitor()
     {
-        AddAccountWithItsRecoveryLinkToTheFakeDatabase();
+        AddAccountWithRecoveryLink();
 
-        await ResetPasswordWithTheLinkOfTheseTestsAsync();
+        await ResetPasswordAsync();
 
-        Assert.Empty(repositoryThatKeepsSessionsInMemory.SavedSessions);
+        Assert.Empty(sessionRepository.SavedSessions);
     }
 
     [Fact]
     public async Task SuccessfulResetIsWrittenInTheJournalWithItsUserAndIpAddress()
     {
-        var accountBeingTestedInThisReset = AddAccountWithItsRecoveryLinkToTheFakeDatabase();
+        var account = AddAccountWithRecoveryLink();
 
-        await ResetPasswordWithTheLinkOfTheseTestsAsync();
+        await ResetPasswordAsync();
 
-        var securityEventOfThePasswordChange = Assert.Single(repositoryThatKeepsAccountsInMemory.SecurityEventsSavedWithTheLinks);
-        Assert.Equal(SecurityEventType.PasswordChange, securityEventOfThePasswordChange.Type);
-        Assert.Equal(SecurityEventResult.Success, securityEventOfThePasswordChange.Result);
-        Assert.Equal(accountBeingTestedInThisReset.Id, securityEventOfThePasswordChange.UserId);
-        Assert.Equal(IpAddressOfTheVisitorInTheseTests, securityEventOfThePasswordChange.IpAddress);
-        Assert.Equal(clockThatOnlyMovesWhenTestsAskIt.GetUtcNow().UtcDateTime, securityEventOfThePasswordChange.OccurredAt);
+        var securityEvent = Assert.Single(securityEventRepository.SavedSecurityEvents);
+        Assert.Equal(SecurityEventType.PasswordChange, securityEvent.Type);
+        Assert.Equal(SecurityEventResult.Success, securityEvent.Result);
+        Assert.Equal(account.Id, securityEvent.UserId);
+        Assert.Equal(IpAddress, securityEvent.IpAddress);
+        Assert.Equal(clock.GetUtcNow().UtcDateTime, securityEvent.OccurredAt);
     }
 
     // Aucune règle n'interdit de garder le même mot de passe : le lien a prouvé qu'il possède la boîte mail.
     [Fact]
     public async Task SamePasswordAsTheOldOneIsAccepted()
     {
-        var accountBeingTestedInThisReset = AddAccountWithItsRecoveryLinkToTheFakeDatabase();
-        accountBeingTestedInThisReset.PasswordHash = FakePasswordHasher.PrefixOfTheFakePasswordHashes + NewPasswordChosenInTheseTests;
+        var account = AddAccountWithRecoveryLink();
+        account.ReplacePasswordHash(FakePasswordHasher.HashPrefix + NewPassword);
 
-        var resultOfThePasswordResetRequest = await ResetPasswordWithTheLinkOfTheseTestsAsync();
+        var result = await ResetPasswordAsync();
 
-        Assert.True(resultOfThePasswordResetRequest.IsPasswordChanged);
+        Assert.Equal(PasswordResetResult.PasswordChanged, result);
     }
 
     // --- Règles du mot de passe
@@ -167,56 +178,54 @@ public class PasswordResetServiceTests
     [Theory]
     [InlineData("trop-court")]
     [InlineData("")]
-    public async Task PasswordBreakingTheRulesIsRefusedAndKeepsTheLinkUsable(string newPasswordTypedInThisTest)
+    public async Task PasswordBreakingTheRulesIsRefusedAndKeepsTheLinkUsable(string newPassword)
     {
-        var accountBeingTestedInThisReset = AddAccountWithItsRecoveryLinkToTheFakeDatabase();
-        AddSessionOfThisAccountToTheFakeDatabase(accountBeingTestedInThisReset.Id);
+        var account = AddAccountWithRecoveryLink();
+        AddSessionForAccount(account.Id);
 
-        var resultOfThePasswordResetRequest = await ResetPasswordWithTheLinkOfTheseTestsAsync(newPasswordTypedInThisTest);
+        var result = await ResetPasswordAsync(newPassword);
 
-        Assert.False(resultOfThePasswordResetRequest.IsPasswordChanged);
-        Assert.Equal(AccountRegistrationService.ErrorMessageForPasswordBreakingTheRules, resultOfThePasswordResetRequest.PasswordErrorMessage);
-        Assert.Null(resultOfThePasswordResetRequest.LinkErrorMessage);
-        Assert.Equal(OldHashOfTheAccountInTheseTests, accountBeingTestedInThisReset.PasswordHash);
-        Assert.Null(repositoryThatKeepsAccountsInMemory.SavedEmailTokens[0].UsedAt);
-        Assert.Single(repositoryThatKeepsSessionsInMemory.SavedSessions);
-        Assert.Equal(0, hasherThatCountsTheHashedPasswords.NumberOfPasswordsHashed);
+        Assert.Equal(PasswordResetResult.PasswordBreaksRules, result);
+        Assert.Equal(OldHash, account.PasswordHash);
+        Assert.Null(accountRepository.SavedEmailTokens[0].UsedAt);
+        Assert.Single(sessionRepository.SavedSessions);
+        Assert.Equal(0, passwordHasher.HashedPasswordCount);
 
-        var resultWithAValidPasswordAfterwards = await ResetPasswordWithTheLinkOfTheseTestsAsync();
-        Assert.True(resultWithAValidPasswordAfterwards.IsPasswordChanged);
+        var laterResult = await ResetPasswordAsync();
+        Assert.Equal(PasswordResetResult.PasswordChanged, laterResult);
     }
 
     // SS §2 : le mot de passe est normalisé avant les règles et le hachage.
     [Fact]
     public async Task PasswordTypedWithDecomposedAccentIsHashedInItsNormalizedForm()
     {
-        var accountBeingTestedInThisReset = AddAccountWithItsRecoveryLinkToTheFakeDatabase();
+        var account = AddAccountWithRecoveryLink();
 
-        await ResetPasswordWithTheLinkOfTheseTestsAsync("Mot-De-Passé-1");
+        await ResetPasswordAsync("Mot-De-Passé-1");
 
-        Assert.Equal(FakePasswordHasher.PrefixOfTheFakePasswordHashes + "Mot-De-Passé-1", accountBeingTestedInThisReset.PasswordHash);
+        Assert.Equal(FakePasswordHasher.HashPrefix + "Mot-De-Passé-1", account.PasswordHash);
     }
 
     [Fact]
     public async Task PasswordLengthIsCountedAfterTheNormalization()
     {
-        AddAccountWithItsRecoveryLinkToTheFakeDatabase();
+        AddAccountWithRecoveryLink();
 
-        var resultOfThePasswordResetRequest = await ResetPasswordWithTheLinkOfTheseTestsAsync("Abcdefgh-1é");
+        var result = await ResetPasswordAsync("Abcdefgh-1é");
 
-        Assert.Equal(AccountRegistrationService.ErrorMessageForPasswordBreakingTheRules, resultOfThePasswordResetRequest.PasswordErrorMessage);
+        Assert.Equal(PasswordResetResult.PasswordBreaksRules, result);
     }
 
     [Theory]
     [InlineData(0xFFFE)]
     [InlineData(0x200B)] // espace invisible
-    public async Task PasswordWithForbiddenCharacterIsRefusedWithoutAnyError(int codeOfTheForbiddenCharacterInThisTest)
+    public async Task PasswordWithForbiddenCharacterIsRefusedWithoutAnyError(int forbiddenCharacter)
     {
-        AddAccountWithItsRecoveryLinkToTheFakeDatabase();
+        AddAccountWithRecoveryLink();
 
-        var resultOfThePasswordResetRequest = await ResetPasswordWithTheLinkOfTheseTestsAsync(NewPasswordChosenInTheseTests + (char)codeOfTheForbiddenCharacterInThisTest);
+        var result = await ResetPasswordAsync(NewPassword + (char)forbiddenCharacter);
 
-        Assert.Equal(AccountRegistrationService.ErrorMessageForPasswordBreakingTheRules, resultOfThePasswordResetRequest.PasswordErrorMessage);
+        Assert.Equal(PasswordResetResult.PasswordBreaksRules, result);
     }
 
     // --- Liens refusés
@@ -224,47 +233,47 @@ public class PasswordResetServiceTests
     [Fact]
     public async Task UnknownLinkIsRefusedWithoutHashingThePassword()
     {
-        var accountBeingTestedInThisReset = AddAccountWithItsRecoveryLinkToTheFakeDatabase();
+        var account = AddAccountWithRecoveryLink();
 
-        var resultOfThePasswordResetRequest = await CreatePasswordResetServiceWithFakeTools().ResetPasswordWithLinkTokenAsync("jeton-invente", NewPasswordChosenInTheseTests, IpAddressOfTheVisitorInTheseTests);
+        var result = await CreatePasswordResetService().ResetAsync("jeton-invente", NewPassword, IpAddress);
 
-        CheckThatLinkWasRefusedAndNothingChanged(resultOfThePasswordResetRequest, accountBeingTestedInThisReset);
-        Assert.Equal(0, hasherThatCountsTheHashedPasswords.NumberOfPasswordsHashed);
+        AssertLinkRefusedAndNothingChanged(result, account);
+        Assert.Equal(0, passwordHasher.HashedPasswordCount);
     }
 
     [Fact]
     public async Task LinkAtItsExactExpirationDateIsRefused()
     {
-        var accountBeingTestedInThisReset = AddAccountWithItsRecoveryLinkToTheFakeDatabase();
-        clockThatOnlyMovesWhenTestsAskIt.MoveFakeClockForwardByThisDuration(TimeSpan.FromMinutes(30));
+        var account = AddAccountWithRecoveryLink();
+        clock.Advance(TimeSpan.FromMinutes(30));
 
-        var resultOfThePasswordResetRequest = await ResetPasswordWithTheLinkOfTheseTestsAsync();
+        var result = await ResetPasswordAsync();
 
-        CheckThatLinkWasRefusedAndNothingChanged(resultOfThePasswordResetRequest, accountBeingTestedInThisReset);
+        AssertLinkRefusedAndNothingChanged(result, account);
     }
 
     [Fact]
     public async Task LinkJustBeforeItsExpirationDateIsAccepted()
     {
-        AddAccountWithItsRecoveryLinkToTheFakeDatabase();
-        clockThatOnlyMovesWhenTestsAskIt.MoveFakeClockForwardByThisDuration(TimeSpan.FromMinutes(30) - TimeSpan.FromSeconds(1));
+        AddAccountWithRecoveryLink();
+        clock.Advance(TimeSpan.FromMinutes(30) - TimeSpan.FromSeconds(1));
 
-        var resultOfThePasswordResetRequest = await ResetPasswordWithTheLinkOfTheseTestsAsync();
+        var result = await ResetPasswordAsync();
 
-        Assert.True(resultOfThePasswordResetRequest.IsPasswordChanged);
+        Assert.Equal(PasswordResetResult.PasswordChanged, result);
     }
 
     [Fact]
     public async Task LinkAlreadyUsedOnceIsRefusedAgain()
     {
-        AddAccountWithItsRecoveryLinkToTheFakeDatabase();
-        await ResetPasswordWithTheLinkOfTheseTestsAsync();
-        var securityEventsAfterTheFirstReset = repositoryThatKeepsAccountsInMemory.SecurityEventsSavedWithTheLinks.Count;
+        AddAccountWithRecoveryLink();
+        await ResetPasswordAsync();
+        var securityEvents = securityEventRepository.SavedSecurityEvents.Count;
 
-        var resultOfTheSecondPasswordReset = await ResetPasswordWithTheLinkOfTheseTestsAsync("Encore-Un-Mot-De-Passe-3");
+        var result = await ResetPasswordAsync("Encore-Un-Mot-De-Passe-3");
 
-        Assert.Equal(PasswordResetService.ErrorMessageForRecoveryLinkNoLongerValid, resultOfTheSecondPasswordReset.LinkErrorMessage);
-        Assert.Equal(securityEventsAfterTheFirstReset, repositoryThatKeepsAccountsInMemory.SecurityEventsSavedWithTheLinks.Count);
+        Assert.Equal(PasswordResetResult.LinkNoLongerValid, result);
+        Assert.Equal(securityEvents, securityEventRepository.SavedSecurityEvents.Count);
     }
 
     // Un lien de déblocage ne doit jamais permettre de changer un mot de passe.
@@ -272,34 +281,34 @@ public class PasswordResetServiceTests
     [InlineData(EmailTokenType.AccountUnlock)]
     [InlineData(EmailTokenType.SignupConfirmation)]
     [InlineData(EmailTokenType.EmailChange)]
-    public async Task LinkOfAnotherTypeIsRefused(EmailTokenType typeOfTheLinkOfTheAccountInThisTest)
+    public async Task LinkOfAnotherTypeIsRefused(EmailTokenType linkType)
     {
-        var accountBeingTestedInThisReset = AddAccountWithItsRecoveryLinkToTheFakeDatabase(typeOfTheLinkOfTheAccount: typeOfTheLinkOfTheAccountInThisTest);
+        var account = AddAccountWithRecoveryLink(linkType: linkType);
 
-        var resultOfThePasswordResetRequest = await ResetPasswordWithTheLinkOfTheseTestsAsync();
+        var result = await ResetPasswordAsync();
 
-        CheckThatLinkWasRefusedAndNothingChanged(resultOfThePasswordResetRequest, accountBeingTestedInThisReset);
+        AssertLinkRefusedAndNothingChanged(result, account);
     }
 
     [Fact]
     public async Task LinkOfAnAccountNotYetConfirmedIsRefused()
     {
-        var accountBeingTestedInThisReset = AddAccountWithItsRecoveryLinkToTheFakeDatabase(emailAddressOfTheAccountIsConfirmed: false);
+        var account = AddAccountWithRecoveryLink(isEmailConfirmed: false);
 
-        var resultOfThePasswordResetRequest = await ResetPasswordWithTheLinkOfTheseTestsAsync();
+        var result = await ResetPasswordAsync();
 
-        CheckThatLinkWasRefusedAndNothingChanged(resultOfThePasswordResetRequest, accountBeingTestedInThisReset);
+        AssertLinkRefusedAndNothingChanged(result, account);
     }
 
     [Fact]
     public async Task LinkOfAnAccountThatNoLongerExistsIsRefused()
     {
-        var accountBeingTestedInThisReset = AddAccountWithItsRecoveryLinkToTheFakeDatabase();
-        repositoryThatKeepsAccountsInMemory.SavedUsers.Clear();
+        var account = AddAccountWithRecoveryLink();
+        accountRepository.SavedUsers.Clear();
 
-        var resultOfThePasswordResetRequest = await ResetPasswordWithTheLinkOfTheseTestsAsync();
+        var result = await ResetPasswordAsync();
 
-        CheckThatLinkWasRefusedAndNothingChanged(resultOfThePasswordResetRequest, accountBeingTestedInThisReset);
+        AssertLinkRefusedAndNothingChanged(result, account);
     }
 
     // --- Requêtes simultanées et pannes
@@ -308,61 +317,61 @@ public class PasswordResetServiceTests
     [Fact]
     public async Task ConflictTriesAgainAndStillChangesThePassword()
     {
-        var accountBeingTestedInThisReset = AddAccountWithItsRecoveryLinkToTheFakeDatabase();
-        repositoryThatKeepsAccountsInMemory.NumberOfConflictsBeforeTheLinkIsUsed = 3;
+        var account = AddAccountWithRecoveryLink();
+        accountRepository.LinkUseConflicts = 3;
 
-        var resultOfThePasswordResetRequest = await ResetPasswordWithTheLinkOfTheseTestsAsync();
+        var result = await ResetPasswordAsync();
 
-        Assert.True(resultOfThePasswordResetRequest.IsPasswordChanged);
-        Assert.Equal(FakePasswordHasher.PrefixOfTheFakePasswordHashes + NewPasswordChosenInTheseTests, accountBeingTestedInThisReset.PasswordHash);
-        Assert.Single(repositoryThatKeepsAccountsInMemory.SecurityEventsSavedWithTheLinks);
-        Assert.Equal(1, hasherThatCountsTheHashedPasswords.NumberOfPasswordsHashed);
+        Assert.Equal(PasswordResetResult.PasswordChanged, result);
+        Assert.Equal(FakePasswordHasher.HashPrefix + NewPassword, account.PasswordHash);
+        Assert.Single(securityEventRepository.SavedSecurityEvents);
+        Assert.Equal(1, passwordHasher.HashedPasswordCount);
     }
 
     // Double clic : le lien vient de servir à une autre requête, et les sessions ne sont pas touchées une seconde fois.
     [Fact]
     public async Task LinkUsedByAnotherRequestJustBeforeTheSaveIsRefused()
     {
-        var accountBeingTestedInThisReset = AddAccountWithItsRecoveryLinkToTheFakeDatabase();
-        AddSessionOfThisAccountToTheFakeDatabase(accountBeingTestedInThisReset.Id);
-        repositoryThatKeepsAccountsInMemory.LinkIsUsedByAnotherRequestJustBeforeTheSave = true;
+        var account = AddAccountWithRecoveryLink();
+        AddSessionForAccount(account.Id);
+        accountRepository.UseLinkBeforeSave = true;
 
-        var resultOfThePasswordResetRequest = await ResetPasswordWithTheLinkOfTheseTestsAsync();
+        var result = await ResetPasswordAsync();
 
-        CheckThatLinkWasRefusedAndNothingChanged(resultOfThePasswordResetRequest, accountBeingTestedInThisReset);
-        Assert.Single(repositoryThatKeepsSessionsInMemory.SavedSessions);
+        AssertLinkRefusedAndNothingChanged(result, account);
+        Assert.Single(sessionRepository.SavedSessions);
     }
 
     [Fact]
     public async Task TooManyConflictsRefuseTheLinkAfterTenTries()
     {
-        var accountBeingTestedInThisReset = AddAccountWithItsRecoveryLinkToTheFakeDatabase();
-        repositoryThatKeepsAccountsInMemory.NumberOfConflictsBeforeTheLinkIsUsed = 1000;
+        var account = AddAccountWithRecoveryLink();
+        accountRepository.LinkUseConflicts = 1000;
 
-        var resultOfThePasswordResetRequest = await ResetPasswordWithTheLinkOfTheseTestsAsync();
+        var result = await ResetPasswordAsync();
 
-        CheckThatLinkWasRefusedAndNothingChanged(resultOfThePasswordResetRequest, accountBeingTestedInThisReset);
-        Assert.Equal(990, repositoryThatKeepsAccountsInMemory.NumberOfConflictsBeforeTheLinkIsUsed);
+        AssertLinkRefusedAndNothingChanged(result, account);
+        Assert.Equal(990, accountRepository.LinkUseConflicts);
     }
 
     // Le seul moment non atomique : la panne n'est pas cachée, et la personne peut refaire une récupération.
     [Fact]
     public async Task DatabaseFailureWhileClosingTheSessionsIsNotHidden()
     {
-        AddAccountWithItsRecoveryLinkToTheFakeDatabase();
-        repositoryThatKeepsSessionsInMemory.DatabaseIsDownWhileClosingEverySession = true;
+        AddAccountWithRecoveryLink();
+        sessionRepository.FailsWhenClosingAllSessions = true;
 
-        await Assert.ThrowsAsync<InvalidOperationException>(() => ResetPasswordWithTheLinkOfTheseTestsAsync());
+        await Assert.ThrowsAsync<InvalidOperationException>(() => ResetPasswordAsync());
     }
 
     [Fact]
     public async Task DatabaseFailureWhileReadingTheLinkIsNotHiddenAndChangesNothing()
     {
-        var accountBeingTestedInThisReset = AddAccountWithItsRecoveryLinkToTheFakeDatabase();
-        repositoryThatKeepsAccountsInMemory.DatabaseIsDownWhenReadingTheLinks = true;
+        var account = AddAccountWithRecoveryLink();
+        accountRepository.FailsWhenReadingLinks = true;
 
-        await Assert.ThrowsAsync<InvalidOperationException>(() => ResetPasswordWithTheLinkOfTheseTestsAsync());
+        await Assert.ThrowsAsync<InvalidOperationException>(() => ResetPasswordAsync());
 
-        Assert.Equal(OldHashOfTheAccountInTheseTests, accountBeingTestedInThisReset.PasswordHash);
+        Assert.Equal(OldHash, account.PasswordHash);
     }
 }

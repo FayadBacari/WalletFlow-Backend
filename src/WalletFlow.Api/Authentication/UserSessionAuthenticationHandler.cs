@@ -11,56 +11,56 @@ namespace WalletFlow.Api.Authentication;
 // l'identifiant de l'utilisateur vient toujours de la session, jamais de la requête.
 public class UserSessionAuthenticationHandler : AuthenticationHandler<AuthenticationSchemeOptions>
 {
-    public const string NameOfTheUserSessionAuthenticationScheme = "SessionWalletFlow";
-    public const string MessageShownWhenTheVisitorMustLogIn = "Connecte-toi pour continuer.";
+    public const string SchemeName = "SessionWalletFlow";
+    public const string LoginRequiredMessage = "Connecte-toi pour continuer.";
 
-    private readonly UserSessionService serviceThatRecognizesTheUserSessions;
-    private readonly IProblemDetailsService serviceThatWritesTheErrorAnswers;
+    private readonly UserSessionService sessionService;
+    private readonly IProblemDetailsService problemDetailsService;
 
     // Reçoit les réglages imposés par le framework, le cas d'utilisation des sessions et le format des erreurs.
     public UserSessionAuthenticationHandler(
-        IOptionsMonitor<AuthenticationSchemeOptions> optionsOfTheUserAuthenticationScheme,
-        ILoggerFactory factoryOfTheLoggersOfTheAuthentication,
-        UrlEncoder encoderOfTheAddressesInTheAuthentication,
-        UserSessionService serviceThatRecognizesTheUserSessions,
-        IProblemDetailsService serviceThatWritesTheErrorAnswers)
-        : base(optionsOfTheUserAuthenticationScheme, factoryOfTheLoggersOfTheAuthentication, encoderOfTheAddressesInTheAuthentication)
+        IOptionsMonitor<AuthenticationSchemeOptions> options,
+        ILoggerFactory loggerFactory,
+        UrlEncoder encoder,
+        UserSessionService sessionService,
+        IProblemDetailsService problemDetailsService)
+        : base(options, loggerFactory, encoder)
     {
-        this.serviceThatRecognizesTheUserSessions = serviceThatRecognizesTheUserSessions;
-        this.serviceThatWritesTheErrorAnswers = serviceThatWritesTheErrorAnswers;
+        this.sessionService = sessionService;
+        this.problemDetailsService = problemDetailsService;
     }
 
     // Lit le cookie de la requête et cherche sa session (nom imposé par le framework).
     protected override async Task<AuthenticateResult> HandleAuthenticateAsync()
     {
-        var sessionTokenReadInTheCookie = Request.Cookies[SessionCookiesConfiguration.NameOfTheUserSessionCookie];
-        if (sessionTokenReadInTheCookie == null)
+        var sessionToken = Request.Cookies[SessionCookiesConfiguration.SessionCookieName];
+        if (sessionToken == null)
         {
             return AuthenticateResult.NoResult();
         }
 
-        var identifierOfTheOwnerOfTheSession = await serviceThatRecognizesTheUserSessions.FindOwnerOfTheActiveSessionThenRecordItsActivityAsync(sessionTokenReadInTheCookie);
-        if (identifierOfTheOwnerOfTheSession == null)
+        var ownerId = await sessionService.FindOwnerAndRecordActivityAsync(sessionToken);
+        if (ownerId == null)
         {
             return AuthenticateResult.NoResult();
         }
 
-        var claimsOfTheLoggedInUser = new[] { new Claim(ClaimTypes.NameIdentifier, identifierOfTheOwnerOfTheSession.Value.ToString()) };
-        var identityOfTheLoggedInUser = new ClaimsIdentity(claimsOfTheLoggedInUser, NameOfTheUserSessionAuthenticationScheme);
-        var ticketOfTheLoggedInUser = new AuthenticationTicket(new ClaimsPrincipal(identityOfTheLoggedInUser), NameOfTheUserSessionAuthenticationScheme);
+        var claims = new[] { new Claim(ClaimTypes.NameIdentifier, ownerId.Value.ToString()) };
+        var identity = new ClaimsIdentity(claims, SchemeName);
+        var ticket = new AuthenticationTicket(new ClaimsPrincipal(identity), SchemeName);
 
-        return AuthenticateResult.Success(ticketOfTheLoggedInUser);
+        return AuthenticateResult.Success(ticket);
     }
 
     // Répond 401 quand une route demande une session, avec le même format que les autres erreurs (nom imposé par le framework).
-    protected override async Task HandleChallengeAsync(AuthenticationProperties propertiesOfTheUserAuthenticationChallenge)
+    protected override async Task HandleChallengeAsync(AuthenticationProperties properties)
     {
         Response.StatusCode = StatusCodes.Status401Unauthorized;
 
-        var contextOfTheErrorAnswerBeingWritten = new ProblemDetailsContext { HttpContext = Context };
-        contextOfTheErrorAnswerBeingWritten.ProblemDetails.Status = StatusCodes.Status401Unauthorized;
-        contextOfTheErrorAnswerBeingWritten.ProblemDetails.Title = MessageShownWhenTheVisitorMustLogIn;
+        var problemContext = new ProblemDetailsContext { HttpContext = Context };
+        problemContext.ProblemDetails.Status = StatusCodes.Status401Unauthorized;
+        problemContext.ProblemDetails.Title = LoginRequiredMessage;
 
-        await serviceThatWritesTheErrorAnswers.TryWriteAsync(contextOfTheErrorAnswerBeingWritten);
+        await problemDetailsService.TryWriteAsync(problemContext);
     }
 }

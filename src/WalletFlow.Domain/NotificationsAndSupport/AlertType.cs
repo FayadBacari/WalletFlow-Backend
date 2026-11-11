@@ -5,11 +5,11 @@ namespace WalletFlow.Domain.NotificationsAndSupport;
 public class AlertType
 {
     // code_type_alerte : par exemple budget_atteint.
-    public string Code { get; set; } = string.Empty;
+    public string Code { get; init; } = string.Empty;
 
     // libelle_type_alerte : nom affiché à l'utilisateur.
-    public string Label { get; set; } = string.Empty;
+    public string Label { get; init; } = string.Empty;
 
     // est_desactivable : faux pour les alertes de sécurité.
-    public bool CanBeDisabled { get; set; }
+    public bool CanBeDisabled { get; init; }
 }

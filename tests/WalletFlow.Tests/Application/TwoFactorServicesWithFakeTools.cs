@@ -2,6 +2,8 @@ using System.Net;
 using WalletFlow.Application.AccountRecovery;
 using WalletFlow.Application.TwoFactorAuthentication;
 using WalletFlow.Application.UserSessions;
+using WalletFlow.Application.Persistence;
+using WalletFlow.Application.Security;
 using WalletFlow.Domain.UsersAndSecurity;
 using WalletFlow.Infrastructure.Security;
 using WalletFlow.Tests.Fakes;
@@ -12,236 +14,258 @@ namespace WalletFlow.Tests.Application;
 // Le calcul des codes, le chiffrement et les jetons sont les vrais : ces tests vérifient de vrais codes.
 public class TwoFactorServicesWithFakeTools
 {
-    public const string EmailAddressOfTheAccountInTheseTests = "utilisateur@exemple.test";
-    public const string PasswordOfTheAccountInTheseTests = "Mot-De-Passe-Valide-1";
-    public const string WrongPasswordTypedInTheseTests = "Mauvais-Mot-De-Passe-2";
+    public const string AccountEmail = "utilisateur@exemple.test";
+    public const string AccountPassword = "Mot-De-Passe-Valide-1";
+    public const string WrongPassword = "Mauvais-Mot-De-Passe-2";
 
-    public static readonly IPAddress IpAddressOfTheVisitorInTheseTests = IPAddress.Parse("203.0.113.7");
+    public static readonly IPAddress IpAddress = IPAddress.Parse("203.0.113.7");
 
-    public FakeUserAccountRepository RepositoryThatKeepsAccountsInMemory { get; } = new FakeUserAccountRepository();
-    public FakeSecurityEventRepository RepositoryThatKeepsSecurityEventsInMemory { get; } = new FakeSecurityEventRepository();
-    public FakeUserSessionRepository RepositoryThatKeepsSessionsInMemory { get; }
-    public FakeTwoFactorAuthenticationRepository RepositoryThatKeepsTwoFactorDataInMemory { get; }
-    public FakeBackgroundEmailRequestQueue QueueThatKeepsTheEmailRequestsInMemory { get; } = new FakeBackgroundEmailRequestQueue();
-    public FakePasswordHasher HasherThatCountsTheComparedPasswords { get; } = new FakePasswordHasher();
-    public FakeTimeProviderForTests ClockThatOnlyMovesWhenTestsAskIt { get; } = new FakeTimeProviderForTests();
-    public RandomSecureTokenGenerator RealGeneratorOfTheTokens { get; } = new RandomSecureTokenGenerator();
-    public OtpNetAuthenticatorCodeTool RealToolThatCalculatesTheCodes { get; } = new OtpNetAuthenticatorCodeTool();
-    public AesGcmTotpSecretProtector RealProtectorOfTheSecrets { get; set; } = new AesGcmTotpSecretProtector(TwoFactorTestTools.CreateNewEncryptionKeyForOneTest());
-    public InMemoryLoginsWaitingForTheirCodeStore StoreOfTheLoginsWaitingForTheirCode { get; }
-    public InMemorySecretsWaitingForActivationStore StoreOfTheSecretsWaitingForActivation { get; }
-    public InMemoryUsedAuthenticatorCodesRegister RegisterOfTheCodesAlreadyUsed { get; }
+    public FakeUserAccountRepository AccountRepository { get; } = new FakeUserAccountRepository();
+    public FakeSecurityEventRepository SecurityEventRepository { get; } = new FakeSecurityEventRepository();
+    public FakeUserSessionRepository SessionRepository { get; } = new FakeUserSessionRepository();
+    public FakeTwoFactorAuthenticationRepository TwoFactorRepository { get; } = new FakeTwoFactorAuthenticationRepository();
+    public FakeDatabaseUnitOfWork UnitOfWork { get; }
+    public FakeBackgroundEmailRequestQueue EmailQueue { get; } = new FakeBackgroundEmailRequestQueue();
+    public FakePasswordHasher PasswordHasher { get; } = new FakePasswordHasher();
+    public FakeBackupCodeHasher BackupCodeHasher { get; } = new FakeBackupCodeHasher();
+    public FakeTimeProvider Clock { get; } = new FakeTimeProvider();
+    public RandomSecureTokenGenerator TokenGenerator { get; } = new RandomSecureTokenGenerator();
+    public OtpNetAuthenticatorCodeTool AuthenticatorCodeTool { get; } = new OtpNetAuthenticatorCodeTool();
+    public AesGcmTotpSecretProtector SecretProtector { get; set; } = new AesGcmTotpSecretProtector(TwoFactorTestTools.CreateEncryptionKey());
+    public InMemoryWaitingLoginStore WaitingLoginStore { get; }
+    public InMemoryWaitingSecretStore WaitingSecretStore { get; }
+    public InMemoryUsedAuthenticatorCodesRegister UsedCodesRegister { get; }
 
-    // Relie les faux accès entre eux, et donne aux outils en mémoire la fausse horloge.
+    // Relie les faux accès à la fausse unité de travail, et donne aux outils en mémoire la fausse horloge.
     public TwoFactorServicesWithFakeTools()
     {
-        RepositoryThatKeepsSessionsInMemory = new FakeUserSessionRepository(RepositoryThatKeepsSecurityEventsInMemory);
-        RepositoryThatKeepsTwoFactorDataInMemory = new FakeTwoFactorAuthenticationRepository(RepositoryThatKeepsAccountsInMemory, RepositoryThatKeepsSecurityEventsInMemory);
-        StoreOfTheLoginsWaitingForTheirCode = new InMemoryLoginsWaitingForTheirCodeStore(ClockThatOnlyMovesWhenTestsAskIt);
-        StoreOfTheSecretsWaitingForActivation = new InMemorySecretsWaitingForActivationStore(ClockThatOnlyMovesWhenTestsAskIt);
-        RegisterOfTheCodesAlreadyUsed = new InMemoryUsedAuthenticatorCodesRegister(ClockThatOnlyMovesWhenTestsAskIt);
+        UnitOfWork = new FakeDatabaseUnitOfWork(
+            AccountRepository,
+            SessionRepository,
+            TwoFactorRepository,
+            SecurityEventRepository);
+        WaitingLoginStore = new InMemoryWaitingLoginStore(Clock);
+        WaitingSecretStore = new InMemoryWaitingSecretStore(Clock);
+        UsedCodesRegister = new InMemoryUsedAuthenticatorCodesRegister(Clock);
+    }
+
+    // Crée le service qui enregistre les changements, avec ses réessais.
+    public DatabaseChangesSavingService CreateSavingService()
+    {
+        return new DatabaseChangesSavingService(UnitOfWork);
+    }
+
+    // Crée le service qui écrit dans le faux journal de sécurité.
+    public SecurityJournalService CreateSecurityJournal()
+    {
+        return new SecurityJournalService(SecurityEventRepository, Clock);
     }
 
     // Crée le service qui vérifie les codes.
-    public TwoFactorCodeCheckingService CreateTwoFactorCodeCheckingServiceWithFakeTools()
+    public TwoFactorCodeCheckingService CreateCodeCheckingService()
     {
         return new TwoFactorCodeCheckingService(
-            RepositoryThatKeepsTwoFactorDataInMemory,
-            HasherThatCountsTheComparedPasswords,
-            RealToolThatCalculatesTheCodes,
-            RealProtectorOfTheSecrets,
-            RegisterOfTheCodesAlreadyUsed,
-            ClockThatOnlyMovesWhenTestsAskIt);
+            TwoFactorRepository,
+            BackupCodeHasher,
+            AuthenticatorCodeTool,
+            SecretProtector,
+            UsedCodesRegister,
+            Clock);
     }
 
     // Crée le service qui ouvre les sessions.
-    public UserSessionOpeningService CreateSessionOpeningServiceWithFakeTools()
+    public UserSessionOpeningService CreateSessionOpeningService()
     {
         return new UserSessionOpeningService(
-            RepositoryThatKeepsAccountsInMemory,
-            RepositoryThatKeepsSessionsInMemory,
-            RepositoryThatKeepsTwoFactorDataInMemory,
-            RealGeneratorOfTheTokens,
-            ClockThatOnlyMovesWhenTestsAskIt);
+            AccountRepository,
+            SessionRepository,
+            TwoFactorRepository,
+            CreateSavingService(),
+            CreateSecurityJournal(),
+            TokenGenerator,
+            Clock);
     }
 
     // Crée le service qui vérifie le mot de passe.
-    public AccountLoginService CreateAccountLoginServiceWithFakeTools()
+    public AccountLoginService CreateLoginService()
     {
         return new AccountLoginService(
-            RepositoryThatKeepsAccountsInMemory,
-            RepositoryThatKeepsSecurityEventsInMemory,
-            QueueThatKeepsTheEmailRequestsInMemory,
-            HasherThatCountsTheComparedPasswords,
-            RealGeneratorOfTheTokens,
-            StoreOfTheLoginsWaitingForTheirCode,
-            CreateSessionOpeningServiceWithFakeTools(),
-            ClockThatOnlyMovesWhenTestsAskIt);
+            AccountRepository,
+            CreateSavingService(),
+            CreateSecurityJournal(),
+            EmailQueue,
+            PasswordHasher,
+            TokenGenerator,
+            WaitingLoginStore,
+            CreateSessionOpeningService(),
+            Clock);
     }
 
     // Crée le service qui finit la connexion avec un code.
-    public TwoFactorLoginService CreateTwoFactorLoginServiceWithFakeTools()
+    public TwoFactorLoginService CreateTwoFactorLoginService()
     {
         return new TwoFactorLoginService(
-            RepositoryThatKeepsAccountsInMemory,
-            RepositoryThatKeepsSecurityEventsInMemory,
-            RealGeneratorOfTheTokens,
-            StoreOfTheLoginsWaitingForTheirCode,
-            CreateTwoFactorCodeCheckingServiceWithFakeTools(),
-            CreateSessionOpeningServiceWithFakeTools(),
-            ClockThatOnlyMovesWhenTestsAskIt);
+            AccountRepository,
+            CreateSecurityJournal(),
+            TokenGenerator,
+            WaitingLoginStore,
+            CreateCodeCheckingService(),
+            CreateSessionOpeningService());
     }
 
     // Crée le service qui active la double authentification.
-    public TwoFactorActivationService CreateTwoFactorActivationServiceWithFakeTools()
+    public TwoFactorActivationService CreateActivationService()
     {
         return new TwoFactorActivationService(
-            RepositoryThatKeepsAccountsInMemory,
-            RepositoryThatKeepsTwoFactorDataInMemory,
-            RepositoryThatKeepsSecurityEventsInMemory,
-            HasherThatCountsTheComparedPasswords,
-            RealGeneratorOfTheTokens,
-            RealToolThatCalculatesTheCodes,
-            RealProtectorOfTheSecrets,
-            StoreOfTheSecretsWaitingForActivation,
-            CreateTwoFactorCodeCheckingServiceWithFakeTools(),
-            ClockThatOnlyMovesWhenTestsAskIt);
+            AccountRepository,
+            TwoFactorRepository,
+            CreateSavingService(),
+            CreateSecurityJournal(),
+            PasswordHasher,
+            BackupCodeHasher,
+            TokenGenerator,
+            AuthenticatorCodeTool,
+            SecretProtector,
+            WaitingSecretStore,
+            CreateCodeCheckingService());
     }
 
     // Crée le service qui désactive la double authentification.
-    public TwoFactorDeactivationService CreateTwoFactorDeactivationServiceWithFakeTools()
+    public TwoFactorDeactivationService CreateDeactivationService()
     {
         return new TwoFactorDeactivationService(
-            RepositoryThatKeepsAccountsInMemory,
-            RepositoryThatKeepsTwoFactorDataInMemory,
-            RepositoryThatKeepsSecurityEventsInMemory,
-            HasherThatCountsTheComparedPasswords,
-            CreateTwoFactorCodeCheckingServiceWithFakeTools(),
-            ClockThatOnlyMovesWhenTestsAskIt);
+            AccountRepository,
+            TwoFactorRepository,
+            CreateSavingService(),
+            CreateSecurityJournal(),
+            PasswordHasher,
+            CreateCodeCheckingService());
     }
 
     // Crée le service qui change un mot de passe oublié.
-    public PasswordResetService CreatePasswordResetServiceWithFakeTools()
+    public PasswordResetService CreatePasswordResetService()
     {
         return new PasswordResetService(
-            RepositoryThatKeepsAccountsInMemory,
-            RepositoryThatKeepsSessionsInMemory,
-            HasherThatCountsTheComparedPasswords,
-            RealGeneratorOfTheTokens,
-            ClockThatOnlyMovesWhenTestsAskIt);
+            AccountRepository,
+            SessionRepository,
+            CreateSavingService(),
+            CreateSecurityJournal(),
+            PasswordHasher,
+            TokenGenerator,
+            Clock);
     }
 
     // Ajoute à la fausse base un compte confirmé, sans double authentification.
-    public User AddAccountWithoutTwoFactorToTheFakeDatabase(string emailAddressOfTheAccountToAdd = EmailAddressOfTheAccountInTheseTests)
+    public User AddAccountWithoutTwoFactor(string emailAddress = AccountEmail, short lockoutCount = 0)
     {
-        var accountAddedToTheFakeDatabase = new User
+        var account = new User
         {
-            Email = emailAddressOfTheAccountToAdd,
-            PasswordHash = FakePasswordHasher.PrefixOfTheFakePasswordHashes + PasswordOfTheAccountInTheseTests,
-            IsEmailConfirmed = true
+            Email = emailAddress,
+            PasswordHash = FakePasswordHasher.HashPrefix + AccountPassword,
+            IsEmailConfirmed = true,
+            LockoutCount = lockoutCount
         };
-        RepositoryThatKeepsAccountsInMemory.SavedUsers.Add(accountAddedToTheFakeDatabase);
+        AccountRepository.SavedUsers.Add(account);
 
-        return accountAddedToTheFakeDatabase;
+        return account;
     }
 
     // Ajoute à la fausse base un compte dont la double authentification est déjà activée, avec son secret et ses 10 codes de secours.
-    public ActivatedAccountOfTheseTests AddActivatedAccountToTheFakeDatabase(string emailAddressOfTheAccountToAdd = EmailAddressOfTheAccountInTheseTests)
+    public ActivatedAccount AddActivatedAccount(string emailAddress = AccountEmail, short lockoutCount = 0)
     {
-        var accountAddedToTheFakeDatabase = AddAccountWithoutTwoFactorToTheFakeDatabase(emailAddressOfTheAccountToAdd);
-        var secretSharedWithTheAuthenticatorApplication = RealToolThatCalculatesTheCodes.GenerateNewRandomSecretForTheAuthenticatorApplication();
-        accountAddedToTheFakeDatabase.IsTwoFactorEnabled = true;
-        accountAddedToTheFakeDatabase.EncryptedTotpSecret = RealProtectorOfTheSecrets.EncryptSecretOfThisUserAccount(secretSharedWithTheAuthenticatorApplication, accountAddedToTheFakeDatabase.Id);
+        var account = AddAccountWithoutTwoFactor(emailAddress, lockoutCount);
+        var secret = AuthenticatorCodeTool.GenerateSecret();
+        account.ActivateTwoFactor(SecretProtector.Encrypt(secret, account.Id));
 
-        var backupCodesInTheirCleanForm = new List<string>();
-        for (var numberOfTheBackupCodeBeingAdded = 1; numberOfTheBackupCodeBeingAdded <= TwoFactorAuthenticationRules.NumberOfBackupCodesGivenAtEachActivation; numberOfTheBackupCodeBeingAdded++)
+        var cleanedCodes = new List<string>();
+        for (var codeNumber = 1; codeNumber <= TwoFactorAuthenticationRules.BackupCodesPerActivation; codeNumber++)
         {
-            var backupCodeInItsCleanForm = RealGeneratorOfTheTokens.GenerateNewRandomBackupCodeInItsCleanForm();
-            backupCodesInTheirCleanForm.Add(backupCodeInItsCleanForm);
-            RepositoryThatKeepsTwoFactorDataInMemory.SavedBackupCodes.Add(new BackupCode
+            var cleanedCode = TokenGenerator.GenerateBackupCode();
+            cleanedCodes.Add(cleanedCode);
+            TwoFactorRepository.SavedBackupCodes.Add(new BackupCode
             {
-                CodeHash = FakePasswordHasher.PrefixOfTheFakePasswordHashes + backupCodeInItsCleanForm,
-                UserId = accountAddedToTheFakeDatabase.Id
+                CodeHash = FakeBackupCodeHasher.CreateFakeHash(cleanedCode, account.Id),
+                UserId = account.Id
             });
         }
 
-        return new ActivatedAccountOfTheseTests
+        return new ActivatedAccount
         {
-            UserAccount = accountAddedToTheFakeDatabase,
-            SecretOfTheAuthenticatorApplication = secretSharedWithTheAuthenticatorApplication,
-            BackupCodesInTheirCleanForm = backupCodesInTheirCleanForm
+            UserAccount = account,
+            Secret = secret,
+            BackupCodes = cleanedCodes
         };
     }
 
     // Calcule le code qu'affiche le téléphone à la date de la fausse horloge.
-    public string CalculateCodeShownOnThePhoneNow(string secretSharedWithTheAuthenticatorApplication)
+    public string CalculateCurrentCode(string secret)
     {
-        return TwoFactorTestTools.CalculateAuthenticatorCodeShownAtThisDate(secretSharedWithTheAuthenticatorApplication, ClockThatOnlyMovesWhenTestsAskIt.GetUtcNow());
+        return TwoFactorTestTools.CalculateCodeAt(secret, Clock.GetUtcNow());
     }
 
     // Donne un code à 6 chiffres qui ne vaut rien à la date de la fausse horloge.
-    public string FindCodeThatIsWrongNow(string secretSharedWithTheAuthenticatorApplication)
+    public string FindWrongCode(string secret)
     {
-        return TwoFactorTestTools.FindAuthenticatorCodeThatIsWrongAtThisDate(secretSharedWithTheAuthenticatorApplication, ClockThatOnlyMovesWhenTestsAskIt.GetUtcNow());
+        return TwoFactorTestTools.FindWrongCodeAt(secret, Clock.GetUtcNow());
     }
 
     // Passe à la période suivante : le téléphone affiche un nouveau code.
-    public void WaitForTheNextCodeOnThePhone()
+    public void WaitForNextCode()
     {
-        ClockThatOnlyMovesWhenTestsAskIt.MoveFakeClockForwardByThisDuration(TimeSpan.FromSeconds(TwoFactorTestTools.NumberOfSecondsInOneAuthenticatorPeriod));
+        Clock.Advance(TimeSpan.FromSeconds(TwoFactorTestTools.PeriodInSeconds));
     }
 
     // Fait une tentative de connexion avec ce mot de passe.
-    public async Task<AccountLoginResult> TryToLogInWithThisPasswordAsync(string passwordTypedByTheVisitorInThisTest)
+    public async Task<AccountLoginResult> LogInAsync(string password)
     {
-        return await CreateAccountLoginServiceWithFakeTools().LogVisitorInWithEmailAddressAndPasswordAsync(new LoginAttemptFromVisitor
+        return await CreateLoginService().LogInAsync(new LoginAttempt
         {
-            EmailAddressTypedByTheVisitor = EmailAddressOfTheAccountInTheseTests,
-            PasswordTextTypedByTheVisitor = passwordTypedByTheVisitorInThisTest,
-            IpAddressOfTheVisitor = IpAddressOfTheVisitorInTheseTests
+            EmailAddress = AccountEmail,
+            Password = password,
+            IpAddress = IpAddress
         });
     }
 
     // Donne le bon mot de passe, et renvoie le jeton de la connexion qui attend son code.
-    public async Task<string> LogInWithTheRightPasswordThenGetTheWaitingLoginTokenAsync()
+    public async Task<string> LogInThenGetWaitingLoginTokenAsync()
     {
-        var resultOfTheLoginWithTheRightPassword = await TryToLogInWithThisPasswordAsync(PasswordOfTheAccountInTheseTests);
+        var result = await LogInAsync(AccountPassword);
 
-        return resultOfTheLoginWithTheRightPassword.WaitingLoginTokenToPutInTheCookie!;
+        return Assert.IsType<AccountLoginResult.WaitingForTwoFactorCode>(result).WaitingLoginToken;
     }
 
     // Finit la connexion avec ce code.
-    public async Task<TwoFactorLoginResult> FinishLoginWithThisCodeAsync(string? waitingLoginTokenReadInTheCookie, string codeTypedByTheVisitorInThisTest)
+    public async Task<TwoFactorLoginResult> FinishLoginAsync(string? waitingLoginToken, string code)
     {
-        return await CreateTwoFactorLoginServiceWithFakeTools().FinishLoginOfTheVisitorWithThisCodeAsync(new TwoFactorCodeAttemptFromVisitor
+        return await CreateTwoFactorLoginService().FinishAsync(new TwoFactorCodeAttempt
         {
-            CodeTypedByTheVisitor = codeTypedByTheVisitorInThisTest,
-            IpAddressOfTheVisitor = IpAddressOfTheVisitorInTheseTests,
-            WaitingLoginTokenReadInTheCookie = waitingLoginTokenReadInTheCookie
+            Code = code,
+            IpAddress = IpAddress,
+            WaitingLoginToken = waitingLoginToken
         });
     }
 
     // Compte les événements de ce type et de ce résultat dans le faux journal.
-    public int CountSecurityEventsInTheJournal(SecurityEventType typeOfTheEventsToCount, SecurityEventResult resultOfTheEventsToCount)
+    public int CountSecurityEvents(SecurityEventType type, SecurityEventResult result)
     {
-        var numberOfEventsFoundInTheJournal = 0;
+        var eventCount = 0;
 
-        foreach (var securityEventKeptInTheJournal in RepositoryThatKeepsSecurityEventsInMemory.SavedSecurityEvents)
+        foreach (var securityEvent in SecurityEventRepository.SavedSecurityEvents)
         {
-            if (securityEventKeptInTheJournal.Type == typeOfTheEventsToCount && securityEventKeptInTheJournal.Result == resultOfTheEventsToCount)
+            if (securityEvent.Type == type && securityEvent.Result == result)
             {
-                numberOfEventsFoundInTheJournal = numberOfEventsFoundInTheJournal + 1;
+                eventCount = eventCount + 1;
             }
         }
 
-        return numberOfEventsFoundInTheJournal;
+        return eventCount;
     }
 }
 
 // Un compte activé dans la fausse base, avec ce que son propriétaire connaît : le secret de son téléphone et ses codes de secours.
-public class ActivatedAccountOfTheseTests
+public class ActivatedAccount
 {
     public required User UserAccount { get; init; }
-    public required string SecretOfTheAuthenticatorApplication { get; init; }
-    public required List<string> BackupCodesInTheirCleanForm { get; init; }
+    public required string Secret { get; init; }
+    public required List<string> BackupCodes { get; init; }
 }

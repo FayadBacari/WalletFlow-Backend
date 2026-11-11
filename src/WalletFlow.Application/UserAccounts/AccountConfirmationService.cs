@@ -1,3 +1,4 @@
+using WalletFlow.Application.Persistence;
 using WalletFlow.Application.Security;
 using WalletFlow.Domain.UsersAndSecurity;
 
@@ -7,95 +8,89 @@ namespace WalletFlow.Application.UserAccounts;
 // Il faut avoir à la fois la boîte mail et le mot de passe : ouvrir le lien seul n'active rien.
 public class AccountConfirmationService
 {
-    public const string ErrorMessageForLinkNoLongerValid = "Ce lien n'est plus valable. Inscris-toi à nouveau pour en recevoir un autre.";
-
-    public const string ErrorMessageForWrongPasswordOnConfirmation = "Ce n'est pas le mot de passe choisi à l'inscription. Si tu l'as oublié, inscris-toi à nouveau.";
-
-    private readonly IUserAccountRepository repositoryOfTheUserAccountsInDatabase;
-    private readonly IPasswordHasher hasherOfThePasswordsChosenByVisitors;
-    private readonly ISecureTokenGenerator generatorOfTheSecureRandomEmailTokens;
-    private readonly TimeProvider clockThatGivesTheCurrentDateAndTime;
+    private readonly IUserAccountRepository accountRepository;
+    private readonly IDatabaseUnitOfWork unitOfWork;
+    private readonly IPasswordHasher passwordHasher;
+    private readonly ISecureTokenGenerator tokenGenerator;
+    private readonly TimeProvider clock;
 
     // Reçoit les outils dont la confirmation a besoin.
     public AccountConfirmationService(
-        IUserAccountRepository repositoryOfTheUserAccountsInDatabase,
-        IPasswordHasher hasherOfThePasswordsChosenByVisitors,
-        ISecureTokenGenerator generatorOfTheSecureRandomEmailTokens,
-        TimeProvider clockThatGivesTheCurrentDateAndTime)
+        IUserAccountRepository accountRepository,
+        IDatabaseUnitOfWork unitOfWork,
+        IPasswordHasher passwordHasher,
+        ISecureTokenGenerator tokenGenerator,
+        TimeProvider clock)
     {
-        this.repositoryOfTheUserAccountsInDatabase = repositoryOfTheUserAccountsInDatabase;
-        this.hasherOfThePasswordsChosenByVisitors = hasherOfThePasswordsChosenByVisitors;
-        this.generatorOfTheSecureRandomEmailTokens = generatorOfTheSecureRandomEmailTokens;
-        this.clockThatGivesTheCurrentDateAndTime = clockThatGivesTheCurrentDateAndTime;
+        this.accountRepository = accountRepository;
+        this.unitOfWork = unitOfWork;
+        this.passwordHasher = passwordHasher;
+        this.tokenGenerator = tokenGenerator;
+        this.clock = clock;
     }
 
     // Confirme le compte si le lien est encore valable et si le mot de passe est le bon.
-    public async Task<AccountConfirmationResult> ConfirmAccountWithLinkTokenAndPasswordAsync(
-        string tokenReadInTheConfirmationLink,
-        string passwordTypedOnTheConfirmationPage)
+    public async Task<AccountConfirmationResult> ConfirmAsync(
+        string linkToken,
+        string password)
     {
-        var currentDateOfTheAccountConfirmation = clockThatGivesTheCurrentDateAndTime.GetUtcNow().UtcDateTime;
+        var now = clock.GetUtcNow().UtcDateTime;
 
-        var tokenThatCanStillBeUsed = await FindTokenThatCanStillBeUsedAtThisDateAsync(tokenReadInTheConfirmationLink, currentDateOfTheAccountConfirmation);
-        if (tokenThatCanStillBeUsed == null)
+        var token = await FindUsableTokenAsync(linkToken, now);
+        if (token == null)
         {
-            return CreateResultForTheLinkNoLongerValid();
+            return AccountConfirmationResult.LinkNoLongerValid;
         }
 
-        var accountThatOwnsTheConfirmationToken = await repositoryOfTheUserAccountsInDatabase.FindUserAccountByIdentifierAsync(tokenThatCanStillBeUsed.UserId);
-        if (accountThatOwnsTheConfirmationToken == null || accountThatOwnsTheConfirmationToken.IsEmailConfirmed)
+        var account = await accountRepository.FindByIdAsync(token.UserId);
+        if (account == null || account.IsEmailConfirmed)
         {
-            return CreateResultForTheLinkNoLongerValid();
+            return AccountConfirmationResult.LinkNoLongerValid;
         }
 
-        return await CheckPasswordThenConfirmTheAccountAsync(accountThatOwnsTheConfirmationToken, tokenThatCanStillBeUsed, passwordTypedOnTheConfirmationPage, currentDateOfTheAccountConfirmation);
+        return await CheckPasswordThenConfirmAsync(account, token, password, now);
     }
 
     // Vérifie le mot de passe, puis confirme le compte. Un mauvais mot de passe ne consomme pas le lien.
-    private async Task<AccountConfirmationResult> CheckPasswordThenConfirmTheAccountAsync(
-        User accountThatOwnsTheConfirmationToken,
-        EmailToken tokenThatCanStillBeUsed,
-        string passwordTypedOnTheConfirmationPage,
-        DateTime currentDateOfTheAccountConfirmation)
+    private async Task<AccountConfirmationResult> CheckPasswordThenConfirmAsync(
+        User account,
+        EmailToken token,
+        string password,
+        DateTime now)
     {
-        var passwordWrittenInItsNormalizedForm = PasswordRules.ConvertPasswordIntoItsNormalizedForm(passwordTypedOnTheConfirmationPage);
+        var normalizedPassword = PasswordRules.Normalize(password);
 
-        if (!hasherOfThePasswordsChosenByVisitors.CheckThatPasswordMatchesItsSecureHash(passwordWrittenInItsNormalizedForm, accountThatOwnsTheConfirmationToken.PasswordHash))
+        if (!await passwordHasher.VerifyAsync(normalizedPassword, account.PasswordHash))
         {
-            return new AccountConfirmationResult { PasswordErrorMessage = ErrorMessageForWrongPasswordOnConfirmation };
+            return AccountConfirmationResult.WrongPassword;
         }
 
-        // Une nouvelle inscription a pu remplacer ce lien pendant la vérification du mot de passe.
-        var accountWasConfirmedInTheDatabase = await repositoryOfTheUserAccountsInDatabase.TryToConfirmAccountAndUseItsTokenAsync(
-            accountThatOwnsTheConfirmationToken,
-            tokenThatCanStillBeUsed,
-            currentDateOfTheAccountConfirmation);
+        account.ConfirmEmail();
+        token.MarkAsUsed(now);
 
-        if (!accountWasConfirmedInTheDatabase)
+        // Une nouvelle inscription a pu remplacer ce lien pendant la vérification du mot de passe :
+        // l'enregistrement échoue alors, et rien n'est modifié. Il n'y a pas de second passage : le lien ne vaut plus.
+        var saved = await unitOfWork.TrySaveChangesAsync();
+
+        if (!saved)
         {
-            return CreateResultForTheLinkNoLongerValid();
+            return AccountConfirmationResult.LinkNoLongerValid;
         }
 
-        return new AccountConfirmationResult();
+        return AccountConfirmationResult.AccountConfirmed;
     }
 
     // Cherche le jeton du lien. Renvoie null s'il n'existe pas, s'il a déjà servi ou s'il a expiré.
-    private async Task<EmailToken?> FindTokenThatCanStillBeUsedAtThisDateAsync(string tokenReadInTheConfirmationLink, DateTime currentDateOfTheAccountConfirmation)
+    private async Task<EmailToken?> FindUsableTokenAsync(string linkToken, DateTime now)
     {
-        var hashOfTheTokenFromTheLink = generatorOfTheSecureRandomEmailTokens.ConvertSecureTokenIntoItsHash(tokenReadInTheConfirmationLink);
-        var tokenFoundInTheDatabaseTable = await repositoryOfTheUserAccountsInDatabase.FindEmailTokenOfThisTypeByItsHashAsync(hashOfTheTokenFromTheLink, EmailTokenType.SignupConfirmation);
+        var tokenHash = tokenGenerator.HashToken(linkToken);
+        var token = await accountRepository.FindTokenAsync(tokenHash, EmailTokenType.SignupConfirmation);
 
-        if (tokenFoundInTheDatabaseTable == null || !EmailTokenRules.CheckThatTokenCanStillBeUsedAtThisDate(tokenFoundInTheDatabaseTable, currentDateOfTheAccountConfirmation))
+        if (token == null || !token.CanBeUsedAt(now))
         {
             return null;
         }
 
-        return tokenFoundInTheDatabaseTable;
-    }
-
-    // Donne le même refus pour tout lien qui ne vaut plus, sans dire pourquoi.
-    private static AccountConfirmationResult CreateResultForTheLinkNoLongerValid()
-    {
-        return new AccountConfirmationResult { LinkErrorMessage = ErrorMessageForLinkNoLongerValid };
+        return token;
     }
 }

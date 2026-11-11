@@ -7,42 +7,42 @@ namespace WalletFlow.Tests.Infrastructure;
 // Vérifie le chiffrement du secret de double authentification avec le vrai AES-256-GCM (SS §2 et §7).
 public class AesGcmTotpSecretProtectorTests
 {
-    private const string SecretOfThePhoneEncryptedInTheseTests = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ";
+    private const string Secret = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ";
 
-    private static readonly Guid IdentifierOfTheAccountInTheseTests = Guid.NewGuid();
+    private static readonly Guid AccountId = Guid.NewGuid();
 
-    private readonly AesGcmTotpSecretProtector protectorBeingTestedWithARealKey = new AesGcmTotpSecretProtector(TwoFactorTestTools.CreateNewEncryptionKeyForOneTest());
+    private readonly AesGcmTotpSecretProtector protector = new AesGcmTotpSecretProtector(TwoFactorTestTools.CreateEncryptionKey());
 
     [Fact]
     public void SecretComesBackIdenticalAfterEncryptionAndDecryption()
     {
-        var secretOfThePhoneEncryptedForTheDatabase = protectorBeingTestedWithARealKey.EncryptSecretOfThisUserAccount(SecretOfThePhoneEncryptedInTheseTests, IdentifierOfTheAccountInTheseTests);
+        var encryptedSecret = protector.Encrypt(Secret, AccountId);
 
-        Assert.Equal(SecretOfThePhoneEncryptedInTheseTests, protectorBeingTestedWithARealKey.DecryptSecretOfThisUserAccount(secretOfThePhoneEncryptedForTheDatabase, IdentifierOfTheAccountInTheseTests));
+        Assert.Equal(Secret, protector.Decrypt(encryptedSecret, AccountId));
     }
 
     [Fact]
     public void EncryptedTextHidesTheSecretAndFitsInTheDatabaseColumn()
     {
-        var secretOfThePhoneEncryptedForTheDatabase = protectorBeingTestedWithARealKey.EncryptSecretOfThisUserAccount(SecretOfThePhoneEncryptedInTheseTests, IdentifierOfTheAccountInTheseTests);
+        var encryptedSecret = protector.Encrypt(Secret, AccountId);
 
-        Assert.DoesNotContain(SecretOfThePhoneEncryptedInTheseTests, secretOfThePhoneEncryptedForTheDatabase);
-        Assert.Equal(80, secretOfThePhoneEncryptedForTheDatabase.Length);
+        Assert.DoesNotContain(Secret, encryptedSecret);
+        Assert.Equal(80, encryptedSecret.Length);
     }
 
     // Avec un nombre aléatoire réutilisé, AES-GCM perdrait toute sa protection : chaque chiffrement doit donc en tirer un nouveau.
     [Fact]
     public void SameSecretNeverGivesTheSameEncryptedTextTwice()
     {
-        var encryptedTextsAlreadySeenInThisTest = new HashSet<string>();
-        var randomNoncesAlreadySeenInThisTest = new HashSet<string>();
+        var seenCiphertexts = new HashSet<string>();
+        var seenNonces = new HashSet<string>();
 
-        for (var numberOfTheEncryptionBeingDone = 1; numberOfTheEncryptionBeingDone <= 1000; numberOfTheEncryptionBeingDone++)
+        for (var encryptionNumber = 1; encryptionNumber <= 1000; encryptionNumber++)
         {
-            var secretOfThePhoneEncryptedForTheDatabase = protectorBeingTestedWithARealKey.EncryptSecretOfThisUserAccount(SecretOfThePhoneEncryptedInTheseTests, IdentifierOfTheAccountInTheseTests);
+            var encryptedSecret = protector.Encrypt(Secret, AccountId);
 
-            Assert.True(encryptedTextsAlreadySeenInThisTest.Add(secretOfThePhoneEncryptedForTheDatabase));
-            Assert.True(randomNoncesAlreadySeenInThisTest.Add(Convert.ToBase64String(Convert.FromBase64String(secretOfThePhoneEncryptedForTheDatabase).AsSpan(0, 12))));
+            Assert.True(seenCiphertexts.Add(encryptedSecret));
+            Assert.True(seenNonces.Add(Convert.ToBase64String(Convert.FromBase64String(encryptedSecret).AsSpan(0, 12))));
         }
     }
 
@@ -50,18 +50,18 @@ public class AesGcmTotpSecretProtectorTests
     [Fact]
     public void SecretCopiedOnAnotherAccountCannotBeDecrypted()
     {
-        var secretOfThePhoneEncryptedForTheDatabase = protectorBeingTestedWithARealKey.EncryptSecretOfThisUserAccount(SecretOfThePhoneEncryptedInTheseTests, IdentifierOfTheAccountInTheseTests);
+        var encryptedSecret = protector.Encrypt(Secret, AccountId);
 
-        Assert.ThrowsAny<CryptographicException>(() => protectorBeingTestedWithARealKey.DecryptSecretOfThisUserAccount(secretOfThePhoneEncryptedForTheDatabase, Guid.NewGuid()));
+        Assert.ThrowsAny<CryptographicException>(() => protector.Decrypt(encryptedSecret, Guid.NewGuid()));
     }
 
     [Fact]
     public void SecretCannotBeDecryptedWithAnotherKey()
     {
-        var secretOfThePhoneEncryptedForTheDatabase = protectorBeingTestedWithARealKey.EncryptSecretOfThisUserAccount(SecretOfThePhoneEncryptedInTheseTests, IdentifierOfTheAccountInTheseTests);
-        var protectorOfTheSecretsWithAnotherKey = new AesGcmTotpSecretProtector(TwoFactorTestTools.CreateNewEncryptionKeyForOneTest());
+        var encryptedSecret = protector.Encrypt(Secret, AccountId);
+        var otherProtector = new AesGcmTotpSecretProtector(TwoFactorTestTools.CreateEncryptionKey());
 
-        Assert.ThrowsAny<CryptographicException>(() => protectorOfTheSecretsWithAnotherKey.DecryptSecretOfThisUserAccount(secretOfThePhoneEncryptedForTheDatabase, IdentifierOfTheAccountInTheseTests));
+        Assert.ThrowsAny<CryptographicException>(() => otherProtector.Decrypt(encryptedSecret, AccountId));
     }
 
     // Le moindre bit changé dans le nombre aléatoire, le sceau ou le secret chiffré est vu : le secret n'est jamais deviné.
@@ -72,12 +72,12 @@ public class AesGcmTotpSecretProtectorTests
     [InlineData(27)]
     [InlineData(28)]
     [InlineData(59)]
-    public void SecretModifiedInTheDatabaseCannotBeDecrypted(int positionOfTheByteChangedInThisTest)
+    public void SecretModifiedInTheDatabaseCannotBeDecrypted(int changedPosition)
     {
-        var bytesOfTheSecretOnceItIsEncrypted = Convert.FromBase64String(protectorBeingTestedWithARealKey.EncryptSecretOfThisUserAccount(SecretOfThePhoneEncryptedInTheseTests, IdentifierOfTheAccountInTheseTests));
-        bytesOfTheSecretOnceItIsEncrypted[positionOfTheByteChangedInThisTest] = (byte)(bytesOfTheSecretOnceItIsEncrypted[positionOfTheByteChangedInThisTest] ^ 1);
+        var ciphertext = Convert.FromBase64String(protector.Encrypt(Secret, AccountId));
+        ciphertext[changedPosition] = (byte)(ciphertext[changedPosition] ^ 1);
 
-        Assert.ThrowsAny<CryptographicException>(() => protectorBeingTestedWithARealKey.DecryptSecretOfThisUserAccount(Convert.ToBase64String(bytesOfTheSecretOnceItIsEncrypted), IdentifierOfTheAccountInTheseTests));
+        Assert.ThrowsAny<CryptographicException>(() => protector.Decrypt(Convert.ToBase64String(ciphertext), AccountId));
     }
 
     // Un texte illisible en base lève une erreur : l'API répondra 500, sans jamais prendre ce texte pour un secret.
@@ -85,9 +85,9 @@ public class AesGcmTotpSecretProtectorTests
     [InlineData("")]
     [InlineData("pas-du-base64!")]
     [InlineData("AAAA")]
-    public void UnreadableTextInTheDatabaseIsNeverTakenForASecret(string unreadableTextFromTheDatabaseInThisTest)
+    public void UnreadableTextInTheDatabaseIsNeverTakenForASecret(string unreadableText)
     {
-        Assert.ThrowsAny<Exception>(() => protectorBeingTestedWithARealKey.DecryptSecretOfThisUserAccount(unreadableTextFromTheDatabaseInThisTest, IdentifierOfTheAccountInTheseTests));
+        Assert.ThrowsAny<Exception>(() => protector.Decrypt(unreadableText, AccountId));
     }
 
     // Sans le contrôle de la taille, une clé de 128 bits passerait : AES l'accepte, mais la SS demande 256 bits.
@@ -97,22 +97,22 @@ public class AesGcmTotpSecretProtectorTests
     [InlineData(31)]
     [InlineData(33)]
     [InlineData(64)]
-    public void KeyOfTheWrongSizeIsRefusedAtStartup(int numberOfBytesInTheKeyOfThisTest)
+    public void KeyOfTheWrongSizeIsRefusedAtStartup(int keyLength)
     {
-        var encryptionKeyOfTheWrongSizeInThisTest = Convert.ToBase64String(RandomNumberGenerator.GetBytes(numberOfBytesInTheKeyOfThisTest));
+        var wrongSizeKey = Convert.ToBase64String(RandomNumberGenerator.GetBytes(keyLength));
 
-        var errorRaisedByTheProtectorOfTheSecrets = Assert.Throws<InvalidOperationException>(() => new AesGcmTotpSecretProtector(encryptionKeyOfTheWrongSizeInThisTest));
+        var exception = Assert.Throws<InvalidOperationException>(() => new AesGcmTotpSecretProtector(wrongSizeKey));
 
-        Assert.DoesNotContain(encryptionKeyOfTheWrongSizeInThisTest, errorRaisedByTheProtectorOfTheSecrets.Message);
+        Assert.DoesNotContain(wrongSizeKey, exception.Message);
     }
 
     // Le message d'erreur va dans les journaux : il ne cite jamais la valeur de la clé.
     [Fact]
     public void KeyThatIsNotBase64IsRefusedAtStartupWithoutQuotingIt()
     {
-        var errorRaisedByTheProtectorOfTheSecrets = Assert.Throws<InvalidOperationException>(() => new AesGcmTotpSecretProtector("cle-secrete-mal-ecrite"));
+        var exception = Assert.Throws<InvalidOperationException>(() => new AesGcmTotpSecretProtector("cle-secrete-mal-ecrite"));
 
-        Assert.Contains("TwoFactorSecretEncryptionKey", errorRaisedByTheProtectorOfTheSecrets.Message);
-        Assert.DoesNotContain("cle-secrete-mal-ecrite", errorRaisedByTheProtectorOfTheSecrets.Message);
+        Assert.Contains("TwoFactorSecretEncryptionKey", exception.Message);
+        Assert.DoesNotContain("cle-secrete-mal-ecrite", exception.Message);
     }
 }

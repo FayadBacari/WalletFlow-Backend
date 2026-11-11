@@ -8,15 +8,15 @@ namespace WalletFlow.Infrastructure.Persistence.TableConfigurations.Notification
 public class AlertTypeTableConfiguration : IEntityTypeConfiguration<AlertType>
 {
     // Appelée par EF Core au démarrage (nom imposé par le framework).
-    public void Configure(EntityTypeBuilder<AlertType> builderOfTheAlertTypeTableMapping)
+    public void Configure(EntityTypeBuilder<AlertType> builder)
     {
-        builderOfTheAlertTypeTableMapping.ToTable("type_alerte");
+        builder.ToTable("type_alerte");
 
         // Les 8 types d'alerte sont insérés par le script SQL : leur code sert d'identifiant.
-        builderOfTheAlertTypeTableMapping.HasKey(nameof(AlertType.Code));
-        builderOfTheAlertTypeTableMapping.Property(nameof(AlertType.Code)).HasColumnName("code_type_alerte").ValueGeneratedNever();
+        builder.HasKey(nameof(AlertType.Code));
+        builder.Property(nameof(AlertType.Code)).HasColumnName("code_type_alerte").ValueGeneratedNever();
 
-        builderOfTheAlertTypeTableMapping.Property(nameof(AlertType.Label)).HasColumnName("libelle_type_alerte");
-        builderOfTheAlertTypeTableMapping.Property(nameof(AlertType.CanBeDisabled)).HasColumnName("est_desactivable");
+        builder.Property(nameof(AlertType.Label)).HasColumnName("libelle_type_alerte");
+        builder.Property(nameof(AlertType.CanBeDisabled)).HasColumnName("est_desactivable");
     }
 }

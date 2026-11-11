@@ -4,5 +4,5 @@ namespace WalletFlow.Application.TwoFactorAuthentication;
 public class TwoFactorCodeCheckResult
 {
     public required bool IsCodeValid { get; init; }
-    public Guid? IdentifierOfTheBackupCodeUsed { get; init; }
+    public Guid? BackupCodeId { get; init; }
 }

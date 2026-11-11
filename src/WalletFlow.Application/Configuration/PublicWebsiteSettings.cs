@@ -7,26 +7,26 @@ public class PublicWebsiteSettings
     public string PublicWebsiteAddress { get; }
 
     // Refuse une adresse absente ou qui n'est pas en HTTPS.
-    public PublicWebsiteSettings(string? publicWebsiteAddressFromTheConfiguration)
+    public PublicWebsiteSettings(string? websiteAddress)
     {
-        if (string.IsNullOrWhiteSpace(publicWebsiteAddressFromTheConfiguration))
+        if (string.IsNullOrWhiteSpace(websiteAddress))
         {
             throw new InvalidOperationException("Le réglage « PublicWebsiteAddress » est absent.");
         }
 
-        if (!publicWebsiteAddressFromTheConfiguration.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+        if (!websiteAddress.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
         {
             throw new InvalidOperationException("Le réglage « PublicWebsiteAddress » doit commencer par https://.");
         }
 
-        PublicWebsiteAddress = publicWebsiteAddressFromTheConfiguration.TrimEnd('/');
+        PublicWebsiteAddress = websiteAddress.TrimEnd('/');
     }
 
     // Construit un lien vers une page du site, qui demande une action avant de l'accomplir (SS §2).
     // Le jeton est placé après le # : il n'est jamais envoyé au serveur quand la page s'ouvre,
     // et n'apparaît donc pas dans ses journaux (SS §7).
-    public string BuildLinkToThisWebsitePageWithItsToken(string addressOfTheWebsitePageToOpen, string tokenGivenOnlyToTheVisitor)
+    public string BuildLink(string pagePath, string token)
     {
-        return PublicWebsiteAddress + addressOfTheWebsitePageToOpen + "#token=" + tokenGivenOnlyToTheVisitor;
+        return PublicWebsiteAddress + pagePath + "#token=" + token;
     }
 }

@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
 using WalletFlow.Api.Configuration;
 using WalletFlow.Api.Contracts;
+using WalletFlow.Api.Filters;
 using WalletFlow.Application.UserSessions;
 
 namespace WalletFlow.Api.Controllers;
@@ -15,50 +16,51 @@ namespace WalletFlow.Api.Controllers;
 [IgnoreAntiforgeryToken]
 public class AccountLoginController : ControllerBase
 {
-    public const string MessageSentWhenTheVisitorIsLoggedIn = "Tu es connecté.";
-    public const string MessageSentWhenTheLoginWaitsForItsCode = "Saisis le code de ton application d'authentification, ou un code de secours.";
+    public const string LoggedInMessage = "Tu es connecté.";
+    public const string CodeRequiredMessage = "Saisis le code de ton application d'authentification, ou un code de secours.";
 
-    private readonly AccountLoginService serviceThatLogsTheVisitorsIn;
+    private readonly AccountLoginService loginService;
 
     // Reçoit le cas d'utilisation de la connexion.
-    public AccountLoginController(AccountLoginService serviceThatLogsTheVisitorsIn)
+    public AccountLoginController(AccountLoginService loginService)
     {
-        this.serviceThatLogsTheVisitorsIn = serviceThatLogsTheVisitorsIn;
+        this.loginService = loginService;
     }
 
     // POST api/account/login : ouvre une session avec l'adresse e-mail et le mot de passe.
     // Si la double authentification est activée, aucune session ne s'ouvre : la réponse demande le code.
     [HttpPost("login")]
-    [EnableRateLimiting(RateLimitingConfiguration.PolicyNameForLoginAttemptsPerIpAddress)]
-    [RequestSizeLimit(RequestSizeConfiguration.MaximumNumberOfBytesInOneAccountRequest)]
-    public async Task<IActionResult> LogVisitorInFromTheVisitorRequest(LoginRequest requestSentByTheVisitorToLogIn)
+    [ServiceFilter(typeof(MinimumAnswerDurationFilter))]
+    [EnableRateLimiting(RateLimitingConfiguration.LoginPolicy)]
+    [RequestSizeLimit(RequestSizeConfiguration.MaximumAccountRequestBytes)]
+    public async Task<IActionResult> LogIn(LoginRequest request)
     {
-        var resultOfTheLoginOfTheVisitor = await serviceThatLogsTheVisitorsIn.LogVisitorInWithEmailAddressAndPasswordAsync(new LoginAttemptFromVisitor
+        var result = await loginService.LogInAsync(new LoginAttempt
         {
-            EmailAddressTypedByTheVisitor = requestSentByTheVisitorToLogIn.Email,
-            PasswordTextTypedByTheVisitor = requestSentByTheVisitorToLogIn.Password,
-            IpAddressOfTheVisitor = HttpContext.Connection.RemoteIpAddress,
-            DeviceTokenReadInTheCookie = Request.Cookies[SessionCookiesConfiguration.NameOfTheDeviceTokenCookie],
-            SessionTokenReadInTheCookie = Request.Cookies[SessionCookiesConfiguration.NameOfTheUserSessionCookie]
+            EmailAddress = request.Email,
+            Password = request.Password,
+            IpAddress = HttpContext.Connection.RemoteIpAddress,
+            DeviceToken = Request.Cookies[SessionCookiesConfiguration.DeviceCookieName],
+            SessionToken = Request.Cookies[SessionCookiesConfiguration.SessionCookieName]
         });
 
-        if (resultOfTheLoginOfTheVisitor.IsLoggedIn)
+        if (result is AccountLoginResult.LoggedIn loggedIn)
         {
-            SessionCookiesConfiguration.WriteLoginCookiesInThisAnswer(Response, resultOfTheLoginOfTheVisitor.SessionTokenToPutInTheCookie!, resultOfTheLoginOfTheVisitor.DeviceTokenToPutInTheCookie!);
-            return Ok(new LoginResponse(MessageSentWhenTheVisitorIsLoggedIn, false));
+            SessionCookiesConfiguration.WriteLoginCookies(Response, loggedIn.SessionToken, loggedIn.DeviceToken);
+            return Ok(new LoginResponse(LoggedInMessage, false));
         }
 
-        if (resultOfTheLoginOfTheVisitor.IsWaitingForTwoFactorCode)
+        if (result is AccountLoginResult.WaitingForTwoFactorCode waitingForCode)
         {
-            Response.Cookies.Append(SessionCookiesConfiguration.NameOfTheWaitingLoginCookie, resultOfTheLoginOfTheVisitor.WaitingLoginTokenToPutInTheCookie!, SessionCookiesConfiguration.CreateOptionsOfTheWaitingLoginCookie());
-            return Ok(new LoginResponse(MessageSentWhenTheLoginWaitsForItsCode, true));
+            Response.Cookies.Append(SessionCookiesConfiguration.WaitingLoginCookieName, waitingForCode.WaitingLoginToken, SessionCookiesConfiguration.CreateWaitingLoginCookieOptions());
+            return Ok(new LoginResponse(CodeRequiredMessage, true));
         }
 
-        if (resultOfTheLoginOfTheVisitor.EmailAddressNotConfirmedErrorMessage != null)
+        if (result is AccountLoginResult.EmailAddressNotConfirmed)
         {
-            return Problem(statusCode: StatusCodes.Status403Forbidden, title: resultOfTheLoginOfTheVisitor.EmailAddressNotConfirmedErrorMessage);
+            return Problem(statusCode: StatusCodes.Status403Forbidden, title: ErrorMessages.EmailNotConfirmed);
         }
 
-        return Problem(statusCode: StatusCodes.Status401Unauthorized, title: resultOfTheLoginOfTheVisitor.WrongCredentialsErrorMessage);
+        return Problem(statusCode: StatusCodes.Status401Unauthorized, title: ErrorMessages.WrongCredentials);
     }
 }

@@ -4,9 +4,9 @@ namespace WalletFlow.Application.TwoFactorAuthentication;
 public interface ITotpSecretProtector
 {
     // Chiffre le secret de ce compte. Le résultat seul va en base.
-    string EncryptSecretOfThisUserAccount(string secretSharedWithTheAuthenticatorApplication, Guid identifierOfTheAccountOwningTheSecret);
+    string Encrypt(string secret, Guid accountId);
 
     // Déchiffre le secret de ce compte. Lève une exception si la clé a changé, si le texte a été modifié,
     // ou s'il appartient à un autre compte : le secret n'est jamais deviné.
-    string DecryptSecretOfThisUserAccount(string secretOfThePhoneEncryptedInTheDatabase, Guid identifierOfTheAccountOwningTheSecret);
+    string Decrypt(string encryptedSecret, Guid accountId);
 }

@@ -6,43 +6,46 @@ namespace WalletFlow.Application.UserSessions;
 // Cas d'utilisation : reconnaître une session à chaque requête, et la fermer à la déconnexion (GR Auth, SS §3).
 public class UserSessionService
 {
-    private readonly IUserSessionRepository repositoryOfTheUserSessionsInDatabase;
-    private readonly ISecureTokenGenerator generatorOfTheSecureRandomTokens;
-    private readonly TimeProvider clockThatGivesTheCurrentDateAndTime;
+    private readonly IUserSessionRepository sessionRepository;
+    private readonly ISecureTokenGenerator tokenGenerator;
+    private readonly TimeProvider clock;
 
     // Reçoit les outils dont les sessions ont besoin.
     public UserSessionService(
-        IUserSessionRepository repositoryOfTheUserSessionsInDatabase,
-        ISecureTokenGenerator generatorOfTheSecureRandomTokens,
-        TimeProvider clockThatGivesTheCurrentDateAndTime)
+        IUserSessionRepository sessionRepository,
+        ISecureTokenGenerator tokenGenerator,
+        TimeProvider clock)
     {
-        this.repositoryOfTheUserSessionsInDatabase = repositoryOfTheUserSessionsInDatabase;
-        this.generatorOfTheSecureRandomTokens = generatorOfTheSecureRandomTokens;
-        this.clockThatGivesTheCurrentDateAndTime = clockThatGivesTheCurrentDateAndTime;
+        this.sessionRepository = sessionRepository;
+        this.tokenGenerator = tokenGenerator;
+        this.clock = clock;
     }
 
-    // Donne l'identifiant du propriétaire si la session est encore active, et note qu'elle vient de servir.
-    // Renvoie null si le cookie ne correspond à aucune session, ou si la session a expiré.
-    public async Task<Guid?> FindOwnerOfTheActiveSessionThenRecordItsActivityAsync(string sessionTokenReadInTheCookie)
+    // Donne l'identifiant du propriétaire si la session est encore active, et note qu'elle vient de servir,
+    // au plus une fois par minute (voir UserSessionRules). Renvoie null si le cookie ne correspond à aucune session, ou si la session a expiré.
+    public async Task<Guid?> FindOwnerAndRecordActivityAsync(string sessionToken)
     {
-        var hashOfTheTokenOfTheSession = generatorOfTheSecureRandomTokens.ConvertSecureTokenIntoItsHash(sessionTokenReadInTheCookie);
-        var currentDateOfTheIncomingRequest = clockThatGivesTheCurrentDateAndTime.GetUtcNow().UtcDateTime;
+        var sessionTokenHash = tokenGenerator.HashToken(sessionToken);
+        var now = clock.GetUtcNow().UtcDateTime;
 
-        var sessionFoundWithItsHashInDatabase = await repositoryOfTheUserSessionsInDatabase.FindUserSessionByItsHashAsync(hashOfTheTokenOfTheSession);
-        if (sessionFoundWithItsHashInDatabase == null || !UserSessionRules.CheckThatSessionIsStillActiveAtThisDate(sessionFoundWithItsHashInDatabase, currentDateOfTheIncomingRequest))
+        var session = await sessionRepository.FindAsync(sessionTokenHash);
+        if (session == null || !session.IsActiveAt(now))
         {
             return null;
         }
 
-        await repositoryOfTheUserSessionsInDatabase.RecordActivityOfThisUserSessionAsync(hashOfTheTokenOfTheSession, currentDateOfTheIncomingRequest);
-        return sessionFoundWithItsHashInDatabase.UserId;
+        if (session.ShouldRecordActivityAt(now))
+        {
+            await sessionRepository.RecordActivityAsync(sessionTokenHash, now);
+        }
+        return session.UserId;
     }
 
     // Détruit la session côté serveur, pas seulement le cookie (SS §3).
-    public async Task CloseUserSessionOfThisCookieAsync(string sessionTokenReadInTheCookie)
+    public async Task CloseAsync(string sessionToken)
     {
-        var hashOfTheTokenOfTheSession = generatorOfTheSecureRandomTokens.ConvertSecureTokenIntoItsHash(sessionTokenReadInTheCookie);
+        var sessionTokenHash = tokenGenerator.HashToken(sessionToken);
 
-        await repositoryOfTheUserSessionsInDatabase.DeleteUserSessionByItsHashAsync(hashOfTheTokenOfTheSession);
+        await sessionRepository.DeleteAsync(sessionTokenHash);
     }
 }

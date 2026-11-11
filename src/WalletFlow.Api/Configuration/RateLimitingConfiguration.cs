@@ -6,17 +6,17 @@ namespace WalletFlow.Api.Configuration;
 // Limites de débit de l'API (SS §6). Au-delà de la limite, le serveur répond 429 « trop de requêtes ».
 public static class RateLimitingConfiguration
 {
-    public const string PolicyNameForSignupRequestsPerIpAddress = "inscription-par-adresse-ip";
-    public const string PolicyNameForConfirmationAttemptsPerIpAddress = "confirmation-par-adresse-ip";
-    public const string PolicyNameForLoginAttemptsPerIpAddress = "connexion-par-adresse-ip";
-    public const string PolicyNameForPasswordRecoveryRequestsPerIpAddress = "mot-de-passe-oublie-par-adresse-ip";
-    public const string PolicyNameForPasswordResetAttemptsPerIpAddress = "lien-de-recuperation-par-adresse-ip";
-    public const string PolicyNameForAccountUnlockAttemptsPerIpAddress = "lien-de-deblocage-par-adresse-ip";
-    public const string PolicyNameForTwoFactorCodeAttemptsPerIpAddress = "code-de-double-authentification-par-adresse-ip";
-    public const string PolicyNameForTwoFactorSettingsRequestsPerIpAddress = "reglage-de-la-double-authentification-par-adresse-ip";
+    public const string SignupPolicy = "inscription-par-adresse-ip";
+    public const string ConfirmationPolicy = "confirmation-par-adresse-ip";
+    public const string LoginPolicy = "connexion-par-adresse-ip";
+    public const string PasswordRecoveryPolicy = "mot-de-passe-oublie-par-adresse-ip";
+    public const string PasswordResetPolicy = "lien-de-recuperation-par-adresse-ip";
+    public const string AccountUnlockPolicy = "lien-de-deblocage-par-adresse-ip";
+    public const string TwoFactorCodePolicy = "code-de-double-authentification-par-adresse-ip";
+    public const string TwoFactorSettingsPolicy = "reglage-de-la-double-authentification-par-adresse-ip";
 
     // Connexion : 10 essais par minute et par adresse IP, en plus des 5 tentatives par compte.
-    public static FixedWindowRateLimiterOptions CreateOptionsOfTheLoginAttemptsLimit()
+    public static FixedWindowRateLimiterOptions CreateLoginLimit()
     {
         return new FixedWindowRateLimiterOptions
         {
@@ -26,7 +26,7 @@ public static class RateLimitingConfiguration
     }
 
     // Inscription : 5 par heure et par adresse IP.
-    public static FixedWindowRateLimiterOptions CreateOptionsOfTheSignupRequestsLimit()
+    public static FixedWindowRateLimiterOptions CreateSignupLimit()
     {
         return new FixedWindowRateLimiterOptions
         {
@@ -36,7 +36,7 @@ public static class RateLimitingConfiguration
     }
 
     // Confirmation de l'inscription : 10 essais par heure et par adresse IP.
-    public static FixedWindowRateLimiterOptions CreateOptionsOfTheConfirmationAttemptsLimit()
+    public static FixedWindowRateLimiterOptions CreateConfirmationLimit()
     {
         return new FixedWindowRateLimiterOptions
         {
@@ -46,7 +46,7 @@ public static class RateLimitingConfiguration
     }
 
     // Mot de passe oublié, lien de récupération, lien de déblocage : 10 par heure et par adresse IP. Chaque route a son compteur.
-    public static FixedWindowRateLimiterOptions CreateOptionsOfTheAccountRecoveryRequestsLimit()
+    public static FixedWindowRateLimiterOptions CreateAccountRecoveryLimit()
     {
         return new FixedWindowRateLimiterOptions
         {
@@ -56,7 +56,7 @@ public static class RateLimitingConfiguration
     }
 
     // Code de double authentification : 10 essais par minute et par adresse IP, en plus des 5 essais par connexion.
-    public static FixedWindowRateLimiterOptions CreateOptionsOfTheTwoFactorCodeAttemptsLimit()
+    public static FixedWindowRateLimiterOptions CreateTwoFactorCodeLimit()
     {
         return new FixedWindowRateLimiterOptions
         {
@@ -66,7 +66,7 @@ public static class RateLimitingConfiguration
     }
 
     // Réglage de la double authentification : 10 par heure et par adresse IP, avec un seul compteur pour ses trois routes.
-    public static FixedWindowRateLimiterOptions CreateOptionsOfTheTwoFactorSettingsRequestsLimit()
+    public static FixedWindowRateLimiterOptions CreateTwoFactorSettingsLimit()
     {
         return new FixedWindowRateLimiterOptions
         {
@@ -76,37 +76,37 @@ public static class RateLimitingConfiguration
     }
 
     // Ajoute les limites de débit aux services de l'API.
-    public static IServiceCollection AddWalletFlowRateLimitingToTheServices(this IServiceCollection servicesOfTheWalletFlowApplication)
+    public static IServiceCollection AddWalletFlowRateLimiting(this IServiceCollection services)
     {
-        servicesOfTheWalletFlowApplication.AddRateLimiter(optionsOfTheRateLimitingToConfigure =>
+        services.AddRateLimiter(options =>
         {
-            optionsOfTheRateLimitingToConfigure.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+            options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
 
-            AddLimitPerIpAddressToTheOptions(optionsOfTheRateLimitingToConfigure, PolicyNameForSignupRequestsPerIpAddress, CreateOptionsOfTheSignupRequestsLimit());
-            AddLimitPerIpAddressToTheOptions(optionsOfTheRateLimitingToConfigure, PolicyNameForConfirmationAttemptsPerIpAddress, CreateOptionsOfTheConfirmationAttemptsLimit());
-            AddLimitPerIpAddressToTheOptions(optionsOfTheRateLimitingToConfigure, PolicyNameForLoginAttemptsPerIpAddress, CreateOptionsOfTheLoginAttemptsLimit());
-            AddLimitPerIpAddressToTheOptions(optionsOfTheRateLimitingToConfigure, PolicyNameForPasswordRecoveryRequestsPerIpAddress, CreateOptionsOfTheAccountRecoveryRequestsLimit());
-            AddLimitPerIpAddressToTheOptions(optionsOfTheRateLimitingToConfigure, PolicyNameForPasswordResetAttemptsPerIpAddress, CreateOptionsOfTheAccountRecoveryRequestsLimit());
-            AddLimitPerIpAddressToTheOptions(optionsOfTheRateLimitingToConfigure, PolicyNameForAccountUnlockAttemptsPerIpAddress, CreateOptionsOfTheAccountRecoveryRequestsLimit());
-            AddLimitPerIpAddressToTheOptions(optionsOfTheRateLimitingToConfigure, PolicyNameForTwoFactorCodeAttemptsPerIpAddress, CreateOptionsOfTheTwoFactorCodeAttemptsLimit());
-            AddLimitPerIpAddressToTheOptions(optionsOfTheRateLimitingToConfigure, PolicyNameForTwoFactorSettingsRequestsPerIpAddress, CreateOptionsOfTheTwoFactorSettingsRequestsLimit());
+            AddLimitPerIp(options, SignupPolicy, CreateSignupLimit());
+            AddLimitPerIp(options, ConfirmationPolicy, CreateConfirmationLimit());
+            AddLimitPerIp(options, LoginPolicy, CreateLoginLimit());
+            AddLimitPerIp(options, PasswordRecoveryPolicy, CreateAccountRecoveryLimit());
+            AddLimitPerIp(options, PasswordResetPolicy, CreateAccountRecoveryLimit());
+            AddLimitPerIp(options, AccountUnlockPolicy, CreateAccountRecoveryLimit());
+            AddLimitPerIp(options, TwoFactorCodePolicy, CreateTwoFactorCodeLimit());
+            AddLimitPerIp(options, TwoFactorSettingsPolicy, CreateTwoFactorSettingsLimit());
         });
 
-        return servicesOfTheWalletFlowApplication;
+        return services;
     }
 
     // Ajoute une limite, avec un compteur par adresse IP.
-    private static void AddLimitPerIpAddressToTheOptions(RateLimiterOptions optionsOfTheRateLimitingToConfigure, string nameOfTheLimitPolicyToAdd, FixedWindowRateLimiterOptions optionsOfTheLimitToAdd)
+    private static void AddLimitPerIp(RateLimiterOptions options, string policyName, FixedWindowRateLimiterOptions limit)
     {
-        optionsOfTheRateLimitingToConfigure.AddPolicy(nameOfTheLimitPolicyToAdd, httpContextOfTheRequestToLimit =>
+        options.AddPolicy(policyName, httpContext =>
             RateLimitPartition.GetFixedWindowLimiter(
-                ReadIpAddressOfTheRequestToLimit(httpContextOfTheRequestToLimit),
-                ipAddressUsedAsThePartitionKey => optionsOfTheLimitToAdd));
+                ReadIpAddress(httpContext),
+                ipAddress => limit));
     }
 
     // Donne l'adresse IP qui sert de compteur à une requête.
-    private static string ReadIpAddressOfTheRequestToLimit(HttpContext httpContextOfTheRequestToLimit)
+    private static string ReadIpAddress(HttpContext httpContext)
     {
-        return httpContextOfTheRequestToLimit.Connection.RemoteIpAddress?.ToString() ?? "adresse-inconnue";
+        return httpContext.Connection.RemoteIpAddress?.ToString() ?? "adresse-inconnue";
     }
 }

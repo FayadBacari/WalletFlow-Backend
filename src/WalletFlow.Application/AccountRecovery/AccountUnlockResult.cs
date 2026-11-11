@@ -1,9 +1,8 @@
 namespace WalletFlow.Application.AccountRecovery;
 
-// Résultat d'un clic sur le lien de déblocage : accepté, ou refusé avec la raison du refus.
-public class AccountUnlockResult
+// Résultat d'un clic sur le lien de déblocage : une seule de ces valeurs à la fois.
+public enum AccountUnlockResult
 {
-    public string? LinkErrorMessage { get; init; }
-
-    public bool IsUnlocked => LinkErrorMessage == null;
+    AccountUnlocked,
+    LinkNoLongerValid
 }

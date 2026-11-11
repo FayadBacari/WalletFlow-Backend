@@ -8,20 +8,20 @@ namespace WalletFlow.Tests.Application;
 // Vérifie l'activation de la double authentification, en deux temps (GR Auth, SS §2 et §11).
 public class TwoFactorActivationServiceTests
 {
-    private readonly TwoFactorServicesWithFakeTools servicesWithFakeToolsOfTheseTests = new TwoFactorServicesWithFakeTools();
+    private readonly TwoFactorServicesWithFakeTools services = new TwoFactorServicesWithFakeTools();
 
     // Commence l'activation de ce compte avec son bon mot de passe, et renvoie le secret.
-    private async Task<string> StartActivationThenGetTheSecretAsync(User accountBeingActivatedInThisTest)
+    private async Task<string> StartActivationThenGetSecretAsync(User account)
     {
-        var resultOfTheStartOfTheActivation = await servicesWithFakeToolsOfTheseTests.CreateTwoFactorActivationServiceWithFakeTools().StartActivationWithThePasswordOfTheUserAsync(accountBeingActivatedInThisTest.Id, PasswordOfTheAccountInTheseTests, IpAddressOfTheVisitorInTheseTests);
+        var result = await services.CreateActivationService().StartAsync(account.Id, AccountPassword, IpAddress);
 
-        return resultOfTheStartOfTheActivation.SecretOfTheAuthenticatorApplication!;
+        return Assert.IsType<TwoFactorActivationStartResult.Started>(result).Secret;
     }
 
     // Finit l'activation de ce compte avec ce code.
-    private async Task<TwoFactorActivationFinishResult> FinishActivationWithThisCodeAsync(User accountBeingActivatedInThisTest, string codeTypedByTheUserInThisTest)
+    private async Task<TwoFactorActivationFinishResult> FinishActivationAsync(User account, string code)
     {
-        return await servicesWithFakeToolsOfTheseTests.CreateTwoFactorActivationServiceWithFakeTools().FinishActivationWithTheFirstCodeOfTheUserAsync(accountBeingActivatedInThisTest.Id, codeTypedByTheUserInThisTest, IpAddressOfTheVisitorInTheseTests);
+        return await services.CreateActivationService().FinishAsync(account.Id, code, IpAddress);
     }
 
     // --- Le premier temps : le mot de passe donne le secret
@@ -30,100 +30,96 @@ public class TwoFactorActivationServiceTests
     [Fact]
     public async Task RightPasswordGivesTheSecretWithoutChangingTheAccount()
     {
-        var accountUsedByThisTwoFactorTest = servicesWithFakeToolsOfTheseTests.AddAccountWithoutTwoFactorToTheFakeDatabase();
+        var account = services.AddAccountWithoutTwoFactor();
 
-        var resultOfTheStartOfTheActivation = await servicesWithFakeToolsOfTheseTests.CreateTwoFactorActivationServiceWithFakeTools().StartActivationWithThePasswordOfTheUserAsync(accountUsedByThisTwoFactorTest.Id, PasswordOfTheAccountInTheseTests, IpAddressOfTheVisitorInTheseTests);
+        var result = await services.CreateActivationService().StartAsync(account.Id, AccountPassword, IpAddress);
 
-        Assert.True(resultOfTheStartOfTheActivation.IsActivationStarted);
-        Assert.Matches("^[A-Z2-7]{32}$", resultOfTheStartOfTheActivation.SecretOfTheAuthenticatorApplication);
-        Assert.Contains("secret=" + resultOfTheStartOfTheActivation.SecretOfTheAuthenticatorApplication, resultOfTheStartOfTheActivation.LinkThatAddsTheSecretToTheApplication);
-        Assert.Contains("utilisateur%40exemple.test", resultOfTheStartOfTheActivation.LinkThatAddsTheSecretToTheApplication);
-        Assert.False(accountUsedByThisTwoFactorTest.IsTwoFactorEnabled);
-        Assert.Null(accountUsedByThisTwoFactorTest.EncryptedTotpSecret);
-        Assert.Empty(servicesWithFakeToolsOfTheseTests.RepositoryThatKeepsTwoFactorDataInMemory.SavedBackupCodes);
-        Assert.Empty(servicesWithFakeToolsOfTheseTests.RepositoryThatKeepsSecurityEventsInMemory.SavedSecurityEvents);
+        Assert.IsType<TwoFactorActivationStartResult.Started>(result);
+        Assert.Matches("^[A-Z2-7]{32}$", Assert.IsType<TwoFactorActivationStartResult.Started>(result).Secret);
+        Assert.Contains("secret=" + Assert.IsType<TwoFactorActivationStartResult.Started>(result).Secret, Assert.IsType<TwoFactorActivationStartResult.Started>(result).SetupLink);
+        Assert.Contains("utilisateur%40exemple.test", Assert.IsType<TwoFactorActivationStartResult.Started>(result).SetupLink);
+        Assert.False(account.IsTwoFactorEnabled);
+        Assert.Null(account.EncryptedTotpSecret);
+        Assert.Empty(services.TwoFactorRepository.SavedBackupCodes);
+        Assert.Empty(services.SecurityEventRepository.SavedSecurityEvents);
     }
 
     [Fact]
     public async Task WrongPasswordGivesNoSecretAndIsWrittenInTheJournal()
     {
-        var accountUsedByThisTwoFactorTest = servicesWithFakeToolsOfTheseTests.AddAccountWithoutTwoFactorToTheFakeDatabase();
+        var account = services.AddAccountWithoutTwoFactor();
 
-        var resultOfTheStartOfTheActivation = await servicesWithFakeToolsOfTheseTests.CreateTwoFactorActivationServiceWithFakeTools().StartActivationWithThePasswordOfTheUserAsync(accountUsedByThisTwoFactorTest.Id, WrongPasswordTypedInTheseTests, IpAddressOfTheVisitorInTheseTests);
+        var result = await services.CreateActivationService().StartAsync(account.Id, WrongPassword, IpAddress);
 
-        Assert.False(resultOfTheStartOfTheActivation.IsActivationStarted);
-        Assert.Null(resultOfTheStartOfTheActivation.SecretOfTheAuthenticatorApplication);
-        Assert.Null(resultOfTheStartOfTheActivation.LinkThatAddsTheSecretToTheApplication);
-        Assert.Equal(TwoFactorActivationService.ErrorMessageForWrongPasswordAtActivation, resultOfTheStartOfTheActivation.WrongPasswordErrorMessage);
-        Assert.Null(servicesWithFakeToolsOfTheseTests.StoreOfTheSecretsWaitingForActivation.FindSecretWaitingForActivationOfThisAccount(accountUsedByThisTwoFactorTest.Id));
+        Assert.IsType<TwoFactorActivationStartResult.WrongPassword>(result);
+        Assert.Null(services.WaitingSecretStore.Find(account.Id));
 
-        var securityEventOfTheRefusalOfTheRequest = Assert.Single(servicesWithFakeToolsOfTheseTests.RepositoryThatKeepsSecurityEventsInMemory.SavedSecurityEvents);
-        Assert.Equal(SecurityEventType.TwoFactorActivation, securityEventOfTheRefusalOfTheRequest.Type);
-        Assert.Equal(SecurityEventResult.Failure, securityEventOfTheRefusalOfTheRequest.Result);
-        Assert.Equal(IpAddressOfTheVisitorInTheseTests, securityEventOfTheRefusalOfTheRequest.IpAddress);
-        Assert.Equal(accountUsedByThisTwoFactorTest.Id, securityEventOfTheRefusalOfTheRequest.UserId);
+        var securityEvent = Assert.Single(services.SecurityEventRepository.SavedSecurityEvents);
+        Assert.Equal(SecurityEventType.TwoFactorActivation, securityEvent.Type);
+        Assert.Equal(SecurityEventResult.Failure, securityEvent.Result);
+        Assert.Equal(IpAddress, securityEvent.IpAddress);
+        Assert.Equal(account.Id, securityEvent.UserId);
     }
 
     // Ces essais ne comptent pas pour le blocage : un voleur de session pourrait sinon bloquer le compte de son propriétaire.
     [Fact]
     public async Task WrongPasswordDoesNotCountAsALoginAttemptOfTheAccount()
     {
-        var accountUsedByThisTwoFactorTest = servicesWithFakeToolsOfTheseTests.AddAccountWithoutTwoFactorToTheFakeDatabase();
+        var account = services.AddAccountWithoutTwoFactor();
 
-        await servicesWithFakeToolsOfTheseTests.CreateTwoFactorActivationServiceWithFakeTools().StartActivationWithThePasswordOfTheUserAsync(accountUsedByThisTwoFactorTest.Id, WrongPasswordTypedInTheseTests, IpAddressOfTheVisitorInTheseTests);
+        await services.CreateActivationService().StartAsync(account.Id, WrongPassword, IpAddress);
 
-        Assert.Equal(0, accountUsedByThisTwoFactorTest.FailedLoginAttemptCount);
+        Assert.Equal(0, account.FailedLoginAttemptCount);
     }
 
     // Le même mot de passe, tapé sur un autre appareil, peut arriver écrit autrement (SS §2).
     [Fact]
     public async Task PasswordTypedWithDecomposedAccentIsAccepted()
     {
-        var accountUsedByThisTwoFactorTest = servicesWithFakeToolsOfTheseTests.AddAccountWithoutTwoFactorToTheFakeDatabase();
-        accountUsedByThisTwoFactorTest.PasswordHash = FakePasswordHasher.PrefixOfTheFakePasswordHashes + "Mot-De-Passé-1";
+        var account = services.AddAccountWithoutTwoFactor();
+        account.ReplacePasswordHash(FakePasswordHasher.HashPrefix + "Mot-De-Passé-1");
 
-        var resultOfTheStartOfTheActivation = await servicesWithFakeToolsOfTheseTests.CreateTwoFactorActivationServiceWithFakeTools().StartActivationWithThePasswordOfTheUserAsync(accountUsedByThisTwoFactorTest.Id, "Mot-De-Passé-1", IpAddressOfTheVisitorInTheseTests);
+        var result = await services.CreateActivationService().StartAsync(account.Id, "Mot-De-Passé-1", IpAddress);
 
-        Assert.True(resultOfTheStartOfTheActivation.IsActivationStarted);
+        Assert.IsType<TwoFactorActivationStartResult.Started>(result);
     }
 
     [Fact]
     public async Task AccountAlreadyActivatedIsRefusedWithoutCheckingThePassword()
     {
-        var activatedAccountUsedByThisTest = servicesWithFakeToolsOfTheseTests.AddActivatedAccountToTheFakeDatabase();
-        var encryptedSecretReadBeforeTheActivationAttempt = activatedAccountUsedByThisTest.UserAccount.EncryptedTotpSecret;
+        var activatedAccount = services.AddActivatedAccount();
+        var encryptedSecret = activatedAccount.UserAccount.EncryptedTotpSecret;
 
-        var resultOfTheStartOfTheActivation = await servicesWithFakeToolsOfTheseTests.CreateTwoFactorActivationServiceWithFakeTools().StartActivationWithThePasswordOfTheUserAsync(activatedAccountUsedByThisTest.UserAccount.Id, PasswordOfTheAccountInTheseTests, IpAddressOfTheVisitorInTheseTests);
+        var result = await services.CreateActivationService().StartAsync(activatedAccount.UserAccount.Id, AccountPassword, IpAddress);
 
-        Assert.Equal(TwoFactorActivationService.ErrorMessageForTwoFactorAlreadyEnabled, resultOfTheStartOfTheActivation.AlreadyEnabledErrorMessage);
-        Assert.Null(resultOfTheStartOfTheActivation.SecretOfTheAuthenticatorApplication);
-        Assert.Equal(0, servicesWithFakeToolsOfTheseTests.HasherThatCountsTheComparedPasswords.NumberOfPasswordsCompared);
-        Assert.Equal(encryptedSecretReadBeforeTheActivationAttempt, activatedAccountUsedByThisTest.UserAccount.EncryptedTotpSecret);
+        Assert.IsType<TwoFactorActivationStartResult.AlreadyEnabled>(result);
+        Assert.Equal(0, services.PasswordHasher.VerifiedPasswordCount);
+        Assert.Equal(encryptedSecret, activatedAccount.UserAccount.EncryptedTotpSecret);
     }
 
     [Fact]
     public async Task AccountEffacedJustBeforeTheStartGetsNoSecret()
     {
-        var resultOfTheStartOfTheActivation = await servicesWithFakeToolsOfTheseTests.CreateTwoFactorActivationServiceWithFakeTools().StartActivationWithThePasswordOfTheUserAsync(Guid.NewGuid(), PasswordOfTheAccountInTheseTests, IpAddressOfTheVisitorInTheseTests);
+        var result = await services.CreateActivationService().StartAsync(Guid.NewGuid(), AccountPassword, IpAddress);
 
-        Assert.Equal(TwoFactorActivationService.ErrorMessageForWrongPasswordAtActivation, resultOfTheStartOfTheActivation.WrongPasswordErrorMessage);
-        Assert.Empty(servicesWithFakeToolsOfTheseTests.RepositoryThatKeepsSecurityEventsInMemory.SavedSecurityEvents);
+        Assert.IsType<TwoFactorActivationStartResult.WrongPassword>(result);
+        Assert.Empty(services.SecurityEventRepository.SavedSecurityEvents);
     }
 
     [Fact]
     public async Task StartingAgainReplacesTheSecretAndTheOldOneNoLongerWorks()
     {
-        var accountUsedByThisTwoFactorTest = servicesWithFakeToolsOfTheseTests.AddAccountWithoutTwoFactorToTheFakeDatabase();
-        var firstSecretOfTheAuthenticatorApplication = await StartActivationThenGetTheSecretAsync(accountUsedByThisTwoFactorTest);
-        var secondSecretOfTheAuthenticatorApplication = await StartActivationThenGetTheSecretAsync(accountUsedByThisTwoFactorTest);
+        var account = services.AddAccountWithoutTwoFactor();
+        var firstSecret = await StartActivationThenGetSecretAsync(account);
+        var secondSecret = await StartActivationThenGetSecretAsync(account);
 
-        Assert.NotEqual(firstSecretOfTheAuthenticatorApplication, secondSecretOfTheAuthenticatorApplication);
+        Assert.NotEqual(firstSecret, secondSecret);
 
-        var resultOfTheFinishWithTheOldSecret = await FinishActivationWithThisCodeAsync(accountUsedByThisTwoFactorTest, servicesWithFakeToolsOfTheseTests.CalculateCodeShownOnThePhoneNow(firstSecretOfTheAuthenticatorApplication));
-        Assert.Equal(TwoFactorCodeCheckingService.ErrorMessageForWrongTwoFactorCode, resultOfTheFinishWithTheOldSecret.WrongCodeErrorMessage);
+        var oldSecretResult = await FinishActivationAsync(account, services.CalculateCurrentCode(firstSecret));
+        Assert.IsType<TwoFactorActivationFinishResult.WrongCode>(oldSecretResult);
 
-        var resultOfTheFinishWithTheNewSecret = await FinishActivationWithThisCodeAsync(accountUsedByThisTwoFactorTest, servicesWithFakeToolsOfTheseTests.CalculateCodeShownOnThePhoneNow(secondSecretOfTheAuthenticatorApplication));
-        Assert.True(resultOfTheFinishWithTheNewSecret.IsTwoFactorActivated);
+        var newSecretResult = await FinishActivationAsync(account, services.CalculateCurrentCode(secondSecret));
+        Assert.IsType<TwoFactorActivationFinishResult.Activated>(newSecretResult);
     }
 
     // --- Le second temps : le premier code active tout
@@ -131,91 +127,90 @@ public class TwoFactorActivationServiceTests
     [Fact]
     public async Task RightFirstCodeActivatesEverythingAndGivesTenDifferentBackupCodes()
     {
-        var accountUsedByThisTwoFactorTest = servicesWithFakeToolsOfTheseTests.AddAccountWithoutTwoFactorToTheFakeDatabase();
-        var secretSharedWithTheAuthenticatorApplication = await StartActivationThenGetTheSecretAsync(accountUsedByThisTwoFactorTest);
+        var account = services.AddAccountWithoutTwoFactor();
+        var secret = await StartActivationThenGetSecretAsync(account);
 
-        var resultOfTheEndOfTheActivation = await FinishActivationWithThisCodeAsync(accountUsedByThisTwoFactorTest, servicesWithFakeToolsOfTheseTests.CalculateCodeShownOnThePhoneNow(secretSharedWithTheAuthenticatorApplication));
+        var result = await FinishActivationAsync(account, services.CalculateCurrentCode(secret));
 
-        Assert.True(resultOfTheEndOfTheActivation.IsTwoFactorActivated);
-        Assert.True(accountUsedByThisTwoFactorTest.IsTwoFactorEnabled);
+        Assert.IsType<TwoFactorActivationFinishResult.Activated>(result);
+        Assert.True(account.IsTwoFactorEnabled);
 
-        Assert.Equal(10, resultOfTheEndOfTheActivation.BackupCodesToGiveOnlyOnce!.Count);
-        Assert.Equal(10, resultOfTheEndOfTheActivation.BackupCodesToGiveOnlyOnce.Distinct().Count());
-        foreach (var backupCodeGivenToTheUser in resultOfTheEndOfTheActivation.BackupCodesToGiveOnlyOnce)
+        Assert.Equal(10, Assert.IsType<TwoFactorActivationFinishResult.Activated>(result).BackupCodes.Count);
+        Assert.Equal(10, Assert.IsType<TwoFactorActivationFinishResult.Activated>(result).BackupCodes.Distinct().Count());
+        foreach (var backupCode in Assert.IsType<TwoFactorActivationFinishResult.Activated>(result).BackupCodes)
         {
-            Assert.Matches("^[0-9A-HJKMNP-TV-Z]{5}-[0-9A-HJKMNP-TV-Z]{5}$", backupCodeGivenToTheUser);
+            Assert.Matches("^[0-9A-HJKMNP-TV-Z]{5}-[0-9A-HJKMNP-TV-Z]{5}$", backupCode);
         }
 
-        var securityEventOfTheTwoFactorActivation = Assert.Single(servicesWithFakeToolsOfTheseTests.RepositoryThatKeepsSecurityEventsInMemory.SavedSecurityEvents);
-        Assert.Equal(SecurityEventType.TwoFactorActivation, securityEventOfTheTwoFactorActivation.Type);
-        Assert.Equal(SecurityEventResult.Success, securityEventOfTheTwoFactorActivation.Result);
-        Assert.Equal(IpAddressOfTheVisitorInTheseTests, securityEventOfTheTwoFactorActivation.IpAddress);
-        Assert.Equal(accountUsedByThisTwoFactorTest.Id, securityEventOfTheTwoFactorActivation.UserId);
+        var securityEvent = Assert.Single(services.SecurityEventRepository.SavedSecurityEvents);
+        Assert.Equal(SecurityEventType.TwoFactorActivation, securityEvent.Type);
+        Assert.Equal(SecurityEventResult.Success, securityEvent.Result);
+        Assert.Equal(IpAddress, securityEvent.IpAddress);
+        Assert.Equal(account.Id, securityEvent.UserId);
     }
 
     // SS §2 : le secret est chiffré, et il se relit avec la clé et l'identifiant du compte.
     [Fact]
     public async Task SecretIsSavedEncryptedAndCanBeReadBackWithTheKey()
     {
-        var accountUsedByThisTwoFactorTest = servicesWithFakeToolsOfTheseTests.AddAccountWithoutTwoFactorToTheFakeDatabase();
-        var secretSharedWithTheAuthenticatorApplication = await StartActivationThenGetTheSecretAsync(accountUsedByThisTwoFactorTest);
+        var account = services.AddAccountWithoutTwoFactor();
+        var secret = await StartActivationThenGetSecretAsync(account);
 
-        await FinishActivationWithThisCodeAsync(accountUsedByThisTwoFactorTest, servicesWithFakeToolsOfTheseTests.CalculateCodeShownOnThePhoneNow(secretSharedWithTheAuthenticatorApplication));
+        await FinishActivationAsync(account, services.CalculateCurrentCode(secret));
 
-        Assert.DoesNotContain(secretSharedWithTheAuthenticatorApplication, accountUsedByThisTwoFactorTest.EncryptedTotpSecret);
-        Assert.Equal(secretSharedWithTheAuthenticatorApplication, servicesWithFakeToolsOfTheseTests.RealProtectorOfTheSecrets.DecryptSecretOfThisUserAccount(accountUsedByThisTwoFactorTest.EncryptedTotpSecret!, accountUsedByThisTwoFactorTest.Id));
-        Assert.True(accountUsedByThisTwoFactorTest.EncryptedTotpSecret!.Length <= 255);
+        Assert.DoesNotContain(secret, account.EncryptedTotpSecret);
+        Assert.Equal(secret, services.SecretProtector.Decrypt(account.EncryptedTotpSecret!, account.Id));
+        Assert.True(account.EncryptedTotpSecret!.Length <= 255);
     }
 
     // SS §2 : les codes de secours sont stockés hachés, chacun correspond à ce qui a été donné, et aucun n'a encore servi.
     [Fact]
     public async Task BackupCodesAreSavedHashedForThisAccountAndNotYetUsed()
     {
-        var accountUsedByThisTwoFactorTest = servicesWithFakeToolsOfTheseTests.AddAccountWithoutTwoFactorToTheFakeDatabase();
-        var secretSharedWithTheAuthenticatorApplication = await StartActivationThenGetTheSecretAsync(accountUsedByThisTwoFactorTest);
+        var account = services.AddAccountWithoutTwoFactor();
+        var secret = await StartActivationThenGetSecretAsync(account);
 
-        var resultOfTheEndOfTheActivation = await FinishActivationWithThisCodeAsync(accountUsedByThisTwoFactorTest, servicesWithFakeToolsOfTheseTests.CalculateCodeShownOnThePhoneNow(secretSharedWithTheAuthenticatorApplication));
+        var result = await FinishActivationAsync(account, services.CalculateCurrentCode(secret));
 
-        var backupCodesSavedInTheFakeDatabase = servicesWithFakeToolsOfTheseTests.RepositoryThatKeepsTwoFactorDataInMemory.SavedBackupCodes;
-        Assert.Equal(10, backupCodesSavedInTheFakeDatabase.Count);
+        var backupCodes = services.TwoFactorRepository.SavedBackupCodes;
+        Assert.Equal(10, backupCodes.Count);
 
-        for (var positionOfTheBackupCodeBeingChecked = 0; positionOfTheBackupCodeBeingChecked < 10; positionOfTheBackupCodeBeingChecked++)
+        for (var position = 0; position < 10; position++)
         {
-            var cleanFormOfTheBackupCodeGiven = TwoFactorAuthenticationRules.ConvertCodeTypedByTheUserIntoItsCleanForm(resultOfTheEndOfTheActivation.BackupCodesToGiveOnlyOnce![positionOfTheBackupCodeBeingChecked]);
-            Assert.Equal(FakePasswordHasher.PrefixOfTheFakePasswordHashes + cleanFormOfTheBackupCodeGiven, backupCodesSavedInTheFakeDatabase[positionOfTheBackupCodeBeingChecked].CodeHash);
-            Assert.Equal(accountUsedByThisTwoFactorTest.Id, backupCodesSavedInTheFakeDatabase[positionOfTheBackupCodeBeingChecked].UserId);
-            Assert.Null(backupCodesSavedInTheFakeDatabase[positionOfTheBackupCodeBeingChecked].UsedAt);
+            var cleanedCode = TwoFactorAuthenticationRules.CleanCode(Assert.IsType<TwoFactorActivationFinishResult.Activated>(result).BackupCodes[position]);
+            Assert.Equal(FakeBackupCodeHasher.CreateFakeHash(cleanedCode, account.Id), backupCodes[position].CodeHash);
+            Assert.Equal(account.Id, backupCodes[position].UserId);
+            Assert.Null(backupCodes[position].UsedAt);
         }
     }
 
     [Fact]
     public async Task SecretWaitingInMemoryIsForgottenOnceActivated()
     {
-        var accountUsedByThisTwoFactorTest = servicesWithFakeToolsOfTheseTests.AddAccountWithoutTwoFactorToTheFakeDatabase();
-        var secretSharedWithTheAuthenticatorApplication = await StartActivationThenGetTheSecretAsync(accountUsedByThisTwoFactorTest);
+        var account = services.AddAccountWithoutTwoFactor();
+        var secret = await StartActivationThenGetSecretAsync(account);
 
-        await FinishActivationWithThisCodeAsync(accountUsedByThisTwoFactorTest, servicesWithFakeToolsOfTheseTests.CalculateCodeShownOnThePhoneNow(secretSharedWithTheAuthenticatorApplication));
+        await FinishActivationAsync(account, services.CalculateCurrentCode(secret));
 
-        Assert.Null(servicesWithFakeToolsOfTheseTests.StoreOfTheSecretsWaitingForActivation.FindSecretWaitingForActivationOfThisAccount(accountUsedByThisTwoFactorTest.Id));
+        Assert.Null(services.WaitingSecretStore.Find(account.Id));
     }
 
     [Fact]
     public async Task WrongFirstCodeActivatesNothingAndCanBeRetried()
     {
-        var accountUsedByThisTwoFactorTest = servicesWithFakeToolsOfTheseTests.AddAccountWithoutTwoFactorToTheFakeDatabase();
-        var secretSharedWithTheAuthenticatorApplication = await StartActivationThenGetTheSecretAsync(accountUsedByThisTwoFactorTest);
+        var account = services.AddAccountWithoutTwoFactor();
+        var secret = await StartActivationThenGetSecretAsync(account);
 
-        var resultOfTheWrongCodeOfTheVisitor = await FinishActivationWithThisCodeAsync(accountUsedByThisTwoFactorTest, servicesWithFakeToolsOfTheseTests.FindCodeThatIsWrongNow(secretSharedWithTheAuthenticatorApplication));
+        var wrongCodeResult = await FinishActivationAsync(account, services.FindWrongCode(secret));
 
-        Assert.False(resultOfTheWrongCodeOfTheVisitor.IsTwoFactorActivated);
-        Assert.Equal(TwoFactorCodeCheckingService.ErrorMessageForWrongTwoFactorCode, resultOfTheWrongCodeOfTheVisitor.WrongCodeErrorMessage);
-        Assert.False(accountUsedByThisTwoFactorTest.IsTwoFactorEnabled);
-        Assert.Null(accountUsedByThisTwoFactorTest.EncryptedTotpSecret);
-        Assert.Empty(servicesWithFakeToolsOfTheseTests.RepositoryThatKeepsTwoFactorDataInMemory.SavedBackupCodes);
-        Assert.Equal(1, servicesWithFakeToolsOfTheseTests.CountSecurityEventsInTheJournal(SecurityEventType.TwoFactorActivation, SecurityEventResult.Failure));
+        Assert.IsType<TwoFactorActivationFinishResult.WrongCode>(wrongCodeResult);
+        Assert.False(account.IsTwoFactorEnabled);
+        Assert.Null(account.EncryptedTotpSecret);
+        Assert.Empty(services.TwoFactorRepository.SavedBackupCodes);
+        Assert.Equal(1, services.CountSecurityEvents(SecurityEventType.TwoFactorActivation, SecurityEventResult.Failure));
 
-        var resultOfTheRightCodeOfTheVisitor = await FinishActivationWithThisCodeAsync(accountUsedByThisTwoFactorTest, servicesWithFakeToolsOfTheseTests.CalculateCodeShownOnThePhoneNow(secretSharedWithTheAuthenticatorApplication));
-        Assert.True(resultOfTheRightCodeOfTheVisitor.IsTwoFactorActivated);
+        var rightCodeResult = await FinishActivationAsync(account, services.CalculateCurrentCode(secret));
+        Assert.IsType<TwoFactorActivationFinishResult.Activated>(rightCodeResult);
     }
 
     // Le compte n'a pas encore de code de secours : un texte de cette forme ne doit lancer aucun Argon2.
@@ -224,82 +219,82 @@ public class TwoFactorActivationServiceTests
     [InlineData("12345")]
     [InlineData("ABCDE-FGHJK")]
     [InlineData("١٢٣٤٥٦")]
-    public async Task TextThatIsNotAnAuthenticatorCodeIsRefusedWithoutAnyHash(string textTypedByTheUserInThisTest)
+    public async Task TextThatIsNotAnAuthenticatorCodeIsRefusedWithoutAnyHash(string text)
     {
-        var accountUsedByThisTwoFactorTest = servicesWithFakeToolsOfTheseTests.AddAccountWithoutTwoFactorToTheFakeDatabase();
-        await StartActivationThenGetTheSecretAsync(accountUsedByThisTwoFactorTest);
-        var numberOfComparisonsBeforeTheCode = servicesWithFakeToolsOfTheseTests.HasherThatCountsTheComparedPasswords.NumberOfPasswordsCompared;
+        var account = services.AddAccountWithoutTwoFactor();
+        await StartActivationThenGetSecretAsync(account);
+        var comparisonCountBefore = services.PasswordHasher.VerifiedPasswordCount;
 
-        var resultOfTheEndOfTheActivation = await FinishActivationWithThisCodeAsync(accountUsedByThisTwoFactorTest, textTypedByTheUserInThisTest);
+        var result = await FinishActivationAsync(account, text);
 
-        Assert.Equal(TwoFactorCodeCheckingService.ErrorMessageForWrongTwoFactorCode, resultOfTheEndOfTheActivation.WrongCodeErrorMessage);
-        Assert.Equal(numberOfComparisonsBeforeTheCode, servicesWithFakeToolsOfTheseTests.HasherThatCountsTheComparedPasswords.NumberOfPasswordsCompared);
-        Assert.Equal(0, servicesWithFakeToolsOfTheseTests.HasherThatCountsTheComparedPasswords.NumberOfPasswordsHashed);
+        Assert.IsType<TwoFactorActivationFinishResult.WrongCode>(result);
+        Assert.Equal(comparisonCountBefore, services.PasswordHasher.VerifiedPasswordCount);
+        Assert.Equal(0, services.BackupCodeHasher.HashedCodeCount);
     }
 
     // SS §2 : le premier code a déjà servi. Il ne peut pas servir à se connecter ni à désactiver juste après.
     [Fact]
     public async Task FirstCodeCannotBeUsedAgainToLogIn()
     {
-        var accountUsedByThisTwoFactorTest = servicesWithFakeToolsOfTheseTests.AddAccountWithoutTwoFactorToTheFakeDatabase();
-        var secretSharedWithTheAuthenticatorApplication = await StartActivationThenGetTheSecretAsync(accountUsedByThisTwoFactorTest);
-        var firstCodeTypedByTheUserAtActivation = servicesWithFakeToolsOfTheseTests.CalculateCodeShownOnThePhoneNow(secretSharedWithTheAuthenticatorApplication);
-        await FinishActivationWithThisCodeAsync(accountUsedByThisTwoFactorTest, firstCodeTypedByTheUserAtActivation);
+        var account = services.AddAccountWithoutTwoFactor();
+        var secret = await StartActivationThenGetSecretAsync(account);
+        var firstCode = services.CalculateCurrentCode(secret);
+        await FinishActivationAsync(account, firstCode);
 
-        var waitingLoginTokenOfTheVisitor = await servicesWithFakeToolsOfTheseTests.LogInWithTheRightPasswordThenGetTheWaitingLoginTokenAsync();
-        var resultOfTheLoginWithTheFirstCode = await servicesWithFakeToolsOfTheseTests.FinishLoginWithThisCodeAsync(waitingLoginTokenOfTheVisitor, firstCodeTypedByTheUserAtActivation);
+        var waitingLoginToken = await services.LogInThenGetWaitingLoginTokenAsync();
+        var result = await services.FinishLoginAsync(waitingLoginToken, firstCode);
 
-        Assert.Equal(TwoFactorCodeCheckingService.ErrorMessageForWrongTwoFactorCode, resultOfTheLoginWithTheFirstCode.WrongCodeErrorMessage);
+        Assert.IsType<TwoFactorLoginResult.WrongCode>(result);
     }
 
     [Fact]
     public async Task FinishingWithoutAnyStartAsksToRestart()
     {
-        var accountUsedByThisTwoFactorTest = servicesWithFakeToolsOfTheseTests.AddAccountWithoutTwoFactorToTheFakeDatabase();
+        var account = services.AddAccountWithoutTwoFactor();
 
-        var resultOfTheEndOfTheActivation = await FinishActivationWithThisCodeAsync(accountUsedByThisTwoFactorTest, "123456");
+        var result = await FinishActivationAsync(account, "123456");
 
-        Assert.Equal(TwoFactorActivationService.ErrorMessageForActivationThatMustRestart, resultOfTheEndOfTheActivation.ActivationMustRestartErrorMessage);
-        Assert.False(accountUsedByThisTwoFactorTest.IsTwoFactorEnabled);
+        Assert.IsType<TwoFactorActivationFinishResult.ActivationMustRestart>(result);
+        Assert.False(account.IsTwoFactorEnabled);
     }
 
     [Fact]
     public async Task SecretWaitingForTheFirstCodeStillWorksJustBeforeTheEndOfTheTenMinutes()
     {
-        var accountUsedByThisTwoFactorTest = servicesWithFakeToolsOfTheseTests.AddAccountWithoutTwoFactorToTheFakeDatabase();
-        var secretSharedWithTheAuthenticatorApplication = await StartActivationThenGetTheSecretAsync(accountUsedByThisTwoFactorTest);
+        var account = services.AddAccountWithoutTwoFactor();
+        var secret = await StartActivationThenGetSecretAsync(account);
 
-        servicesWithFakeToolsOfTheseTests.ClockThatOnlyMovesWhenTestsAskIt.MoveFakeClockForwardByThisDuration(TimeSpan.FromMinutes(10) - TimeSpan.FromSeconds(1));
-        var resultOfTheEndOfTheActivation = await FinishActivationWithThisCodeAsync(accountUsedByThisTwoFactorTest, servicesWithFakeToolsOfTheseTests.CalculateCodeShownOnThePhoneNow(secretSharedWithTheAuthenticatorApplication));
+        services.Clock.Advance(TimeSpan.FromMinutes(10) - TimeSpan.FromSeconds(1));
+        var result = await FinishActivationAsync(account, services.CalculateCurrentCode(secret));
 
-        Assert.True(resultOfTheEndOfTheActivation.IsTwoFactorActivated);
+        Assert.IsType<TwoFactorActivationFinishResult.Activated>(result);
     }
 
     [Fact]
     public async Task SecretWaitingForTheFirstCodeEndsExactlyAfterTenMinutes()
     {
-        var accountUsedByThisTwoFactorTest = servicesWithFakeToolsOfTheseTests.AddAccountWithoutTwoFactorToTheFakeDatabase();
-        var secretSharedWithTheAuthenticatorApplication = await StartActivationThenGetTheSecretAsync(accountUsedByThisTwoFactorTest);
+        var account = services.AddAccountWithoutTwoFactor();
+        var secret = await StartActivationThenGetSecretAsync(account);
 
-        servicesWithFakeToolsOfTheseTests.ClockThatOnlyMovesWhenTestsAskIt.MoveFakeClockForwardByThisDuration(TimeSpan.FromMinutes(10));
-        var resultOfTheEndOfTheActivation = await FinishActivationWithThisCodeAsync(accountUsedByThisTwoFactorTest, servicesWithFakeToolsOfTheseTests.CalculateCodeShownOnThePhoneNow(secretSharedWithTheAuthenticatorApplication));
+        services.Clock.Advance(TimeSpan.FromMinutes(10));
+        var result = await FinishActivationAsync(account, services.CalculateCurrentCode(secret));
 
-        Assert.Equal(TwoFactorActivationService.ErrorMessageForActivationThatMustRestart, resultOfTheEndOfTheActivation.ActivationMustRestartErrorMessage);
-        Assert.False(accountUsedByThisTwoFactorTest.IsTwoFactorEnabled);
+        Assert.IsType<TwoFactorActivationFinishResult.ActivationMustRestart>(result);
+        Assert.False(account.IsTwoFactorEnabled);
     }
 
     // SS §4 : le secret en attente n'appartient qu'au compte qui l'a demandé.
     [Fact]
     public async Task SecretWaitingForOneAccountCannotActivateAnotherAccount()
     {
-        var accountUsedByThisTwoFactorTest = servicesWithFakeToolsOfTheseTests.AddAccountWithoutTwoFactorToTheFakeDatabase();
-        var otherAccountUsedByThisTwoFactorTest = servicesWithFakeToolsOfTheseTests.AddAccountWithoutTwoFactorToTheFakeDatabase("autre-compte@exemple.test");
-        var secretSharedWithTheAuthenticatorApplication = await StartActivationThenGetTheSecretAsync(accountUsedByThisTwoFactorTest);
+        var account = services.AddAccountWithoutTwoFactor();
+        var otherAccount = services.AddAccountWithoutTwoFactor("autre-compte@exemple.test");
+        var secret = await StartActivationThenGetSecretAsync(account);
 
-        var resultOfTheFinishForTheOtherAccount = await FinishActivationWithThisCodeAsync(otherAccountUsedByThisTwoFactorTest, servicesWithFakeToolsOfTheseTests.CalculateCodeShownOnThePhoneNow(secretSharedWithTheAuthenticatorApplication));
+        var result = await FinishActivationAsync(otherAccount, services.CalculateCurrentCode(secret));
 
-        Assert.Equal(TwoFactorActivationService.ErrorMessageForActivationThatMustRestart, resultOfTheFinishForTheOtherAccount.ActivationMustRestartErrorMessage);
-        Assert.False(otherAccountUsedByThisTwoFactorTest.IsTwoFactorEnabled);
+        Assert.IsType<TwoFactorActivationFinishResult.ActivationMustRestart>(result);
+        Assert.False(otherAccount.IsTwoFactorEnabled);
     }
 
     // --- Les conflits et les pannes
@@ -307,84 +302,82 @@ public class TwoFactorActivationServiceTests
     [Fact]
     public async Task ConflictsWithOtherRequestsAreRetried()
     {
-        var accountUsedByThisTwoFactorTest = servicesWithFakeToolsOfTheseTests.AddAccountWithoutTwoFactorToTheFakeDatabase();
-        var secretSharedWithTheAuthenticatorApplication = await StartActivationThenGetTheSecretAsync(accountUsedByThisTwoFactorTest);
-        servicesWithFakeToolsOfTheseTests.RepositoryThatKeepsTwoFactorDataInMemory.NumberOfConflictsBeforeTheActivationIsSaved = 9;
+        var account = services.AddAccountWithoutTwoFactor();
+        var secret = await StartActivationThenGetSecretAsync(account);
+        services.TwoFactorRepository.ActivationConflicts = 9;
 
-        var resultOfTheEndOfTheActivation = await FinishActivationWithThisCodeAsync(accountUsedByThisTwoFactorTest, servicesWithFakeToolsOfTheseTests.CalculateCodeShownOnThePhoneNow(secretSharedWithTheAuthenticatorApplication));
+        var result = await FinishActivationAsync(account, services.CalculateCurrentCode(secret));
 
-        Assert.True(resultOfTheEndOfTheActivation.IsTwoFactorActivated);
-        Assert.Equal(10, servicesWithFakeToolsOfTheseTests.RepositoryThatKeepsTwoFactorDataInMemory.SavedBackupCodes.Count);
-        Assert.Equal(1, servicesWithFakeToolsOfTheseTests.CountSecurityEventsInTheJournal(SecurityEventType.TwoFactorActivation, SecurityEventResult.Success));
+        Assert.IsType<TwoFactorActivationFinishResult.Activated>(result);
+        Assert.Equal(10, services.TwoFactorRepository.SavedBackupCodes.Count);
+        Assert.Equal(1, services.CountSecurityEvents(SecurityEventType.TwoFactorActivation, SecurityEventResult.Success));
     }
 
     [Fact]
     public async Task TooManyConflictsAskToRestartAndActivateNothing()
     {
-        var accountUsedByThisTwoFactorTest = servicesWithFakeToolsOfTheseTests.AddAccountWithoutTwoFactorToTheFakeDatabase();
-        var secretSharedWithTheAuthenticatorApplication = await StartActivationThenGetTheSecretAsync(accountUsedByThisTwoFactorTest);
-        servicesWithFakeToolsOfTheseTests.RepositoryThatKeepsTwoFactorDataInMemory.NumberOfConflictsBeforeTheActivationIsSaved = 10;
+        var account = services.AddAccountWithoutTwoFactor();
+        var secret = await StartActivationThenGetSecretAsync(account);
+        services.TwoFactorRepository.ActivationConflicts = 10;
 
-        var resultOfTheEndOfTheActivation = await FinishActivationWithThisCodeAsync(accountUsedByThisTwoFactorTest, servicesWithFakeToolsOfTheseTests.CalculateCodeShownOnThePhoneNow(secretSharedWithTheAuthenticatorApplication));
+        var result = await FinishActivationAsync(account, services.CalculateCurrentCode(secret));
 
-        Assert.Equal(TwoFactorActivationService.ErrorMessageForActivationThatMustRestart, resultOfTheEndOfTheActivation.ActivationMustRestartErrorMessage);
-        Assert.False(accountUsedByThisTwoFactorTest.IsTwoFactorEnabled);
-        Assert.Null(resultOfTheEndOfTheActivation.BackupCodesToGiveOnlyOnce);
+        Assert.IsType<TwoFactorActivationFinishResult.ActivationMustRestart>(result);
+        Assert.False(account.IsTwoFactorEnabled);
     }
 
     // Deux onglets : l'activation de l'autre a réussi juste avant. Ce compte ne reçoit jamais 20 codes de secours.
     [Fact]
     public async Task AccountActivatedByAnotherRequestJustBeforeTheSaveKeepsItsFirstActivation()
     {
-        var accountUsedByThisTwoFactorTest = servicesWithFakeToolsOfTheseTests.AddAccountWithoutTwoFactorToTheFakeDatabase();
-        var secretSharedWithTheAuthenticatorApplication = await StartActivationThenGetTheSecretAsync(accountUsedByThisTwoFactorTest);
-        accountUsedByThisTwoFactorTest.IsTwoFactorEnabled = true;
-        accountUsedByThisTwoFactorTest.EncryptedTotpSecret = "secret-de-l-autre-onglet";
+        var account = services.AddAccountWithoutTwoFactor();
+        var secret = await StartActivationThenGetSecretAsync(account);
+        account.ActivateTwoFactor("secret-de-l-autre-onglet");
 
-        var resultOfTheEndOfTheActivation = await FinishActivationWithThisCodeAsync(accountUsedByThisTwoFactorTest, servicesWithFakeToolsOfTheseTests.CalculateCodeShownOnThePhoneNow(secretSharedWithTheAuthenticatorApplication));
+        var result = await FinishActivationAsync(account, services.CalculateCurrentCode(secret));
 
-        Assert.Equal(TwoFactorActivationService.ErrorMessageForActivationThatMustRestart, resultOfTheEndOfTheActivation.ActivationMustRestartErrorMessage);
-        Assert.Equal("secret-de-l-autre-onglet", accountUsedByThisTwoFactorTest.EncryptedTotpSecret);
-        Assert.Empty(servicesWithFakeToolsOfTheseTests.RepositoryThatKeepsTwoFactorDataInMemory.SavedBackupCodes);
+        Assert.IsType<TwoFactorActivationFinishResult.ActivationMustRestart>(result);
+        Assert.Equal("secret-de-l-autre-onglet", account.EncryptedTotpSecret);
+        Assert.Empty(services.TwoFactorRepository.SavedBackupCodes);
     }
 
     [Fact]
     public async Task AccountEffacedJustBeforeTheSaveActivatesNothing()
     {
-        var accountUsedByThisTwoFactorTest = servicesWithFakeToolsOfTheseTests.AddAccountWithoutTwoFactorToTheFakeDatabase();
-        var secretSharedWithTheAuthenticatorApplication = await StartActivationThenGetTheSecretAsync(accountUsedByThisTwoFactorTest);
-        servicesWithFakeToolsOfTheseTests.RepositoryThatKeepsAccountsInMemory.SavedUsers.Remove(accountUsedByThisTwoFactorTest);
+        var account = services.AddAccountWithoutTwoFactor();
+        var secret = await StartActivationThenGetSecretAsync(account);
+        services.AccountRepository.SavedUsers.Remove(account);
 
-        var resultOfTheEndOfTheActivation = await FinishActivationWithThisCodeAsync(accountUsedByThisTwoFactorTest, servicesWithFakeToolsOfTheseTests.CalculateCodeShownOnThePhoneNow(secretSharedWithTheAuthenticatorApplication));
+        var result = await FinishActivationAsync(account, services.CalculateCurrentCode(secret));
 
-        Assert.Equal(TwoFactorActivationService.ErrorMessageForActivationThatMustRestart, resultOfTheEndOfTheActivation.ActivationMustRestartErrorMessage);
-        Assert.Empty(servicesWithFakeToolsOfTheseTests.RepositoryThatKeepsTwoFactorDataInMemory.SavedBackupCodes);
+        Assert.IsType<TwoFactorActivationFinishResult.ActivationMustRestart>(result);
+        Assert.Empty(services.TwoFactorRepository.SavedBackupCodes);
     }
 
     // Une panne n'active rien et ne perd pas le secret : le code suivant du téléphone fonctionne, sans rescanner le code QR.
     [Fact]
     public async Task DatabaseFailureDuringTheSaveIsNotHiddenAndTheNextCodeWorksAfterIt()
     {
-        var accountUsedByThisTwoFactorTest = servicesWithFakeToolsOfTheseTests.AddAccountWithoutTwoFactorToTheFakeDatabase();
-        var secretSharedWithTheAuthenticatorApplication = await StartActivationThenGetTheSecretAsync(accountUsedByThisTwoFactorTest);
-        servicesWithFakeToolsOfTheseTests.RepositoryThatKeepsTwoFactorDataInMemory.DatabaseIsDownWhileSavingTheSettings = true;
+        var account = services.AddAccountWithoutTwoFactor();
+        var secret = await StartActivationThenGetSecretAsync(account);
+        services.TwoFactorRepository.FailsWhenSavingSettings = true;
 
-        await Assert.ThrowsAsync<InvalidOperationException>(() => FinishActivationWithThisCodeAsync(accountUsedByThisTwoFactorTest, servicesWithFakeToolsOfTheseTests.CalculateCodeShownOnThePhoneNow(secretSharedWithTheAuthenticatorApplication)));
-        Assert.False(accountUsedByThisTwoFactorTest.IsTwoFactorEnabled);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => FinishActivationAsync(account, services.CalculateCurrentCode(secret)));
+        Assert.False(account.IsTwoFactorEnabled);
 
-        servicesWithFakeToolsOfTheseTests.RepositoryThatKeepsTwoFactorDataInMemory.DatabaseIsDownWhileSavingTheSettings = false;
-        servicesWithFakeToolsOfTheseTests.WaitForTheNextCodeOnThePhone();
-        var resultOfTheCodeAfterTheFailure = await FinishActivationWithThisCodeAsync(accountUsedByThisTwoFactorTest, servicesWithFakeToolsOfTheseTests.CalculateCodeShownOnThePhoneNow(secretSharedWithTheAuthenticatorApplication));
+        services.TwoFactorRepository.FailsWhenSavingSettings = false;
+        services.WaitForNextCode();
+        var result = await FinishActivationAsync(account, services.CalculateCurrentCode(secret));
 
-        Assert.True(resultOfTheCodeAfterTheFailure.IsTwoFactorActivated);
+        Assert.IsType<TwoFactorActivationFinishResult.Activated>(result);
     }
 
     [Fact]
     public async Task JournalFailureOnAWrongPasswordIsNotHidden()
     {
-        var accountUsedByThisTwoFactorTest = servicesWithFakeToolsOfTheseTests.AddAccountWithoutTwoFactorToTheFakeDatabase();
-        servicesWithFakeToolsOfTheseTests.RepositoryThatKeepsSecurityEventsInMemory.DatabaseIsDownDuringThisTest = true;
+        var account = services.AddAccountWithoutTwoFactor();
+        services.SecurityEventRepository.IsDown = true;
 
-        await Assert.ThrowsAsync<InvalidOperationException>(() => servicesWithFakeToolsOfTheseTests.CreateTwoFactorActivationServiceWithFakeTools().StartActivationWithThePasswordOfTheUserAsync(accountUsedByThisTwoFactorTest.Id, WrongPasswordTypedInTheseTests, IpAddressOfTheVisitorInTheseTests));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => services.CreateActivationService().StartAsync(account.Id, WrongPassword, IpAddress));
     }
 }

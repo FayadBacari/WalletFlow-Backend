@@ -2,24 +2,21 @@ using WalletFlow.Domain.UsersAndSecurity;
 
 namespace WalletFlow.Application.TwoFactorAuthentication;
 
-// Accès à la base pour la double authentification. Implémenté dans la couche Infrastructure.
+// Accès à la base pour les codes de secours de la double authentification. Implémenté dans la couche Infrastructure.
+// Les méthodes « Prepare… » n'écrivent rien : voir IDatabaseUnitOfWork.
 public interface ITwoFactorAuthenticationRepository
 {
-    // Donne les codes de secours de ce compte qui n'ont pas encore servi.
-    Task<List<BackupCode>> FindUnusedBackupCodesOfThisAccountAsync(Guid identifierOfTheAccountOwningTheCodes);
+    // Donne les codes de secours de ce compte qui n'ont pas encore servi. Ils ne servent qu'à être comparés : ils ne sont pas suivis.
+    Task<List<BackupCode>> FindUnusedBackupCodesAsync(Guid accountId);
 
     // Cherche un code de secours par son identifiant. Renvoie null s'il n'existe plus.
-    Task<BackupCode?> FindBackupCodeByItsIdentifierAsync(Guid identifierOfTheBackupCodeToFind);
+    // Ce code est suivi : la connexion peut ainsi le marquer comme utilisé.
+    Task<BackupCode?> FindBackupCodeAsync(Guid backupCodeId);
 
-    // Enregistre l'activation en une seule transaction SQL : le secret chiffré, les codes de secours et l'événement du journal.
-    // Renvoie faux si une autre requête vient de changer le compte : rien n'est alors enregistré.
-    Task<bool> TryToSaveTwoFactorActivationOfThisAccountAsync(
-        User accountBeingActivatedByTheFirstCode,
-        string secretOfThePhoneEncryptedForTheDatabase,
-        List<BackupCode> newBackupCodesOfTheAccount,
-        SecurityEvent securityEventOfTheTwoFactorActivation);
+    // Prépare l'enregistrement des codes de secours d'une activation.
+    void PrepareBackupCodes(List<BackupCode> backupCodes);
 
-    // Enregistre la désactivation en une seule transaction SQL : le secret et tous les codes de secours sont effacés,
-    // et l'événement est écrit au journal. Renvoie faux si une autre requête vient de changer le compte ou ses codes : rien n'est alors enregistré.
-    Task<bool> TryToSaveTwoFactorDeactivationOfThisAccountAsync(User accountBeingDeactivatedByItsOwner, SecurityEvent securityEventOfTheTwoFactorDeactivation);
+    // Prépare l'effacement de tous les codes de secours du compte, utilisés ou non :
+    // une nouvelle activation en donnera 10 autres (GR Auth).
+    Task PrepareBackupCodesRemovalAsync(Guid accountId);
 }

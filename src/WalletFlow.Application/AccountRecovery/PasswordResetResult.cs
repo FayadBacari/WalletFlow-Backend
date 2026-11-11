@@ -1,10 +1,9 @@
 namespace WalletFlow.Application.AccountRecovery;
 
-// Résultat du choix d'un nouveau mot de passe : accepté, ou refusé avec la raison du refus.
-public class PasswordResetResult
+// Résultat du choix d'un nouveau mot de passe : une seule de ces valeurs à la fois.
+public enum PasswordResetResult
 {
-    public string? LinkErrorMessage { get; init; }
-    public string? PasswordErrorMessage { get; init; }
-
-    public bool IsPasswordChanged => LinkErrorMessage == null && PasswordErrorMessage == null;
+    PasswordChanged,
+    LinkNoLongerValid,
+    PasswordBreaksRules
 }

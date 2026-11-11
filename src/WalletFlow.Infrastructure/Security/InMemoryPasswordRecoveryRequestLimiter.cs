@@ -6,8 +6,8 @@ namespace WalletFlow.Infrastructure.Security;
 public class InMemoryPasswordRecoveryRequestLimiter : InMemoryEmailAddressRequestLimiter, IPasswordRecoveryRequestLimiter
 {
     // Reçoit l'horloge qui mesure la durée de chaque compteur.
-    public InMemoryPasswordRecoveryRequestLimiter(TimeProvider clockThatGivesTheCurrentDateAndTime)
-        : base(clockThatGivesTheCurrentDateAndTime)
+    public InMemoryPasswordRecoveryRequestLimiter(TimeProvider clock)
+        : base(clock)
     {
     }
 }

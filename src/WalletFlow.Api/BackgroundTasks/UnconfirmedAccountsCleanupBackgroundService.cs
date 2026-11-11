@@ -5,48 +5,48 @@ namespace WalletFlow.Api.BackgroundTasks;
 // Tâche de fond : efface chaque jour les comptes non confirmés dont le lien a expiré (GR Auth, MPD §3).
 public class UnconfirmedAccountsCleanupBackgroundService : BackgroundService
 {
-    public static readonly TimeSpan DurationBetweenTwoCleanupsOfTheAccounts = TimeSpan.FromDays(1);
+    public static readonly TimeSpan CleanupInterval = TimeSpan.FromDays(1);
 
-    private readonly IServiceScopeFactory factoryOfTheScopesUsedByTheCleanups;
-    private readonly TimeProvider clockThatGivesTheCurrentDateAndTime;
-    private readonly ILogger<UnconfirmedAccountsCleanupBackgroundService> loggerOfTheCleanupsOfTheAccounts;
+    private readonly IServiceScopeFactory scopeFactory;
+    private readonly TimeProvider clock;
+    private readonly ILogger<UnconfirmedAccountsCleanupBackgroundService> logger;
 
     // Reçoit de quoi créer un accès à la base pour chaque passage, l'horloge et le journal technique.
     public UnconfirmedAccountsCleanupBackgroundService(
-        IServiceScopeFactory factoryOfTheScopesUsedByTheCleanups,
-        TimeProvider clockThatGivesTheCurrentDateAndTime,
-        ILogger<UnconfirmedAccountsCleanupBackgroundService> loggerOfTheCleanupsOfTheAccounts)
+        IServiceScopeFactory scopeFactory,
+        TimeProvider clock,
+        ILogger<UnconfirmedAccountsCleanupBackgroundService> logger)
     {
-        this.factoryOfTheScopesUsedByTheCleanups = factoryOfTheScopesUsedByTheCleanups;
-        this.clockThatGivesTheCurrentDateAndTime = clockThatGivesTheCurrentDateAndTime;
-        this.loggerOfTheCleanupsOfTheAccounts = loggerOfTheCleanupsOfTheAccounts;
+        this.scopeFactory = scopeFactory;
+        this.clock = clock;
+        this.logger = logger;
     }
 
     // Tourne tant que l'API tourne (nom imposé par le framework).
-    protected override async Task ExecuteAsync(CancellationToken tokenThatStopsTheCleanupTask)
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        while (!tokenThatStopsTheCleanupTask.IsCancellationRequested)
+        while (!stoppingToken.IsCancellationRequested)
         {
-            await RunOneCleanupOfTheUnconfirmedAccountsAsync();
-            await Task.Delay(DurationBetweenTwoCleanupsOfTheAccounts, clockThatGivesTheCurrentDateAndTime, tokenThatStopsTheCleanupTask);
+            await RunCleanupAsync();
+            await Task.Delay(CleanupInterval, clock, stoppingToken);
         }
     }
 
     // Fait un passage. Une panne ne doit pas arrêter l'API : la tâche réessaiera au prochain passage.
-    public async Task RunOneCleanupOfTheUnconfirmedAccountsAsync()
+    public async Task RunCleanupAsync()
     {
         try
         {
-            using var scopeOfThisCleanupOfTheAccounts = factoryOfTheScopesUsedByTheCleanups.CreateScope();
-            var serviceThatDeletesTheUnconfirmedAccounts = scopeOfThisCleanupOfTheAccounts.ServiceProvider.GetRequiredService<UnconfirmedAccountsCleanupService>();
+            using var scope = scopeFactory.CreateScope();
+            var cleanupService = scope.ServiceProvider.GetRequiredService<UnconfirmedAccountsCleanupService>();
 
-            var numberOfAccountsDeletedByThisCleanup = await serviceThatDeletesTheUnconfirmedAccounts.DeleteUnconfirmedAccountsWithExpiredLinkAsync();
+            var deletedCount = await cleanupService.DeleteExpiredUnconfirmedAccountsAsync();
 
-            loggerOfTheCleanupsOfTheAccounts.LogInformation("{NombreDeComptes} compte(s) non confirmé(s) effacé(s).", numberOfAccountsDeletedByThisCleanup);
+            logger.LogInformation("{NombreDeComptes} compte(s) non confirmé(s) effacé(s).", deletedCount);
         }
-        catch (Exception technicalErrorRaisedByTheCleanup)
+        catch (Exception exception)
         {
-            loggerOfTheCleanupsOfTheAccounts.LogError(technicalErrorRaisedByTheCleanup, "L'effacement des comptes non confirmés a échoué.");
+            logger.LogError(exception, "L'effacement des comptes non confirmés a échoué.");
         }
     }
 }

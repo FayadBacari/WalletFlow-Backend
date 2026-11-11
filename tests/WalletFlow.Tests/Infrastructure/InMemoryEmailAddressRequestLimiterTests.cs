@@ -6,136 +6,136 @@ namespace WalletFlow.Tests.Infrastructure;
 // Vérifie la limite de 3 demandes par heure et par adresse e-mail (SS §6).
 public class InMemoryEmailAddressRequestLimiterTests
 {
-    private const string EmailAddressCountedInTheseTests = "visiteur@exemple.test";
+    private const string EmailAddress = "visiteur@exemple.test";
 
-    private readonly FakeTimeProviderForTests clockThatOnlyMovesWhenTestsAskIt = new FakeTimeProviderForTests();
+    private readonly FakeTimeProvider clock = new FakeTimeProvider();
 
     // Crée la limite à tester, avec la fausse horloge.
-    private InMemoryEmailAddressRequestLimiter CreateLimiterWithTheFakeClock()
+    private InMemoryEmailAddressRequestLimiter CreateLimiter()
     {
-        return new InMemoryEmailAddressRequestLimiter(clockThatOnlyMovesWhenTestsAskIt);
+        return new InMemoryEmailAddressRequestLimiter(clock);
     }
 
     [Fact]
     public void ThreeRequestsAreAcceptedAndTheFourthIsRefused()
     {
-        var limiterBeingTestedWithTheFakeClock = CreateLimiterWithTheFakeClock();
+        var limiter = CreateLimiter();
 
-        Assert.True(limiterBeingTestedWithTheFakeClock.TryToCountNewRequestForThisEmailAddress(EmailAddressCountedInTheseTests));
-        Assert.True(limiterBeingTestedWithTheFakeClock.TryToCountNewRequestForThisEmailAddress(EmailAddressCountedInTheseTests));
-        Assert.True(limiterBeingTestedWithTheFakeClock.TryToCountNewRequestForThisEmailAddress(EmailAddressCountedInTheseTests));
-        Assert.False(limiterBeingTestedWithTheFakeClock.TryToCountNewRequestForThisEmailAddress(EmailAddressCountedInTheseTests));
+        Assert.True(limiter.TryCountRequest(EmailAddress));
+        Assert.True(limiter.TryCountRequest(EmailAddress));
+        Assert.True(limiter.TryCountRequest(EmailAddress));
+        Assert.False(limiter.TryCountRequest(EmailAddress));
     }
 
     [Fact]
     public void LimitOfOneAddressDoesNotBlockAnotherAddress()
     {
-        var limiterBeingTestedWithTheFakeClock = CreateLimiterWithTheFakeClock();
-        for (var numberOfTheRequestBeingCounted = 1; numberOfTheRequestBeingCounted <= 4; numberOfTheRequestBeingCounted++)
+        var limiter = CreateLimiter();
+        for (var requestNumber = 1; requestNumber <= 4; requestNumber++)
         {
-            limiterBeingTestedWithTheFakeClock.TryToCountNewRequestForThisEmailAddress(EmailAddressCountedInTheseTests);
+            limiter.TryCountRequest(EmailAddress);
         }
 
-        Assert.True(limiterBeingTestedWithTheFakeClock.TryToCountNewRequestForThisEmailAddress("autre-visiteur@exemple.test"));
+        Assert.True(limiter.TryCountRequest("autre-visiteur@exemple.test"));
     }
 
     [Fact]
     public void LimitStaysActiveUntilOneSecondBeforeTheEndOfTheHour()
     {
-        var limiterBeingTestedWithTheFakeClock = CreateLimiterWithTheFakeClock();
-        for (var numberOfTheRequestBeingCounted = 1; numberOfTheRequestBeingCounted <= 3; numberOfTheRequestBeingCounted++)
+        var limiter = CreateLimiter();
+        for (var requestNumber = 1; requestNumber <= 3; requestNumber++)
         {
-            limiterBeingTestedWithTheFakeClock.TryToCountNewRequestForThisEmailAddress(EmailAddressCountedInTheseTests);
+            limiter.TryCountRequest(EmailAddress);
         }
 
-        clockThatOnlyMovesWhenTestsAskIt.MoveFakeClockForwardByThisDuration(TimeSpan.FromHours(1) - TimeSpan.FromSeconds(1));
+        clock.Advance(TimeSpan.FromHours(1) - TimeSpan.FromSeconds(1));
 
-        Assert.False(limiterBeingTestedWithTheFakeClock.TryToCountNewRequestForThisEmailAddress(EmailAddressCountedInTheseTests));
+        Assert.False(limiter.TryCountRequest(EmailAddress));
     }
 
     [Fact]
     public void AddressIsAcceptedAgainAfterOneHour()
     {
-        var limiterBeingTestedWithTheFakeClock = CreateLimiterWithTheFakeClock();
-        for (var numberOfTheRequestBeingCounted = 1; numberOfTheRequestBeingCounted <= 4; numberOfTheRequestBeingCounted++)
+        var limiter = CreateLimiter();
+        for (var requestNumber = 1; requestNumber <= 4; requestNumber++)
         {
-            limiterBeingTestedWithTheFakeClock.TryToCountNewRequestForThisEmailAddress(EmailAddressCountedInTheseTests);
+            limiter.TryCountRequest(EmailAddress);
         }
 
-        clockThatOnlyMovesWhenTestsAskIt.MoveFakeClockForwardByThisDuration(TimeSpan.FromHours(1));
+        clock.Advance(TimeSpan.FromHours(1));
 
-        Assert.True(limiterBeingTestedWithTheFakeClock.TryToCountNewRequestForThisEmailAddress(EmailAddressCountedInTheseTests));
+        Assert.True(limiter.TryCountRequest(EmailAddress));
     }
 
     // Des demandes refusées ne prolongent pas le blocage : la période part de la première demande.
     [Fact]
     public void RefusedRequestsDoNotExtendTheCountingWindow()
     {
-        var limiterBeingTestedWithTheFakeClock = CreateLimiterWithTheFakeClock();
-        for (var numberOfTheRequestBeingCounted = 1; numberOfTheRequestBeingCounted <= 3; numberOfTheRequestBeingCounted++)
+        var limiter = CreateLimiter();
+        for (var requestNumber = 1; requestNumber <= 3; requestNumber++)
         {
-            limiterBeingTestedWithTheFakeClock.TryToCountNewRequestForThisEmailAddress(EmailAddressCountedInTheseTests);
+            limiter.TryCountRequest(EmailAddress);
         }
 
-        clockThatOnlyMovesWhenTestsAskIt.MoveFakeClockForwardByThisDuration(TimeSpan.FromMinutes(59));
-        limiterBeingTestedWithTheFakeClock.TryToCountNewRequestForThisEmailAddress(EmailAddressCountedInTheseTests);
-        clockThatOnlyMovesWhenTestsAskIt.MoveFakeClockForwardByThisDuration(TimeSpan.FromMinutes(1));
+        clock.Advance(TimeSpan.FromMinutes(59));
+        limiter.TryCountRequest(EmailAddress);
+        clock.Advance(TimeSpan.FromMinutes(1));
 
-        Assert.True(limiterBeingTestedWithTheFakeClock.TryToCountNewRequestForThisEmailAddress(EmailAddressCountedInTheseTests));
+        Assert.True(limiter.TryCountRequest(EmailAddress));
     }
 
     // Plusieurs requêtes arrivent en même temps : la limite doit rester exacte.
     [Fact]
     public async Task SimultaneousRequestsNeverExceedTheLimit()
     {
-        var limiterBeingTestedWithTheFakeClock = CreateLimiterWithTheFakeClock();
-        var simultaneousRequestsBeingCountedByTheLimiter = new List<Task<bool>>();
+        var limiter = CreateLimiter();
+        var requests = new List<Task<bool>>();
 
-        for (var numberOfTheRequestBeingCounted = 1; numberOfTheRequestBeingCounted <= 200; numberOfTheRequestBeingCounted++)
+        for (var requestNumber = 1; requestNumber <= 200; requestNumber++)
         {
-            simultaneousRequestsBeingCountedByTheLimiter.Add(Task.Run(() =>
-                limiterBeingTestedWithTheFakeClock.TryToCountNewRequestForThisEmailAddress(EmailAddressCountedInTheseTests)));
+            requests.Add(Task.Run(() =>
+                limiter.TryCountRequest(EmailAddress)));
         }
 
-        var answersGivenToTheSimultaneousRequests = await Task.WhenAll(simultaneousRequestsBeingCountedByTheLimiter);
+        var results = await Task.WhenAll(requests);
 
-        var numberOfRequestsAcceptedByTheLimiter = 0;
-        foreach (var answerGivenToOneSimultaneousRequest in answersGivenToTheSimultaneousRequests)
+        var acceptedCount = 0;
+        foreach (var accepted in results)
         {
-            if (answerGivenToOneSimultaneousRequest)
+            if (accepted)
             {
-                numberOfRequestsAcceptedByTheLimiter = numberOfRequestsAcceptedByTheLimiter + 1;
+                acceptedCount = acceptedCount + 1;
             }
         }
 
-        Assert.Equal(3, numberOfRequestsAcceptedByTheLimiter);
+        Assert.Equal(3, acceptedCount);
     }
 
     // Beaucoup de requêtes simultanées sur des adresses différentes : sans verrou, les compteurs se corrompraient.
     [Fact]
     public async Task SimultaneousRequestsOnManyAddressesKeepEveryCounterExact()
     {
-        var limiterBeingTestedWithTheFakeClock = CreateLimiterWithTheFakeClock();
-        var tasksSendingRequestsAtTheSameTime = new List<Task>();
+        var limiter = CreateLimiter();
+        var tasks = new List<Task>();
 
-        for (var numberOfTheTaskBeingStarted = 1; numberOfTheTaskBeingStarted <= 8; numberOfTheTaskBeingStarted++)
+        for (var taskNumber = 1; taskNumber <= 8; taskNumber++)
         {
-            var prefixOfTheAddressesOfThisTask = "visiteur-" + numberOfTheTaskBeingStarted + "-";
+            var addressPrefix = "visiteur-" + taskNumber + "-";
 
-            tasksSendingRequestsAtTheSameTime.Add(Task.Run(() =>
+            tasks.Add(Task.Run(() =>
             {
-                for (var numberOfTheAddressBeingCounted = 1; numberOfTheAddressBeingCounted <= 500; numberOfTheAddressBeingCounted++)
+                for (var addressNumber = 1; addressNumber <= 500; addressNumber++)
                 {
-                    limiterBeingTestedWithTheFakeClock.TryToCountNewRequestForThisEmailAddress(prefixOfTheAddressesOfThisTask + numberOfTheAddressBeingCounted + "@exemple.test");
+                    limiter.TryCountRequest(addressPrefix + addressNumber + "@exemple.test");
                 }
             }));
         }
 
-        await Task.WhenAll(tasksSendingRequestsAtTheSameTime);
+        await Task.WhenAll(tasks);
 
         // Chaque adresse a été comptée une fois : il lui reste exactement 2 demandes.
-        Assert.True(limiterBeingTestedWithTheFakeClock.TryToCountNewRequestForThisEmailAddress("visiteur-1-1@exemple.test"));
-        Assert.True(limiterBeingTestedWithTheFakeClock.TryToCountNewRequestForThisEmailAddress("visiteur-1-1@exemple.test"));
-        Assert.False(limiterBeingTestedWithTheFakeClock.TryToCountNewRequestForThisEmailAddress("visiteur-1-1@exemple.test"));
+        Assert.True(limiter.TryCountRequest("visiteur-1-1@exemple.test"));
+        Assert.True(limiter.TryCountRequest("visiteur-1-1@exemple.test"));
+        Assert.False(limiter.TryCountRequest("visiteur-1-1@exemple.test"));
     }
 }

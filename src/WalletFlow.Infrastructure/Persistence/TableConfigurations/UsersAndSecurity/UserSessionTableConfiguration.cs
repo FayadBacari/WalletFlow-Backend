@@ -8,19 +8,19 @@ namespace WalletFlow.Infrastructure.Persistence.TableConfigurations.UsersAndSecu
 public class UserSessionTableConfiguration : IEntityTypeConfiguration<UserSession>
 {
     // Appelée par EF Core au démarrage (nom imposé par le framework).
-    public void Configure(EntityTypeBuilder<UserSession> builderOfTheUserSessionTableMapping)
+    public void Configure(EntityTypeBuilder<UserSession> builder)
     {
-        builderOfTheUserSessionTableMapping.ToTable("session");
+        builder.ToTable("session");
 
         // L'identifiant de session est tiré au hasard par l'application à chaque connexion.
-        builderOfTheUserSessionTableMapping.HasKey(nameof(UserSession.Id));
-        builderOfTheUserSessionTableMapping.Property(nameof(UserSession.Id)).HasColumnName("id_session").ValueGeneratedNever();
+        builder.HasKey(nameof(UserSession.Id));
+        builder.Property(nameof(UserSession.Id)).HasColumnName("id_session").HasColumnType("char(64)").ValueGeneratedNever();
 
-        builderOfTheUserSessionTableMapping.Property(nameof(UserSession.LastActivityAt)).HasColumnName("date_derniere_activite");
-        builderOfTheUserSessionTableMapping.Property(nameof(UserSession.UserId)).HasColumnName("id_utilisateur");
+        builder.Property(nameof(UserSession.LastActivityAt)).HasColumnName("date_derniere_activite");
+        builder.Property(nameof(UserSession.UserId)).HasColumnName("id_utilisateur");
 
         // Une session appartient à un utilisateur et disparaît avec lui (ON DELETE CASCADE).
-        builderOfTheUserSessionTableMapping.HasOne<User>().WithMany()
+        builder.HasOne<User>().WithMany()
             .HasForeignKey(nameof(UserSession.UserId))
             .OnDelete(DeleteBehavior.Cascade);
     }

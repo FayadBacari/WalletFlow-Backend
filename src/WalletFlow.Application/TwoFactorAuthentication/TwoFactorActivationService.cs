@@ -1,4 +1,5 @@
 using System.Net;
+using WalletFlow.Application.Persistence;
 using WalletFlow.Application.Security;
 using WalletFlow.Application.UserAccounts;
 using WalletFlow.Domain.UsersAndSecurity;
@@ -9,214 +10,197 @@ namespace WalletFlow.Application.TwoFactorAuthentication;
 // Le mot de passe donne le secret, puis un premier code active tout : un code QR mal scanné n'enferme donc personne dehors.
 public class TwoFactorActivationService
 {
-    public const string ErrorMessageForWrongPasswordAtActivation = "Ce mot de passe n'est pas le bon.";
-    public const string ErrorMessageForTwoFactorAlreadyEnabled = "La double authentification est déjà activée.";
-    public const string ErrorMessageForActivationThatMustRestart = "Cette activation n'est plus valable. Recommence depuis le début.";
-
-    private readonly IUserAccountRepository repositoryOfTheUserAccountsInDatabase;
-    private readonly ITwoFactorAuthenticationRepository repositoryOfTheTwoFactorDataInDatabase;
-    private readonly ISecurityEventRepository repositoryOfTheSecurityEventsInDatabase;
-    private readonly IPasswordHasher hasherOfThePasswordsAndBackupCodes;
-    private readonly ISecureTokenGenerator generatorOfTheSecureRandomTokens;
-    private readonly IAuthenticatorCodeTool toolThatCalculatesTheAuthenticatorCodes;
-    private readonly ITotpSecretProtector protectorOfTheSecretsInTheDatabase;
-    private readonly ISecretsWaitingForActivationStore storeOfTheSecretsWaitingForActivation;
-    private readonly TwoFactorCodeCheckingService serviceThatChecksTheTwoFactorCodes;
-    private readonly TimeProvider clockThatGivesTheCurrentDateAndTime;
+    private readonly IUserAccountRepository accountRepository;
+    private readonly ITwoFactorAuthenticationRepository twoFactorRepository;
+    private readonly DatabaseChangesSavingService savingService;
+    private readonly SecurityJournalService securityJournal;
+    private readonly IPasswordHasher passwordHasher;
+    private readonly IBackupCodeHasher backupCodeHasher;
+    private readonly ISecureTokenGenerator tokenGenerator;
+    private readonly IAuthenticatorCodeTool authenticatorCodeTool;
+    private readonly ITotpSecretProtector secretProtector;
+    private readonly IWaitingSecretStore waitingSecretStore;
+    private readonly TwoFactorCodeCheckingService codeCheckingService;
 
     // Reçoit les outils dont l'activation a besoin.
     public TwoFactorActivationService(
-        IUserAccountRepository repositoryOfTheUserAccountsInDatabase,
-        ITwoFactorAuthenticationRepository repositoryOfTheTwoFactorDataInDatabase,
-        ISecurityEventRepository repositoryOfTheSecurityEventsInDatabase,
-        IPasswordHasher hasherOfThePasswordsAndBackupCodes,
-        ISecureTokenGenerator generatorOfTheSecureRandomTokens,
-        IAuthenticatorCodeTool toolThatCalculatesTheAuthenticatorCodes,
-        ITotpSecretProtector protectorOfTheSecretsInTheDatabase,
-        ISecretsWaitingForActivationStore storeOfTheSecretsWaitingForActivation,
-        TwoFactorCodeCheckingService serviceThatChecksTheTwoFactorCodes,
-        TimeProvider clockThatGivesTheCurrentDateAndTime)
+        IUserAccountRepository accountRepository,
+        ITwoFactorAuthenticationRepository twoFactorRepository,
+        DatabaseChangesSavingService savingService,
+        SecurityJournalService securityJournal,
+        IPasswordHasher passwordHasher,
+        IBackupCodeHasher backupCodeHasher,
+        ISecureTokenGenerator tokenGenerator,
+        IAuthenticatorCodeTool authenticatorCodeTool,
+        ITotpSecretProtector secretProtector,
+        IWaitingSecretStore waitingSecretStore,
+        TwoFactorCodeCheckingService codeCheckingService)
     {
-        this.repositoryOfTheUserAccountsInDatabase = repositoryOfTheUserAccountsInDatabase;
-        this.repositoryOfTheTwoFactorDataInDatabase = repositoryOfTheTwoFactorDataInDatabase;
-        this.repositoryOfTheSecurityEventsInDatabase = repositoryOfTheSecurityEventsInDatabase;
-        this.hasherOfThePasswordsAndBackupCodes = hasherOfThePasswordsAndBackupCodes;
-        this.generatorOfTheSecureRandomTokens = generatorOfTheSecureRandomTokens;
-        this.toolThatCalculatesTheAuthenticatorCodes = toolThatCalculatesTheAuthenticatorCodes;
-        this.protectorOfTheSecretsInTheDatabase = protectorOfTheSecretsInTheDatabase;
-        this.storeOfTheSecretsWaitingForActivation = storeOfTheSecretsWaitingForActivation;
-        this.serviceThatChecksTheTwoFactorCodes = serviceThatChecksTheTwoFactorCodes;
-        this.clockThatGivesTheCurrentDateAndTime = clockThatGivesTheCurrentDateAndTime;
+        this.accountRepository = accountRepository;
+        this.twoFactorRepository = twoFactorRepository;
+        this.savingService = savingService;
+        this.securityJournal = securityJournal;
+        this.passwordHasher = passwordHasher;
+        this.backupCodeHasher = backupCodeHasher;
+        this.tokenGenerator = tokenGenerator;
+        this.authenticatorCodeTool = authenticatorCodeTool;
+        this.secretProtector = secretProtector;
+        this.waitingSecretStore = waitingSecretStore;
+        this.codeCheckingService = codeCheckingService;
     }
 
     // Premier temps : le mot de passe redemandé donne le secret. Une session volée ne peut donc pas enfermer le propriétaire dehors (SS §2).
     // Rien n'est écrit en base : le secret attend le premier code, en mémoire.
-    public async Task<TwoFactorActivationStartResult> StartActivationWithThePasswordOfTheUserAsync(Guid identifierOfTheLoggedInUser, string passwordTypedByTheLoggedInUser, IPAddress? ipAddressOfTheLoggedInUser)
+    public async Task<TwoFactorActivationStartResult> StartAsync(Guid userId, string password, IPAddress? ipAddress)
     {
-        var accountOfTheLoggedInUser = await repositoryOfTheUserAccountsInDatabase.FindUserAccountByIdentifierAsync(identifierOfTheLoggedInUser);
+        var account = await accountRepository.FindByIdAsync(userId);
 
-        if (accountOfTheLoggedInUser == null)
+        if (account == null)
         {
-            return new TwoFactorActivationStartResult { WrongPasswordErrorMessage = ErrorMessageForWrongPasswordAtActivation };
+            return new TwoFactorActivationStartResult.WrongPassword();
         }
 
-        if (accountOfTheLoggedInUser.IsTwoFactorEnabled)
+        if (account.IsTwoFactorEnabled)
         {
-            return new TwoFactorActivationStartResult { AlreadyEnabledErrorMessage = ErrorMessageForTwoFactorAlreadyEnabled };
+            return new TwoFactorActivationStartResult.AlreadyEnabled();
         }
 
-        var passwordWrittenInItsNormalizedForm = PasswordRules.ConvertPasswordIntoItsNormalizedForm(passwordTypedByTheLoggedInUser);
+        var normalizedPassword = PasswordRules.Normalize(password);
 
-        if (!hasherOfThePasswordsAndBackupCodes.CheckThatPasswordMatchesItsSecureHash(passwordWrittenInItsNormalizedForm, accountOfTheLoggedInUser.PasswordHash))
+        if (!await passwordHasher.VerifyAsync(normalizedPassword, account.PasswordHash))
         {
-            await SaveSecurityEventOfThisActivationAttemptAsync(SecurityEventResult.Failure, identifierOfTheLoggedInUser, ipAddressOfTheLoggedInUser);
-            return new TwoFactorActivationStartResult { WrongPasswordErrorMessage = ErrorMessageForWrongPasswordAtActivation };
+            await securityJournal.SaveEventNowAsync(SecurityEventType.TwoFactorActivation, SecurityEventResult.Failure, userId, ipAddress);
+            return new TwoFactorActivationStartResult.WrongPassword();
         }
 
-        var newSecretOfTheAuthenticatorApplication = toolThatCalculatesTheAuthenticatorCodes.GenerateNewRandomSecretForTheAuthenticatorApplication();
-        storeOfTheSecretsWaitingForActivation.SaveSecretWaitingForActivationOfThisAccount(identifierOfTheLoggedInUser, newSecretOfTheAuthenticatorApplication);
+        var secret = authenticatorCodeTool.GenerateSecret();
+        waitingSecretStore.Save(userId, secret);
 
-        return new TwoFactorActivationStartResult
+        return new TwoFactorActivationStartResult.Started
         {
-            SecretOfTheAuthenticatorApplication = newSecretOfTheAuthenticatorApplication,
-            LinkThatAddsTheSecretToTheApplication = toolThatCalculatesTheAuthenticatorCodes.BuildLinkThatAddsThisSecretToTheApplication(newSecretOfTheAuthenticatorApplication, accountOfTheLoggedInUser.Email)
+            Secret = secret,
+            SetupLink = authenticatorCodeTool.BuildSetupLink(secret, account.Email)
         };
     }
 
     // Second temps : un premier code juste active tout, et les 10 codes de secours sont donnés une seule fois (GR Auth).
-    public async Task<TwoFactorActivationFinishResult> FinishActivationWithTheFirstCodeOfTheUserAsync(Guid identifierOfTheLoggedInUser, string codeTypedByTheLoggedInUser, IPAddress? ipAddressOfTheLoggedInUser)
+    public async Task<TwoFactorActivationFinishResult> FinishAsync(Guid userId, string code, IPAddress? ipAddress)
     {
-        var secretWaitingForTheFirstCode = storeOfTheSecretsWaitingForActivation.FindSecretWaitingForActivationOfThisAccount(identifierOfTheLoggedInUser);
+        var waitingSecret = waitingSecretStore.Find(userId);
 
-        if (secretWaitingForTheFirstCode == null)
+        if (waitingSecret == null)
         {
-            return new TwoFactorActivationFinishResult { ActivationMustRestartErrorMessage = ErrorMessageForActivationThatMustRestart };
+            return new TwoFactorActivationFinishResult.ActivationMustRestart();
         }
 
-        if (!serviceThatChecksTheTwoFactorCodes.CheckThatFirstCodeMatchesTheSecretWaitingForActivation(identifierOfTheLoggedInUser, secretWaitingForTheFirstCode, codeTypedByTheLoggedInUser))
+        if (!codeCheckingService.CheckFirstCode(userId, waitingSecret, code))
         {
-            await SaveSecurityEventOfThisActivationAttemptAsync(SecurityEventResult.Failure, identifierOfTheLoggedInUser, ipAddressOfTheLoggedInUser);
-            return new TwoFactorActivationFinishResult { WrongCodeErrorMessage = TwoFactorCodeCheckingService.ErrorMessageForWrongTwoFactorCode };
+            await securityJournal.SaveEventNowAsync(SecurityEventType.TwoFactorActivation, SecurityEventResult.Failure, userId, ipAddress);
+            return new TwoFactorActivationFinishResult.WrongCode();
         }
 
-        return await SaveActivationThenGiveTheBackupCodesAsync(identifierOfTheLoggedInUser, secretWaitingForTheFirstCode, ipAddressOfTheLoggedInUser);
+        return await SaveThenGiveBackupCodesAsync(userId, waitingSecret, ipAddress);
     }
 
     // Prépare les codes de secours et le secret chiffré, enregistre le tout, puis oublie le secret en mémoire.
     // Le hachage est lent : il passe avant la lecture du compte, pour que l'écriture suive de près la lecture.
-    private async Task<TwoFactorActivationFinishResult> SaveActivationThenGiveTheBackupCodesAsync(Guid identifierOfTheLoggedInUser, string secretWaitingForTheFirstCode, IPAddress? ipAddressOfTheLoggedInUser)
+    private async Task<TwoFactorActivationFinishResult> SaveThenGiveBackupCodesAsync(Guid userId, string waitingSecret, IPAddress? ipAddress)
     {
-        var backupCodesInTheirCleanForm = GenerateNewBackupCodesInTheirCleanForm();
-        var backupCodesToSaveInTheDatabase = HashBackupCodesForThisAccount(backupCodesInTheirCleanForm, identifierOfTheLoggedInUser);
-        var secretOfThePhoneEncryptedForTheDatabase = protectorOfTheSecretsInTheDatabase.EncryptSecretOfThisUserAccount(secretWaitingForTheFirstCode, identifierOfTheLoggedInUser);
+        var cleanedCodes = GenerateBackupCodes();
+        var backupCodes = await HashBackupCodesAsync(cleanedCodes, userId);
+        var encryptedSecret = secretProtector.Encrypt(waitingSecret, userId);
 
-        var activationWasSavedInTheDatabase = await TryToSaveActivationUnlessOtherRequestsKeepChangingTheAccountAsync(
-            identifierOfTheLoggedInUser,
-            secretOfThePhoneEncryptedForTheDatabase,
-            backupCodesToSaveInTheDatabase,
-            ipAddressOfTheLoggedInUser);
+        var saved = await TrySaveActivationAsync(
+            userId,
+            encryptedSecret,
+            backupCodes,
+            ipAddress);
 
-        storeOfTheSecretsWaitingForActivation.RemoveSecretWaitingForActivationOfThisAccount(identifierOfTheLoggedInUser);
+        waitingSecretStore.Remove(userId);
 
-        if (!activationWasSavedInTheDatabase)
+        if (!saved)
         {
-            return new TwoFactorActivationFinishResult { ActivationMustRestartErrorMessage = ErrorMessageForActivationThatMustRestart };
+            return new TwoFactorActivationFinishResult.ActivationMustRestart();
         }
 
-        return new TwoFactorActivationFinishResult { BackupCodesToGiveOnlyOnce = ConvertBackupCodesIntoTheirDisplayedForm(backupCodesInTheirCleanForm) };
+        return new TwoFactorActivationFinishResult.Activated { BackupCodes = FormatBackupCodes(cleanedCodes) };
     }
 
-    // Enregistre l'activation. Si une autre requête a changé le compte, relit le compte et recommence.
+    // Enregistre l'activation. Si une autre requête a changé le compte, le compte est relu et tout recommence.
     // Renvoie faux si le compte a disparu, s'il vient d'être activé par une autre requête, ou s'il change encore au bout de 10 passages.
-    private async Task<bool> TryToSaveActivationUnlessOtherRequestsKeepChangingTheAccountAsync(
-        Guid identifierOfTheLoggedInUser,
-        string secretOfThePhoneEncryptedForTheDatabase,
-        List<BackupCode> backupCodesToSaveInTheDatabase,
-        IPAddress? ipAddressOfTheLoggedInUser)
+    private async Task<bool> TrySaveActivationAsync(
+        Guid userId,
+        string encryptedSecret,
+        List<BackupCode> backupCodes,
+        IPAddress? ipAddress)
     {
-        for (var numberOfTheTryBeingDone = 1; numberOfTheTryBeingDone <= AccountLockoutRules.MaximumNumberOfTriesWhileOtherRequestsChangeTheAccount; numberOfTheTryBeingDone++)
+        return await savingService.SaveWithRetriesAsync(
+            () => PrepareActivationAsync(userId, encryptedSecret, backupCodes, ipAddress),
+            false);
+    }
+
+    // Un passage : lit le compte, refuse s'il a disparu ou s'il est déjà activé : un compte ne reçoit jamais 20 codes de secours.
+    // Sinon, prépare le secret chiffré, les codes de secours et l'événement du journal.
+    private async Task<PreparedChanges<bool>> PrepareActivationAsync(
+        Guid userId,
+        string encryptedSecret,
+        List<BackupCode> backupCodes,
+        IPAddress? ipAddress)
+    {
+        var account = await accountRepository.FindByIdAsync(userId);
+
+        if (account == null || account.IsTwoFactorEnabled)
         {
-            var accountReadBeforeSavingTheActivation = await repositoryOfTheUserAccountsInDatabase.FindUserAccountByIdentifierAsync(identifierOfTheLoggedInUser);
-
-            if (accountReadBeforeSavingTheActivation == null || accountReadBeforeSavingTheActivation.IsTwoFactorEnabled)
-            {
-                return false;
-            }
-
-            var activationWasSavedInTheDatabase = await repositoryOfTheTwoFactorDataInDatabase.TryToSaveTwoFactorActivationOfThisAccountAsync(
-                accountReadBeforeSavingTheActivation,
-                secretOfThePhoneEncryptedForTheDatabase,
-                backupCodesToSaveInTheDatabase,
-                CreateSecurityEventOfThisActivationAttempt(SecurityEventResult.Success, identifierOfTheLoggedInUser, ipAddressOfTheLoggedInUser));
-
-            if (activationWasSavedInTheDatabase)
-            {
-                return true;
-            }
+            return PreparedChanges<bool>.NothingToSave(false);
         }
 
-        return false;
+        account.ActivateTwoFactor(encryptedSecret);
+        twoFactorRepository.PrepareBackupCodes(backupCodes);
+        securityJournal.PrepareEvent(SecurityEventType.TwoFactorActivation, SecurityEventResult.Success, userId, ipAddress);
+
+        return PreparedChanges<bool>.SaveThenReturn(true);
     }
 
     // Tire au hasard les 10 codes de secours (GR Auth).
-    private List<string> GenerateNewBackupCodesInTheirCleanForm()
+    private List<string> GenerateBackupCodes()
     {
-        var backupCodesInTheirCleanForm = new List<string>();
+        var cleanedCodes = new List<string>();
 
-        for (var numberOfTheBackupCodeBeingDrawn = 1; numberOfTheBackupCodeBeingDrawn <= TwoFactorAuthenticationRules.NumberOfBackupCodesGivenAtEachActivation; numberOfTheBackupCodeBeingDrawn++)
+        for (var codeNumber = 1; codeNumber <= TwoFactorAuthenticationRules.BackupCodesPerActivation; codeNumber++)
         {
-            backupCodesInTheirCleanForm.Add(generatorOfTheSecureRandomTokens.GenerateNewRandomBackupCodeInItsCleanForm());
+            cleanedCodes.Add(tokenGenerator.GenerateBackupCode());
         }
 
-        return backupCodesInTheirCleanForm;
+        return cleanedCodes;
     }
 
-    // Hache chaque code de secours comme un mot de passe : seule l'empreinte va en base (SS §2).
-    private List<BackupCode> HashBackupCodesForThisAccount(List<string> backupCodesInTheirCleanForm, Guid identifierOfTheLoggedInUser)
+    // Hache chaque code de secours comme un mot de passe, avec le sel du compte : seule l'empreinte va en base (SS §2).
+    private async Task<List<BackupCode>> HashBackupCodesAsync(List<string> cleanedCodes, Guid userId)
     {
-        var backupCodesToSaveInTheDatabase = new List<BackupCode>();
+        var backupCodes = new List<BackupCode>();
 
-        foreach (var backupCodeInItsCleanFormBeingHashed in backupCodesInTheirCleanForm)
+        foreach (var cleanedCode in cleanedCodes)
         {
-            backupCodesToSaveInTheDatabase.Add(new BackupCode
+            backupCodes.Add(new BackupCode
             {
-                CodeHash = hasherOfThePasswordsAndBackupCodes.ConvertPasswordIntoItsSecureHash(backupCodeInItsCleanFormBeingHashed),
-                UserId = identifierOfTheLoggedInUser
+                CodeHash = await backupCodeHasher.HashAsync(cleanedCode, userId),
+                UserId = userId
             });
         }
 
-        return backupCodesToSaveInTheDatabase;
+        return backupCodes;
     }
 
     // Écrit les codes de secours comme ils sont remis à l'utilisateur.
-    private static List<string> ConvertBackupCodesIntoTheirDisplayedForm(List<string> backupCodesInTheirCleanForm)
+    private static List<string> FormatBackupCodes(List<string> cleanedCodes)
     {
-        var backupCodesInTheirDisplayedForm = new List<string>();
+        var displayedCodes = new List<string>();
 
-        foreach (var backupCodeInItsCleanFormBeingWritten in backupCodesInTheirCleanForm)
+        foreach (var cleanedCode in cleanedCodes)
         {
-            backupCodesInTheirDisplayedForm.Add(TwoFactorAuthenticationRules.ConvertBackupCodeIntoItsDisplayedForm(backupCodeInItsCleanFormBeingWritten));
+            displayedCodes.Add(TwoFactorAuthenticationRules.FormatBackupCode(cleanedCode));
         }
 
-        return backupCodesInTheirDisplayedForm;
-    }
-
-    // Note un refus dans le journal de sécurité (SS §11).
-    private async Task SaveSecurityEventOfThisActivationAttemptAsync(SecurityEventResult resultOfThisAttemptToActivateTheTwoFactor, Guid identifierOfTheLoggedInUser, IPAddress? ipAddressOfTheLoggedInUser)
-    {
-        await repositoryOfTheSecurityEventsInDatabase.SaveSecurityEventInTheJournalAsync(CreateSecurityEventOfThisActivationAttempt(resultOfThisAttemptToActivateTheTwoFactor, identifierOfTheLoggedInUser, ipAddressOfTheLoggedInUser));
-    }
-
-    // Crée l'événement du journal de sécurité (SS §11).
-    private SecurityEvent CreateSecurityEventOfThisActivationAttempt(SecurityEventResult resultOfThisAttemptToActivateTheTwoFactor, Guid identifierOfTheLoggedInUser, IPAddress? ipAddressOfTheLoggedInUser)
-    {
-        return new SecurityEvent
-        {
-            Type = SecurityEventType.TwoFactorActivation,
-            Result = resultOfThisAttemptToActivateTheTwoFactor,
-            OccurredAt = clockThatGivesTheCurrentDateAndTime.GetUtcNow().UtcDateTime,
-            IpAddress = ipAddressOfTheLoggedInUser,
-            UserId = identifierOfTheLoggedInUser
-        };
+        return displayedCodes;
     }
 }

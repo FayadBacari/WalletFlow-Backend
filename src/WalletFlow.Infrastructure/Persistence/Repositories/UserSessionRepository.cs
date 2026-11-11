@@ -5,92 +5,78 @@ using WalletFlow.Domain.UsersAndSecurity;
 namespace WalletFlow.Infrastructure.Persistence.Repositories;
 
 // Lit et écrit les sessions et les appareils dans la base PostgreSQL.
+// Les méthodes « Prepare… » n'écrivent rien : l'unité de travail enregistre tout ensemble (voir IDatabaseUnitOfWork).
 public class UserSessionRepository : IUserSessionRepository
 {
-    private readonly WalletFlowDatabaseContext databaseContextOfTheCurrentHttpRequest;
+    private readonly WalletFlowDatabaseContext databaseContext;
 
     // Reçoit l'accès à la base de la requête en cours.
-    public UserSessionRepository(WalletFlowDatabaseContext databaseContextOfTheCurrentHttpRequest)
+    public UserSessionRepository(WalletFlowDatabaseContext databaseContext)
     {
-        this.databaseContextOfTheCurrentHttpRequest = databaseContextOfTheCurrentHttpRequest;
+        this.databaseContext = databaseContext;
     }
 
-    // Enregistre tout en une seule transaction SQL : SaveChangesAsync enregistre tout, ou rien.
-    // Renvoie faux si une autre requête vient de modifier le compte : rien n'est alors enregistré.
-    public async Task<bool> TryToSaveSuccessfulLoginOfThisAccountAsync(
-        User accountThatHasJustLoggedIn,
-        UserSession newSessionOfTheUserAccount,
-        Device? newDeviceOfTheUserAccount,
-        BackupCode? backupCodeUsedForThisLogin,
-        SecurityEvent securityEventOfTheSuccessfulLogin)
+    // Prépare l'enregistrement d'une nouvelle session.
+    public void PrepareSession(UserSession session)
     {
-        // EF Core suit le compte depuis sa lecture. Le compte est écrit même si ses compteurs n'ont pas changé : cette écriture
-        // contrôle en base que le mot de passe vérifié est toujours le bon. Sinon, une session survivrait à une récupération.
-        databaseContextOfTheCurrentHttpRequest.Entry(accountThatHasJustLoggedIn).Property(nameof(User.FailedLoginAttemptCount)).IsModified = true;
+        databaseContext.UserSessions.Add(session);
+    }
 
-        databaseContextOfTheCurrentHttpRequest.UserSessions.Add(newSessionOfTheUserAccount);
-        databaseContextOfTheCurrentHttpRequest.SecurityEvents.Add(securityEventOfTheSuccessfulLogin);
-
-        if (newDeviceOfTheUserAccount != null)
-        {
-            databaseContextOfTheCurrentHttpRequest.Devices.Add(newDeviceOfTheUserAccount);
-        }
-
-        // EF Core suit ce code depuis sa lecture. Le contrôle sur sa date d'utilisation refuse tout si une autre requête vient de s'en servir.
-        if (backupCodeUsedForThisLogin != null)
-        {
-            backupCodeUsedForThisLogin.UsedAt = newSessionOfTheUserAccount.LastActivityAt;
-        }
-
-        return await databaseContextOfTheCurrentHttpRequest.TryToSaveChangesUnlessAnotherRequestChangedTheSameRowsAsync();
+    // Prépare l'enregistrement d'un nouvel appareil du compte.
+    public void PrepareDevice(Device device)
+    {
+        databaseContext.Devices.Add(device);
     }
 
     // Renvoie vrai si cette empreinte de jeton d'appareil appartient à ce compte.
-    public async Task<bool> CheckThatDeviceTokenBelongsToThisAccountAsync(string hashOfTheDeviceTokenFromCookie, Guid identifierOfTheAccountLoggingIn)
+    public async Task<bool> DeviceBelongsToAccountAsync(string deviceTokenHash, Guid accountId)
     {
-        return await databaseContextOfTheCurrentHttpRequest.Devices.AnyAsync(deviceAlreadySavedInTheDatabase =>
-            deviceAlreadySavedInTheDatabase.DeviceToken == hashOfTheDeviceTokenFromCookie
-            && deviceAlreadySavedInTheDatabase.UserId == identifierOfTheAccountLoggingIn);
+        return await databaseContext.Devices.AnyAsync(device =>
+            device.DeviceToken == deviceTokenHash
+            && device.UserId == accountId);
     }
 
     // Cherche une session par l'empreinte de son identifiant. Renvoie null si elle n'existe pas.
-    public async Task<UserSession?> FindUserSessionByItsHashAsync(string hashOfTheTokenOfTheSession)
+    public async Task<UserSession?> FindAsync(string sessionTokenHash)
     {
-        return await databaseContextOfTheCurrentHttpRequest.UserSessions.AsNoTracking().SingleOrDefaultAsync(sessionAlreadySavedInTheDatabase =>
-            sessionAlreadySavedInTheDatabase.Id == hashOfTheTokenOfTheSession);
+        return await databaseContext.UserSessions.AsNoTracking().SingleOrDefaultAsync(session =>
+            session.Id == sessionTokenHash);
     }
 
-    // Note que la session vient de servir.
-    public async Task RecordActivityOfThisUserSessionAsync(string hashOfTheTokenOfTheSession, DateTime dateOfTheCurrentHttpRequest)
+    // Note tout de suite que la session vient de servir. Comme dans UserSession, la date ne recule jamais :
+    // deux requêtes qui écrivent dans le désordre ne raccourcissent pas la session.
+    public async Task RecordActivityAsync(string sessionTokenHash, DateTime now)
     {
-        await databaseContextOfTheCurrentHttpRequest.UserSessions
-            .Where(sessionAlreadySavedInTheDatabase => sessionAlreadySavedInTheDatabase.Id == hashOfTheTokenOfTheSession)
-            .ExecuteUpdateAsync(setterOfTheColumnsOfTheSession => setterOfTheColumnsOfTheSession.SetProperty(
-                sessionBeingUpdatedInTheDatabase => sessionBeingUpdatedInTheDatabase.LastActivityAt,
-                dateOfTheCurrentHttpRequest));
+        await databaseContext.UserSessions
+            .Where(session =>
+                session.Id == sessionTokenHash
+                && session.LastActivityAt < now)
+            .ExecuteUpdateAsync(setters => setters.SetProperty(
+                session => session.LastActivityAt,
+                now));
     }
 
     // Détruit une session. Ne fait rien si elle n'existe plus.
-    public async Task DeleteUserSessionByItsHashAsync(string hashOfTheTokenOfTheSession)
+    public async Task DeleteAsync(string sessionTokenHash)
     {
-        await databaseContextOfTheCurrentHttpRequest.UserSessions
-            .Where(sessionAlreadySavedInTheDatabase => sessionAlreadySavedInTheDatabase.Id == hashOfTheTokenOfTheSession)
+        await databaseContext.UserSessions
+            .Where(session => session.Id == sessionTokenHash)
             .ExecuteDeleteAsync();
     }
 
     // Détruit toutes les sessions d'un compte, après une récupération de mot de passe (SS §3).
-    public async Task DeleteAllUserSessionsOfThisAccountAsync(Guid identifierOfTheAccountToDisconnectEverywhere)
+    public async Task DeleteAllForUserAsync(Guid userId)
     {
-        await databaseContextOfTheCurrentHttpRequest.UserSessions
-            .Where(sessionAlreadySavedInTheDatabase => sessionAlreadySavedInTheDatabase.UserId == identifierOfTheAccountToDisconnectEverywhere)
+        await databaseContext.UserSessions
+            .Where(session => session.UserId == userId)
             .ExecuteDeleteAsync();
     }
 
     // Efface les sessions sans activité depuis cette date, et renvoie leur nombre.
-    public async Task<int> DeleteUserSessionsInactiveSinceThisDateAsync(DateTime oldestDateOfActivityStillAccepted)
+    public async Task<int> DeleteInactiveSinceAsync(DateTime activityCutoff)
     {
-        return await databaseContextOfTheCurrentHttpRequest.UserSessions
-            .Where(sessionAlreadySavedInTheDatabase => sessionAlreadySavedInTheDatabase.LastActivityAt <= oldestDateOfActivityStillAccepted)
+        return await databaseContext.UserSessions
+            .Where(session => session.LastActivityAt <= activityCutoff)
             .ExecuteDeleteAsync();
     }
 }

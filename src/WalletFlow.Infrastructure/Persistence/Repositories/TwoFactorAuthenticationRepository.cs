@@ -4,63 +4,49 @@ using WalletFlow.Domain.UsersAndSecurity;
 
 namespace WalletFlow.Infrastructure.Persistence.Repositories;
 
-// Lit et écrit dans la base PostgreSQL ce qui concerne la double authentification.
+// Lit et écrit dans la base PostgreSQL les codes de secours de la double authentification.
+// Les méthodes « Prepare… » n'écrivent rien : l'unité de travail enregistre tout ensemble (voir IDatabaseUnitOfWork).
 public class TwoFactorAuthenticationRepository : ITwoFactorAuthenticationRepository
 {
-    private readonly WalletFlowDatabaseContext databaseContextOfTheCurrentHttpRequest;
+    private readonly WalletFlowDatabaseContext databaseContext;
 
     // Reçoit l'accès à la base de la requête en cours.
-    public TwoFactorAuthenticationRepository(WalletFlowDatabaseContext databaseContextOfTheCurrentHttpRequest)
+    public TwoFactorAuthenticationRepository(WalletFlowDatabaseContext databaseContext)
     {
-        this.databaseContextOfTheCurrentHttpRequest = databaseContextOfTheCurrentHttpRequest;
+        this.databaseContext = databaseContext;
     }
 
     // Donne les codes de secours de ce compte qui n'ont pas encore servi. Ils ne servent qu'à être lus : EF Core ne les suit pas.
-    public async Task<List<BackupCode>> FindUnusedBackupCodesOfThisAccountAsync(Guid identifierOfTheAccountOwningTheCodes)
+    public async Task<List<BackupCode>> FindUnusedBackupCodesAsync(Guid accountId)
     {
-        return await databaseContextOfTheCurrentHttpRequest.BackupCodes.AsNoTracking()
-            .Where(backupCodeAlreadySavedInTheDatabase =>
-                backupCodeAlreadySavedInTheDatabase.UserId == identifierOfTheAccountOwningTheCodes
-                && backupCodeAlreadySavedInTheDatabase.UsedAt == null)
+        return await databaseContext.BackupCodes.AsNoTracking()
+            .Where(backupCode =>
+                backupCode.UserId == accountId
+                && backupCode.UsedAt == null)
             .ToListAsync();
     }
 
     // Cherche un code de secours par son identifiant. EF Core le suit : la connexion peut ainsi le marquer comme utilisé.
-    public async Task<BackupCode?> FindBackupCodeByItsIdentifierAsync(Guid identifierOfTheBackupCodeToFind)
+    public async Task<BackupCode?> FindBackupCodeAsync(Guid backupCodeId)
     {
-        return await databaseContextOfTheCurrentHttpRequest.BackupCodes.SingleOrDefaultAsync(backupCodeAlreadySavedInTheDatabase =>
-            backupCodeAlreadySavedInTheDatabase.Id == identifierOfTheBackupCodeToFind);
+        return await databaseContext.BackupCodes.SingleOrDefaultAsync(backupCode =>
+            backupCode.Id == backupCodeId);
     }
 
-    // Enregistre tout en une seule transaction SQL : SaveChangesAsync enregistre tout, ou rien.
-    // Le contrôle sur secret_totp_chiffre renvoie faux si une autre activation vient de réussir : un compte ne reçoit jamais 20 codes.
-    public async Task<bool> TryToSaveTwoFactorActivationOfThisAccountAsync(
-        User accountBeingActivatedByTheFirstCode,
-        string secretOfThePhoneEncryptedForTheDatabase,
-        List<BackupCode> newBackupCodesOfTheAccount,
-        SecurityEvent securityEventOfTheTwoFactorActivation)
+    // Prépare l'enregistrement des codes de secours d'une activation.
+    public void PrepareBackupCodes(List<BackupCode> backupCodes)
     {
-        accountBeingActivatedByTheFirstCode.IsTwoFactorEnabled = true;
-        accountBeingActivatedByTheFirstCode.EncryptedTotpSecret = secretOfThePhoneEncryptedForTheDatabase;
-        databaseContextOfTheCurrentHttpRequest.BackupCodes.AddRange(newBackupCodesOfTheAccount);
-        databaseContextOfTheCurrentHttpRequest.SecurityEvents.Add(securityEventOfTheTwoFactorActivation);
-
-        return await databaseContextOfTheCurrentHttpRequest.TryToSaveChangesUnlessAnotherRequestChangedTheSameRowsAsync();
+        databaseContext.BackupCodes.AddRange(backupCodes);
     }
 
-    // Enregistre tout en une seule transaction SQL : SaveChangesAsync enregistre tout, ou rien.
-    // Tous les codes de secours partent, utilisés ou non : une nouvelle activation en donnera 10 autres (GR Auth).
-    public async Task<bool> TryToSaveTwoFactorDeactivationOfThisAccountAsync(User accountBeingDeactivatedByItsOwner, SecurityEvent securityEventOfTheTwoFactorDeactivation)
+    // Prépare l'effacement de tous les codes de secours du compte, utilisés ou non. EF Core suit ces codes :
+    // si une autre requête vient de se servir de l'un d'eux, l'enregistrement échoue.
+    public async Task PrepareBackupCodesRemovalAsync(Guid accountId)
     {
-        var allBackupCodesOfTheAccount = await databaseContextOfTheCurrentHttpRequest.BackupCodes
-            .Where(backupCodeAlreadySavedInTheDatabase => backupCodeAlreadySavedInTheDatabase.UserId == accountBeingDeactivatedByItsOwner.Id)
+        var backupCodes = await databaseContext.BackupCodes
+            .Where(backupCode => backupCode.UserId == accountId)
             .ToListAsync();
 
-        accountBeingDeactivatedByItsOwner.IsTwoFactorEnabled = false;
-        accountBeingDeactivatedByItsOwner.EncryptedTotpSecret = null;
-        databaseContextOfTheCurrentHttpRequest.BackupCodes.RemoveRange(allBackupCodesOfTheAccount);
-        databaseContextOfTheCurrentHttpRequest.SecurityEvents.Add(securityEventOfTheTwoFactorDeactivation);
-
-        return await databaseContextOfTheCurrentHttpRequest.TryToSaveChangesUnlessAnotherRequestChangedTheSameRowsAsync();
+        databaseContext.BackupCodes.RemoveRange(backupCodes);
     }
 }

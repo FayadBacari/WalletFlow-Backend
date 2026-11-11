@@ -4,70 +4,77 @@ using WalletFlow.Domain.UsersAndSecurity;
 
 namespace WalletFlow.Tests.Fakes;
 
-// Remplace la vraie base dans les tests : garde les comptes en mémoire.
-public class FakeUserAccountRepository : IUserAccountRepository
+// Remplace la vraie base dans les tests : garde les comptes et leurs liens en mémoire.
+// Comme EF Core, il rend les objets gardés, que les règles des entités changent directement. Il garde aussi une copie
+// de chaque objet lu : si l'enregistrement échoue, tout reprend ses valeurs, comme après une transaction annulée.
+public class FakeUserAccountRepository : IUserAccountRepository, ITransactionalFakeRepository
 {
-    public const string TechnicalDetailOfTheSimulatedDatabaseFailure = "detail-technique-de-la-panne-simulee";
+    public const string FailureDetail = "detail-technique-de-la-panne-simulee";
 
+    private readonly object pendingChangesLock = new object();
+    private readonly ReadCopies<User> readAccounts = new ReadCopies<User>();
+    private readonly ReadCopies<EmailToken> readTokens = new ReadCopies<EmailToken>();
+    private readonly List<EmailToken> preparedSignupTokens = new List<EmailToken>();
+    private Action? concurrentChanges = null;
+
+    // Ce que la fausse base contient.
     public List<User> SavedUsers { get; } = new List<User>();
     public List<Category> SavedCategories { get; } = new List<Category>();
     public List<EmailToken> SavedEmailTokens { get; } = new List<EmailToken>();
-    public List<DateTime> DatesOfTheCleanupsRequested { get; } = new List<DateTime>();
 
-    // Simule une autre inscription qui prend la même adresse juste après la recherche.
-    public User? AccountSavedByAnotherRequestJustBeforeTheSave { get; set; } = null;
-
-    // Simule une confirmation qui arrive juste avant le remplacement du mot de passe.
-    public bool AccountIsConfirmedJustBeforeThePasswordChange { get; set; } = false;
-
-    // Simule une nouvelle inscription qui remplace le lien juste avant la confirmation.
-    public bool TokenIsReplacedJustBeforeTheConfirmation { get; set; } = false;
+    // Ce que les tests vérifient : les passages du nettoyage, les recherches par adresse et les essais enregistrés.
+    public List<DateTime> CleanupDates { get; } = new List<DateTime>();
+    public int EmailSearchCount { get; private set; } = 0;
+    public int LoginCounterSaveCount { get; private set; } = 0;
 
     // Simule une panne de la base : chaque recherche d'adresse échoue avec ce détail technique.
-    public bool DatabaseIsDownDuringThisTest { get; set; } = false;
+    public bool IsDown { get; set; } = false;
 
     // Simule une panne de la base pendant l'effacement des comptes non confirmés.
-    public bool DatabaseIsDownDuringTheCleanup { get; set; } = false;
-
-    // Simule d'autres requêtes qui comptent leur essai juste avant l'enregistrement : chacune provoque un conflit.
-    public int NumberOfConflictsBeforeTheLoginCountersAreSaved { get; set; } = 0;
-
-    // Simule un compte effacé pendant la connexion : au-delà de ce nombre de recherches par identifiant, il n'existe plus.
-    public int? NumberOfSearchesByIdentifierBeforeTheAccountDisappears { get; set; } = null;
-
-    // Simule d'autres requêtes qui changent le compte juste avant l'enregistrement d'un nouveau mot de passe ou d'un déblocage.
-    public int NumberOfConflictsBeforeTheLinkIsUsed { get; set; } = 0;
-
-    // Simule une autre requête qui utilise le même lien juste avant l'enregistrement.
-    public bool LinkIsUsedByAnotherRequestJustBeforeTheSave { get; set; } = false;
+    public bool FailsDuringCleanup { get; set; } = false;
 
     // Simule une panne de la base au moment de lire un lien.
-    public bool DatabaseIsDownWhenReadingTheLinks { get; set; } = false;
+    public bool FailsWhenReadingLinks { get; set; } = false;
 
-    public List<SecurityEvent> SecurityEventsSavedWithTheLinks { get; } = new List<SecurityEvent>();
+    // Les réglages qui suivent simulent une autre requête qui agit juste avant l'enregistrement de celle du test.
 
-    public int NumberOfSearchesByEmailAddress { get; private set; } = 0;
-    public int NumberOfLoginCountersSaved { get; private set; } = 0;
+    // Une autre inscription prend la même adresse juste après la recherche.
+    public User? ConcurrentAccount { get; set; } = null;
 
-    private short failedAttemptsReadBeforeTheSaveOfTheCounters = 0;
-    private short lockoutCountReadBeforeTheSaveOfTheCounters = 0;
-    private DateTime? lockoutEndReadBeforeTheSaveOfTheCounters = null;
+    // Une confirmation arrive juste avant le remplacement du mot de passe.
+    public bool ConfirmBeforePasswordChange { get; set; } = false;
+
+    // Une nouvelle inscription remplace le lien juste avant la confirmation.
+    public bool ReplaceTokenBeforeConfirmation { get; set; } = false;
+
+    // Une autre requête utilise le même lien juste avant l'enregistrement.
+    public bool UseLinkBeforeSave { get; set; } = false;
+
+    // D'autres requêtes changent le compte juste avant l'utilisation d'un lien de déblocage ou de récupération : un conflit chacune.
+    public int LinkUseConflicts { get; set; } = 0;
+
+    // D'autres requêtes comptent leur essai juste avant l'enregistrement : un conflit chacune.
+    public int LoginCounterConflicts { get; set; } = 0;
+
+    // Le compte est effacé pendant la connexion : au-delà de ce nombre de recherches par identifiant, il n'existe plus.
+    public int? SearchesBeforeAccountDisappears { get; set; } = null;
 
     // Cherche en mémoire le compte qui utilise cette adresse.
-    public Task<User?> FindUserAccountByEmailAddressAsync(string emailAddressInItsStoredForm)
+    public Task<User?> FindByEmailAsync(string email)
     {
-        if (DatabaseIsDownDuringThisTest)
+        if (IsDown)
         {
-            throw new InvalidOperationException(TechnicalDetailOfTheSimulatedDatabaseFailure);
+            throw new InvalidOperationException(FailureDetail);
         }
 
-        NumberOfSearchesByEmailAddress = NumberOfSearchesByEmailAddress + 1;
+        EmailSearchCount = EmailSearchCount + 1;
 
-        foreach (var userAlreadyKeptInThisMemoryList in SavedUsers)
+        foreach (var user in SavedUsers)
         {
-            if (userAlreadyKeptInThisMemoryList.Email == emailAddressInItsStoredForm)
+            if (user.Email == email)
             {
-                return Task.FromResult<User?>(userAlreadyKeptInThisMemoryList);
+                KeepCopy(user);
+                return Task.FromResult<User?>(user);
             }
         }
 
@@ -75,195 +82,262 @@ public class FakeUserAccountRepository : IUserAccountRepository
     }
 
     // Cherche en mémoire un compte par son identifiant.
-    public Task<User?> FindUserAccountByIdentifierAsync(Guid identifierOfTheUserAccountToFind)
+    public Task<User?> FindByIdAsync(Guid accountId)
     {
-        if (NumberOfSearchesByIdentifierBeforeTheAccountDisappears == 0)
+        if (SearchesBeforeAccountDisappears == 0)
         {
             return Task.FromResult<User?>(null);
         }
 
-        NumberOfSearchesByIdentifierBeforeTheAccountDisappears = NumberOfSearchesByIdentifierBeforeTheAccountDisappears - 1;
+        SearchesBeforeAccountDisappears = SearchesBeforeAccountDisappears - 1;
 
-        foreach (var userAlreadyKeptInThisMemoryList in SavedUsers)
+        foreach (var user in SavedUsers)
         {
-            if (userAlreadyKeptInThisMemoryList.Id == identifierOfTheUserAccountToFind)
+            if (user.Id == accountId)
             {
-                failedAttemptsReadBeforeTheSaveOfTheCounters = userAlreadyKeptInThisMemoryList.FailedLoginAttemptCount;
-                lockoutCountReadBeforeTheSaveOfTheCounters = userAlreadyKeptInThisMemoryList.LockoutCount;
-                lockoutEndReadBeforeTheSaveOfTheCounters = userAlreadyKeptInThisMemoryList.LockoutEndsAt;
-
-                return Task.FromResult<User?>(userAlreadyKeptInThisMemoryList);
+                KeepCopy(user);
+                return Task.FromResult<User?>(user);
             }
         }
 
         return Task.FromResult<User?>(null);
     }
 
-    // Comme la vraie base, un conflit annule ce que la requête voulait écrire : le compte repart des valeurs lues,
-    // plus l'essai compté par l'autre requête.
-    public Task<bool> TryToSaveLoginCountersOfThisAccountAsync(User accountWithItsNewLoginCounters)
-    {
-        if (NumberOfConflictsBeforeTheLoginCountersAreSaved > 0)
-        {
-            NumberOfConflictsBeforeTheLoginCountersAreSaved = NumberOfConflictsBeforeTheLoginCountersAreSaved - 1;
-            accountWithItsNewLoginCounters.FailedLoginAttemptCount = (short)(failedAttemptsReadBeforeTheSaveOfTheCounters + 1);
-            accountWithItsNewLoginCounters.LockoutCount = lockoutCountReadBeforeTheSaveOfTheCounters;
-            accountWithItsNewLoginCounters.LockoutEndsAt = lockoutEndReadBeforeTheSaveOfTheCounters;
-            return Task.FromResult(false);
-        }
-
-        NumberOfLoginCountersSaved = NumberOfLoginCountersSaved + 1;
-        return Task.FromResult(true);
-    }
-
-    // Garde le nouveau jeton en mémoire, et retire l'ancien du même type et du même compte.
-    public Task ReplaceEmailTokenOfThisTypeForThisAccountAsync(EmailToken newEmailTokenOfTheAccount)
-    {
-        SavedEmailTokens.RemoveAll(tokenAlreadyKeptInThisMemoryList =>
-            tokenAlreadyKeptInThisMemoryList.UserId == newEmailTokenOfTheAccount.UserId
-            && tokenAlreadyKeptInThisMemoryList.Type == newEmailTokenOfTheAccount.Type);
-        SavedEmailTokens.Add(newEmailTokenOfTheAccount);
-
-        return Task.CompletedTask;
-    }
-
-    // Garde le nouveau mot de passe et marque le jeton comme utilisé, sauf si un conflit est simulé.
-    public Task<bool> TryToSaveNewPasswordAndUseItsTokenAsync(
-        User accountThatReceivesTheNewPassword,
-        EmailToken tokenUsedToChangeThePassword,
-        string secureHashOfTheNewPassword,
-        DateTime dateOfThePasswordChangeOfTheAccount,
-        SecurityEvent securityEventOfThePasswordChange)
-    {
-        if (CheckThatConflictIsSimulatedForThisLink(tokenUsedToChangeThePassword, dateOfThePasswordChangeOfTheAccount))
-        {
-            return Task.FromResult(false);
-        }
-
-        accountThatReceivesTheNewPassword.PasswordHash = secureHashOfTheNewPassword;
-        tokenUsedToChangeThePassword.UsedAt = dateOfThePasswordChangeOfTheAccount;
-        SecurityEventsSavedWithTheLinks.Add(securityEventOfThePasswordChange);
-
-        return Task.FromResult(true);
-    }
-
-    // Marque le jeton comme utilisé, sauf si un conflit est simulé.
-    public Task<bool> TryToUnlockAccountAndUseItsTokenAsync(
-        User accountJustUnlockedByTheLink,
-        EmailToken tokenUsedToUnlockTheAccount,
-        DateTime dateOfTheAccountUnlockByTheLink,
-        SecurityEvent securityEventOfTheAccountUnlock)
-    {
-        if (CheckThatConflictIsSimulatedForThisLink(tokenUsedToUnlockTheAccount, dateOfTheAccountUnlockByTheLink))
-        {
-            return Task.FromResult(false);
-        }
-
-        tokenUsedToUnlockTheAccount.UsedAt = dateOfTheAccountUnlockByTheLink;
-        SecurityEventsSavedWithTheLinks.Add(securityEventOfTheAccountUnlock);
-
-        return Task.FromResult(true);
-    }
-
-    // Renvoie vrai si un conflit est simulé pour cet enregistrement.
-    private bool CheckThatConflictIsSimulatedForThisLink(EmailToken tokenOfTheLinkBeingUsedNow, DateTime dateOfTheCurrentUseOfTheLink)
-    {
-        if (LinkIsUsedByAnotherRequestJustBeforeTheSave)
-        {
-            tokenOfTheLinkBeingUsedNow.UsedAt = dateOfTheCurrentUseOfTheLink;
-            return true;
-        }
-
-        if (NumberOfConflictsBeforeTheLinkIsUsed > 0)
-        {
-            NumberOfConflictsBeforeTheLinkIsUsed = NumberOfConflictsBeforeTheLinkIsUsed - 1;
-            return true;
-        }
-
-        return false;
-    }
-
     // Cherche en mémoire un jeton de ce type par son empreinte.
-    public Task<EmailToken?> FindEmailTokenOfThisTypeByItsHashAsync(string hashOfTheTokenFromTheLink, EmailTokenType typeOfTheTokenToFindNow)
+    public Task<EmailToken?> FindTokenAsync(string tokenHash, EmailTokenType tokenType)
     {
-        if (DatabaseIsDownWhenReadingTheLinks)
+        if (FailsWhenReadingLinks)
         {
-            throw new InvalidOperationException(TechnicalDetailOfTheSimulatedDatabaseFailure);
+            throw new InvalidOperationException(FailureDetail);
         }
 
-        foreach (var tokenAlreadyKeptInThisMemoryList in SavedEmailTokens)
+        foreach (var token in SavedEmailTokens)
         {
-            if (tokenAlreadyKeptInThisMemoryList.TokenHash == hashOfTheTokenFromTheLink
-                && tokenAlreadyKeptInThisMemoryList.Type == typeOfTheTokenToFindNow)
+            if (token.TokenHash == tokenHash
+                && token.Type == tokenType)
             {
-                return Task.FromResult<EmailToken?>(tokenAlreadyKeptInThisMemoryList);
+                KeepCopy(token);
+                return Task.FromResult<EmailToken?>(token);
             }
         }
 
         return Task.FromResult<EmailToken?>(null);
     }
 
-    // Garde le nouveau compte en mémoire, sauf si l'adresse vient d'être prise.
-    public Task<bool> TryToSaveNewAccountWithCategoriesAndTokenAsync(
-        User newUserToRegisterInTheDatabase,
-        List<Category> defaultCategoriesOfTheNewUser,
-        EmailToken signupConfirmationTokenOfTheNewUser)
+    // Garde tout de suite le nouveau compte en mémoire, sauf si l'adresse vient d'être prise.
+    public Task<bool> TryAddAccountAsync(
+        User newAccount,
+        List<Category> categories,
+        EmailToken confirmationToken)
     {
-        if (AccountSavedByAnotherRequestJustBeforeTheSave != null)
+        if (ConcurrentAccount != null)
         {
-            SavedUsers.Add(AccountSavedByAnotherRequestJustBeforeTheSave);
+            SavedUsers.Add(ConcurrentAccount);
             return Task.FromResult(false);
         }
 
-        SavedUsers.Add(newUserToRegisterInTheDatabase);
-        SavedCategories.AddRange(defaultCategoriesOfTheNewUser);
-        SavedEmailTokens.Add(signupConfirmationTokenOfTheNewUser);
+        SavedUsers.Add(newAccount);
+        SavedCategories.AddRange(categories);
+        SavedEmailTokens.Add(confirmationToken);
         return Task.FromResult(true);
     }
 
-    // Remplace le mot de passe et le lien, sauf si le compte vient d'être confirmé.
-    public Task<bool> TryToReplacePasswordAndTokenOfUnconfirmedAccountAsync(
-        User unconfirmedAccountToUpdateInTheDatabase,
-        string newSecureHashOfThePassword,
-        EmailToken newSignupConfirmationTokenOfTheAccount)
+    // Garde tout de suite le nouveau jeton en mémoire, et retire l'ancien du même type et du même compte.
+    public Task ReplaceTokenAsync(EmailToken newToken)
     {
-        if (AccountIsConfirmedJustBeforeThePasswordChange)
-        {
-            unconfirmedAccountToUpdateInTheDatabase.IsEmailConfirmed = true;
-            return Task.FromResult(false);
-        }
-
-        unconfirmedAccountToUpdateInTheDatabase.PasswordHash = newSecureHashOfThePassword;
-        SavedEmailTokens.RemoveAll(tokenAlreadyKeptInThisMemoryList => tokenAlreadyKeptInThisMemoryList.UserId == unconfirmedAccountToUpdateInTheDatabase.Id);
-        SavedEmailTokens.Add(newSignupConfirmationTokenOfTheAccount);
-        return Task.FromResult(true);
+        SavedEmailTokens.RemoveAll(token =>
+            token.UserId == newToken.UserId
+            && token.Type == newToken.Type);
+        SavedEmailTokens.Add(newToken);
+        return Task.CompletedTask;
     }
 
-    // Confirme le compte et marque son jeton comme utilisé, sauf si le lien vient d'être remplacé.
-    public Task<bool> TryToConfirmAccountAndUseItsTokenAsync(
-        User accountToConfirmInTheDatabase,
-        EmailToken tokenUsedToConfirmTheAccount,
-        DateTime dateOfTheConfirmationOfTheAccount)
+    // Garde de côté le nouveau lien de confirmation : il ne remplacera les anciens qu'avec les autres changements.
+    public Task PrepareConfirmationTokenReplacementAsync(EmailToken newToken)
     {
-        if (TokenIsReplacedJustBeforeTheConfirmation)
+        lock (pendingChangesLock)
         {
-            return Task.FromResult(false);
+            preparedSignupTokens.Add(newToken);
         }
 
-        accountToConfirmInTheDatabase.IsEmailConfirmed = true;
-        tokenUsedToConfirmTheAccount.UsedAt = dateOfTheConfirmationOfTheAccount;
-        return Task.FromResult(true);
+        return Task.CompletedTask;
+    }
+
+    // Les conflits sont simulés par les réglages de ce faux dépôt : ce contrôle n'a rien à faire en mémoire.
+    public void PrepareUnchangedCheck(User account)
+    {
     }
 
     // Garde la date du passage. La vraie règle d'effacement est testée sur la vraie base.
-    public Task<int> DeleteUnconfirmedAccountsWithExpiredLinkAsync(DateTime currentDateUsedForTheCleanup)
+    public Task<int> DeleteExpiredUnconfirmedAccountsAsync(DateTime now)
     {
-        if (DatabaseIsDownDuringTheCleanup)
+        if (FailsDuringCleanup)
         {
-            throw new InvalidOperationException(TechnicalDetailOfTheSimulatedDatabaseFailure);
+            throw new InvalidOperationException(FailureDetail);
         }
 
-        DatesOfTheCleanupsRequested.Add(currentDateUsedForTheCleanup);
+        CleanupDates.Add(now);
         return Task.FromResult(0);
+    }
+
+    // Aucune table de ce faux dépôt ne tombe en panne pendant un enregistrement.
+    public void ThrowIfTableIsDown()
+    {
+    }
+
+    // Décide si une autre requête change les mêmes lignes juste avant l'enregistrement, selon les réglages du test,
+    // et prépare ce que cette autre requête aura écrit.
+    public bool HasConcurrentChange()
+    {
+        lock (pendingChangesLock)
+        {
+            var usedToken = FindTokenUsedSinceRead();
+            var countedAccount = FindAccountCountedSinceRead();
+
+            // Une confirmation passe avant le nouveau mot de passe d'une nouvelle inscription.
+            if (preparedSignupTokens.Count > 0 && ConfirmBeforePasswordChange)
+            {
+                var accountId = preparedSignupTokens[0].UserId;
+                concurrentChanges = () => ConfirmLikeOtherRequest(accountId);
+                return true;
+            }
+
+            // Une nouvelle inscription remplace le lien de confirmation qui vient de servir.
+            if (usedToken != null && usedToken.Type == EmailTokenType.SignupConfirmation && ReplaceTokenBeforeConfirmation)
+            {
+                return true;
+            }
+
+            // Une autre requête utilise le même lien, à la même date.
+            if (usedToken != null && usedToken.UsedAt is DateTime usedAt && UseLinkBeforeSave)
+            {
+                concurrentChanges = () => usedToken.MarkAsUsed(usedAt);
+                return true;
+            }
+
+            // Une autre requête change le compte du lien qui vient de servir.
+            if (usedToken != null && LinkUseConflicts > 0)
+            {
+                LinkUseConflicts = LinkUseConflicts - 1;
+                return true;
+            }
+
+            // Une autre requête compte son propre essai de connexion sur le même compte.
+            if (countedAccount != null && LoginCounterConflicts > 0)
+            {
+                LoginCounterConflicts = LoginCounterConflicts - 1;
+                concurrentChanges = () => CountAttemptLikeOtherRequest(countedAccount);
+                return true;
+            }
+
+            return false;
+        }
+    }
+
+    // Remet les comptes et les liens lus comme ils étaient, et oublie le lien préparé.
+    public void Rollback()
+    {
+        lock (pendingChangesLock)
+        {
+            readAccounts.RestoreAll();
+            readTokens.RestoreAll();
+            ClearTracking();
+        }
+    }
+
+    // Écrit ce que l'autre requête simulée a enregistré.
+    public void ApplyConcurrentChanges()
+    {
+        var changes = concurrentChanges;
+        concurrentChanges = null;
+
+        if (changes != null)
+        {
+            changes();
+        }
+    }
+
+    // Garde les changements : le nouveau lien de confirmation remplace les anciens, et l'essai compté est noté.
+    public void Commit()
+    {
+        lock (pendingChangesLock)
+        {
+            if (FindAccountCountedSinceRead() != null)
+            {
+                LoginCounterSaveCount = LoginCounterSaveCount + 1;
+            }
+
+            foreach (var newSignupToken in preparedSignupTokens)
+            {
+                SavedEmailTokens.RemoveAll(token =>
+                    token.UserId == newSignupToken.UserId
+                    && token.Type == EmailTokenType.SignupConfirmation);
+                SavedEmailTokens.Add(newSignupToken);
+            }
+
+            ClearTracking();
+        }
+    }
+
+    // Garde une copie du compte tel qu'il est lu : il reprendra ces valeurs si l'enregistrement échoue.
+    private void KeepCopy(User account)
+    {
+        lock (pendingChangesLock)
+        {
+            readAccounts.Keep(account);
+        }
+    }
+
+    // Garde une copie du lien tel qu'il est lu : il reprendra ces valeurs si l'enregistrement échoue.
+    private void KeepCopy(EmailToken token)
+    {
+        lock (pendingChangesLock)
+        {
+            readTokens.Keep(token);
+        }
+    }
+
+    // Donne le lien qui a servi depuis sa lecture, ou null.
+    private EmailToken? FindTokenUsedSinceRead()
+    {
+        return readTokens.FindChangedSinceRead((copy, token) => copy.UsedAt == null && token.UsedAt != null);
+    }
+
+    // Donne le compte dont un essai de connexion a été compté depuis sa lecture, ou null.
+    // Une connexion réussie ou un déblocage remettent le compteur à zéro : ce ne sont pas des essais comptés.
+    private User? FindAccountCountedSinceRead()
+    {
+        return readAccounts.FindChangedSinceRead((copy, account) =>
+            account.FailedLoginAttemptCount != copy.FailedLoginAttemptCount
+            && account.FailedLoginAttemptCount > 0);
+    }
+
+    // L'autre requête a confirmé ce compte.
+    private void ConfirmLikeOtherRequest(Guid accountId)
+    {
+        foreach (var user in SavedUsers)
+        {
+            if (user.Id == accountId)
+            {
+                user.ConfirmEmail();
+            }
+        }
+    }
+
+    // L'autre requête a compté son propre essai sur ce compte : un essai de plus que ce que cette requête avait lu.
+    private static void CountAttemptLikeOtherRequest(User account)
+    {
+        EntityValues.WriteProperty(
+            account,
+            nameof(User.FailedLoginAttemptCount),
+            (short)(account.FailedLoginAttemptCount + 1));
+    }
+
+    // Oublie les copies et ce qui était préparé : le prochain passage repart de ce qui est gardé.
+    private void ClearTracking()
+    {
+        readAccounts.Clear();
+        readTokens.Clear();
+        preparedSignupTokens.Clear();
     }
 }

@@ -5,11 +5,11 @@ namespace WalletFlow.Domain.AccountsAndCategories;
 public class CategorizationRule
 {
     // id_regle_classement
-    public Guid Id { get; set; } = Guid.NewGuid();
+    public Guid Id { get; init; } = Guid.NewGuid();
 
     // libelle_regle : la règle s'applique aux libellés strictement identiques.
-    public string Label { get; set; } = string.Empty;
+    public string Label { get; init; } = string.Empty;
 
     // id_categorie : la catégorie donnée aux transactions de ce libellé.
-    public Guid CategoryId { get; set; }
+    public Guid CategoryId { get; init; }
 }

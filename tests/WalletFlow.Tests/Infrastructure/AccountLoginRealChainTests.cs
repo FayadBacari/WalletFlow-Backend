@@ -4,12 +4,13 @@ using WalletFlow.Application.Configuration;
 using WalletFlow.Application.UserAccounts;
 using WalletFlow.Application.UserSessions;
 using WalletFlow.Domain.UsersAndSecurity;
+using WalletFlow.Infrastructure.Emails;
 using WalletFlow.Infrastructure.Persistence;
 using WalletFlow.Infrastructure.Persistence.Repositories;
 using WalletFlow.Infrastructure.Security;
 using WalletFlow.Tests.Fakes;
 using static WalletFlow.Tests.Api.RegistrationRequestTestValues;
-using static WalletFlow.Tests.Infrastructure.LocalDatabaseForTheTests;
+using static WalletFlow.Tests.Infrastructure.LocalTestDatabase;
 
 namespace WalletFlow.Tests.Infrastructure;
 
@@ -17,233 +18,239 @@ namespace WalletFlow.Tests.Infrastructure;
 // Seuls l'envoi des e-mails et l'horloge sont remplacés. Chaque test annule sa transaction à la fin : la base reste vide.
 public class AccountLoginRealChainTests
 {
-    private const string WrongPasswordTypedInTheseTests = "Mauvais-Mot-De-Passe-2";
+    private const string WrongPassword = "Mauvais-Mot-De-Passe-2";
 
-    private static readonly IPAddress IpAddressOfTheVisitorInTheseTests = IPAddress.Parse("203.0.113.7");
+    private static readonly IPAddress IpAddress = IPAddress.Parse("203.0.113.7");
 
-    private readonly LibsodiumPasswordHasher realHasherOfThePasswordsInTheseTests = new LibsodiumPasswordHasher();
-    private readonly RandomSecureTokenGenerator realGeneratorOfTheTokensInTheseTests = new RandomSecureTokenGenerator();
-    private readonly FakeEmailSender senderThatKeepsTheEmailsInMemory = new FakeEmailSender();
-    private readonly FakeTimeProviderForTests clockThatOnlyMovesWhenTestsAskIt = new FakeTimeProviderForTests();
+    private readonly LibsodiumPasswordHasher passwordHasher = RealArgonHashers.CreatePasswordHasher();
+    private readonly RandomSecureTokenGenerator tokenGenerator = new RandomSecureTokenGenerator();
+    private readonly FakeEmailSender emailSender = new FakeEmailSender();
+    private readonly FakeTimeProvider clock = new FakeTimeProvider();
 
     // Inscrit puis confirme un compte, comme le feraient deux requêtes.
-    private async Task<Guid> RegisterThenConfirmNewUserAccountAsync(WalletFlowDatabaseContext databaseContextOfThisChainTest, string emailAddressOfTheNewAccount, string passwordChosenByTheVisitorAtRegistration)
+    private async Task<Guid> RegisterThenConfirmAsync(WalletFlowDatabaseContext databaseContext, string emailAddress, string password)
     {
-        var identifierOfTheNewUserAccount = await RegisterAccountWithoutConfirmingItAsync(databaseContextOfThisChainTest, emailAddressOfTheNewAccount, passwordChosenByTheVisitorAtRegistration);
+        var newUserId = await RegisterUnconfirmedAccountAsync(databaseContext, emailAddress, password);
 
-        var serviceThatConfirmsTheNewAccount = new AccountConfirmationService(
-            new UserAccountRepository(databaseContextOfThisChainTest),
-            realHasherOfThePasswordsInTheseTests,
-            realGeneratorOfTheTokensInTheseTests,
-            clockThatOnlyMovesWhenTestsAskIt);
-        var resultOfTheConfirmationOfTheAccount = await serviceThatConfirmsTheNewAccount.ConfirmAccountWithLinkTokenAndPasswordAsync(
-            ReadTokenWrittenInTheConfirmationLink(senderThatKeepsTheEmailsInMemory.SentEmails.Last().Body),
-            passwordChosenByTheVisitorAtRegistration);
-        Assert.True(resultOfTheConfirmationOfTheAccount.IsConfirmed);
-        databaseContextOfThisChainTest.ChangeTracker.Clear();
+        var confirmationService = new AccountConfirmationService(
+            new UserAccountRepository(databaseContext),
+            new EntityFrameworkDatabaseUnitOfWork(databaseContext),
+            passwordHasher,
+            tokenGenerator,
+            clock);
+        var result = await confirmationService.ConfirmAsync(
+            ReadConfirmationToken(emailSender.SentEmails.Last().Body),
+            password);
+        Assert.Equal(AccountConfirmationResult.AccountConfirmed, result);
+        databaseContext.ChangeTracker.Clear();
 
-        return identifierOfTheNewUserAccount;
+        return newUserId;
     }
 
     // Inscrit un compte sans le confirmer, comme le ferait une requête.
-    private async Task<Guid> RegisterAccountWithoutConfirmingItAsync(WalletFlowDatabaseContext databaseContextOfThisChainTest, string emailAddressOfTheNewAccount, string passwordChosenByTheVisitorAtRegistration)
+    private async Task<Guid> RegisterUnconfirmedAccountAsync(WalletFlowDatabaseContext databaseContext, string emailAddress, string password)
     {
-        var serviceThatRegistersTheNewAccount = new AccountRegistrationService(
-            new UserAccountRepository(databaseContextOfThisChainTest),
-            realHasherOfThePasswordsInTheseTests,
-            realGeneratorOfTheTokensInTheseTests,
-            senderThatKeepsTheEmailsInMemory,
+        var registrationService = new AccountRegistrationService(
+            new UserAccountRepository(databaseContext),
+            new EntityFrameworkDatabaseUnitOfWork(databaseContext),
+            passwordHasher,
+            tokenGenerator,
+            emailSender,
+            new FrenchAccountRegistrationEmails(),
             new PublicWebsiteSettings("https://walletflow.test"),
-            new InMemoryEmailAddressRequestLimiter(clockThatOnlyMovesWhenTestsAskIt),
-            clockThatOnlyMovesWhenTestsAskIt);
-        var resultOfTheRegistrationOfTheAccount = await serviceThatRegistersTheNewAccount.RegisterNewAccountForVisitorAsync(emailAddressOfTheNewAccount, passwordChosenByTheVisitorAtRegistration);
-        Assert.True(resultOfTheRegistrationOfTheAccount.IsAccepted);
-        databaseContextOfThisChainTest.ChangeTracker.Clear();
+            new InMemoryEmailAddressRequestLimiter(clock),
+            clock);
+        var result = await registrationService.RegisterAsync(emailAddress, password);
+        Assert.IsType<AccountRegistrationResult.Accepted>(result);
+        databaseContext.ChangeTracker.Clear();
 
-        var accountReadBackFromTheRealDatabase = await databaseContextOfThisChainTest.Users.AsNoTracking().SingleAsync(userSearchedInTheDatabaseTable =>
-            userSearchedInTheDatabaseTable.Email == emailAddressOfTheNewAccount);
+        var reloadedAccount = await databaseContext.Users.AsNoTracking().SingleAsync(row =>
+            row.Email == emailAddress);
 
-        return accountReadBackFromTheRealDatabase.Id;
+        return reloadedAccount.Id;
     }
 
     // Fait une tentative de connexion comme le ferait une requête, avec son propre état en mémoire.
-    private async Task<AccountLoginResult> TryToLogInLikeOneRealRequestAsync(WalletFlowDatabaseContext databaseContextOfThisChainTest, string emailAddressTypedInThisTest, string passwordTypedByTheVisitorInThisTest)
+    private async Task<AccountLoginResult> LogInAsync(WalletFlowDatabaseContext databaseContext, string emailAddress, string password)
     {
-        var serviceThatLogsTheVisitorIn = new AccountLoginService(
-            new UserAccountRepository(databaseContextOfThisChainTest),
-            new SecurityEventRepository(databaseContextOfThisChainTest),
+        var loginService = new AccountLoginService(
+            new UserAccountRepository(databaseContext),
+            CreateSavingService(databaseContext),
+            CreateSecurityJournal(databaseContext, clock),
             new FakeBackgroundEmailRequestQueue(),
-            realHasherOfThePasswordsInTheseTests,
-            realGeneratorOfTheTokensInTheseTests,
-            new InMemoryLoginsWaitingForTheirCodeStore(clockThatOnlyMovesWhenTestsAskIt),
+            passwordHasher,
+            tokenGenerator,
+            new InMemoryWaitingLoginStore(clock),
             new UserSessionOpeningService(
-                new UserAccountRepository(databaseContextOfThisChainTest),
-                new UserSessionRepository(databaseContextOfThisChainTest),
-                new TwoFactorAuthenticationRepository(databaseContextOfThisChainTest),
-                realGeneratorOfTheTokensInTheseTests,
-                clockThatOnlyMovesWhenTestsAskIt),
-            clockThatOnlyMovesWhenTestsAskIt);
+                new UserAccountRepository(databaseContext),
+                new UserSessionRepository(databaseContext),
+                new TwoFactorAuthenticationRepository(databaseContext),
+                CreateSavingService(databaseContext),
+                CreateSecurityJournal(databaseContext, clock),
+                tokenGenerator,
+                clock),
+            clock);
 
-        var resultOfTheLoginAttemptOfTheVisitor = await serviceThatLogsTheVisitorIn.LogVisitorInWithEmailAddressAndPasswordAsync(new LoginAttemptFromVisitor
+        var result = await loginService.LogInAsync(new LoginAttempt
         {
-            EmailAddressTypedByTheVisitor = emailAddressTypedInThisTest,
-            PasswordTextTypedByTheVisitor = passwordTypedByTheVisitorInThisTest,
-            IpAddressOfTheVisitor = IpAddressOfTheVisitorInTheseTests
+            EmailAddress = emailAddress,
+            Password = password,
+            IpAddress = IpAddress
         });
-        databaseContextOfThisChainTest.ChangeTracker.Clear();
+        databaseContext.ChangeTracker.Clear();
 
-        return resultOfTheLoginAttemptOfTheVisitor;
+        return result;
     }
 
     // Crée le service qui reconnaît les sessions, sur cet accès à la base.
-    private UserSessionService CreateRealSessionServiceOnThisDatabaseContext(WalletFlowDatabaseContext databaseContextOfThisChainTest)
+    private UserSessionService CreateSessionService(WalletFlowDatabaseContext databaseContext)
     {
-        return new UserSessionService(new UserSessionRepository(databaseContextOfThisChainTest), realGeneratorOfTheTokensInTheseTests, clockThatOnlyMovesWhenTestsAskIt);
+        return new UserSessionService(new UserSessionRepository(databaseContext), tokenGenerator, clock);
     }
 
     // Compte les événements de ce type et de ce résultat dans le vrai journal, pour ce compte.
-    private static async Task<int> CountSecurityEventsOfThisAccountAsync(
-        WalletFlowDatabaseContext databaseContextOfThisChainTest,
-        Guid identifierOfTheAccountInTheJournal,
-        SecurityEventType typeOfTheEventsToCount,
-        SecurityEventResult resultOfTheEventsToCount)
+    private static async Task<int> CountSecurityEventsAsync(
+        WalletFlowDatabaseContext databaseContext,
+        Guid accountId,
+        SecurityEventType type,
+        SecurityEventResult result)
     {
-        return await databaseContextOfThisChainTest.SecurityEvents.CountAsync(eventSearchedInTheDatabaseTable =>
-            eventSearchedInTheDatabaseTable.UserId == identifierOfTheAccountInTheJournal
-            && eventSearchedInTheDatabaseTable.Type == typeOfTheEventsToCount
-            && eventSearchedInTheDatabaseTable.Result == resultOfTheEventsToCount);
+        return await databaseContext.SecurityEvents.CountAsync(row =>
+            row.UserId == accountId
+            && row.Type == type
+            && row.Result == result);
     }
 
     // Tout le parcours : inscription, confirmation, connexion, session reconnue, déconnexion.
     [Fact]
     public async Task SignupConfirmationLoginAndLogoutWorkTogetherOnTheRealDatabase()
     {
-        await using var databaseContextOfThisChainTest = CreateDatabaseContextConnectedToLocalDatabase();
-        await using var transactionCancelledAtTheEndOfThisTest = await databaseContextOfThisChainTest.Database.BeginTransactionAsync();
-        var identifierOfTheNewUserAccount = await RegisterThenConfirmNewUserAccountAsync(databaseContextOfThisChainTest, "chaine-connexion@exemple.test", ValidPasswordChosenInTheseTests);
+        await using var databaseContext = CreateDatabaseContext();
+        await using var transaction = await databaseContext.Database.BeginTransactionAsync();
+        var newUserId = await RegisterThenConfirmAsync(databaseContext, "chaine-connexion@exemple.test", ValidPassword);
 
-        var resultOfTheLoginOfTheAccount = await TryToLogInLikeOneRealRequestAsync(databaseContextOfThisChainTest, "chaine-connexion@exemple.test", ValidPasswordChosenInTheseTests);
+        var result = await LogInAsync(databaseContext, "chaine-connexion@exemple.test", ValidPassword);
 
-        Assert.True(resultOfTheLoginOfTheAccount.IsLoggedIn);
-        var sessionReadBackFromTheRealDatabase = await databaseContextOfThisChainTest.UserSessions.AsNoTracking().SingleAsync(sessionSearchedInTheDatabaseTable =>
-            sessionSearchedInTheDatabaseTable.UserId == identifierOfTheNewUserAccount);
-        Assert.NotEqual(resultOfTheLoginOfTheAccount.SessionTokenToPutInTheCookie, sessionReadBackFromTheRealDatabase.Id);
-        Assert.Equal(64, sessionReadBackFromTheRealDatabase.Id.Length);
-        Assert.Equal(1, await CountSecurityEventsOfThisAccountAsync(databaseContextOfThisChainTest, identifierOfTheNewUserAccount, SecurityEventType.Login, SecurityEventResult.Success));
-        Assert.Equal(1, await databaseContextOfThisChainTest.Devices.CountAsync(deviceSearchedInTheDatabaseTable => deviceSearchedInTheDatabaseTable.UserId == identifierOfTheNewUserAccount));
+        Assert.IsType<AccountLoginResult.LoggedIn>(result);
+        var reloadedSession = await databaseContext.UserSessions.AsNoTracking().SingleAsync(row =>
+            row.UserId == newUserId);
+        Assert.NotEqual(Assert.IsType<AccountLoginResult.LoggedIn>(result).SessionToken, reloadedSession.Id);
+        Assert.Equal(64, reloadedSession.Id.Length);
+        Assert.Equal(1, await CountSecurityEventsAsync(databaseContext, newUserId, SecurityEventType.Login, SecurityEventResult.Success));
+        Assert.Equal(1, await databaseContext.Devices.CountAsync(row => row.UserId == newUserId));
 
-        var serviceOfTheSessionsBeingTested = CreateRealSessionServiceOnThisDatabaseContext(databaseContextOfThisChainTest);
-        Assert.Equal(identifierOfTheNewUserAccount, await serviceOfTheSessionsBeingTested.FindOwnerOfTheActiveSessionThenRecordItsActivityAsync(resultOfTheLoginOfTheAccount.SessionTokenToPutInTheCookie!));
+        var sessionService = CreateSessionService(databaseContext);
+        Assert.Equal(newUserId, await sessionService.FindOwnerAndRecordActivityAsync(Assert.IsType<AccountLoginResult.LoggedIn>(result).SessionToken));
 
-        await serviceOfTheSessionsBeingTested.CloseUserSessionOfThisCookieAsync(resultOfTheLoginOfTheAccount.SessionTokenToPutInTheCookie!);
+        await sessionService.CloseAsync(Assert.IsType<AccountLoginResult.LoggedIn>(result).SessionToken);
 
-        Assert.Null(await serviceOfTheSessionsBeingTested.FindOwnerOfTheActiveSessionThenRecordItsActivityAsync(resultOfTheLoginOfTheAccount.SessionTokenToPutInTheCookie!));
+        Assert.Null(await sessionService.FindOwnerAndRecordActivityAsync(Assert.IsType<AccountLoginResult.LoggedIn>(result).SessionToken));
     }
 
     // Le vrai Argon2 voit deux mots différents sans la normalisation : c'est le seul test qui le prouve de bout en bout.
     [Fact]
     public async Task PasswordTypedWithDecomposedAccentLogsInWithTheRealHasher()
     {
-        await using var databaseContextOfThisChainTest = CreateDatabaseContextConnectedToLocalDatabase();
-        await using var transactionCancelledAtTheEndOfThisTest = await databaseContextOfThisChainTest.Database.BeginTransactionAsync();
-        await RegisterThenConfirmNewUserAccountAsync(databaseContextOfThisChainTest, "chaine-accent@exemple.test", "Mot-De-Passé-1");
+        await using var databaseContext = CreateDatabaseContext();
+        await using var transaction = await databaseContext.Database.BeginTransactionAsync();
+        await RegisterThenConfirmAsync(databaseContext, "chaine-accent@exemple.test", "Mot-De-Passé-1");
 
-        var resultOfTheLoginOfTheAccount = await TryToLogInLikeOneRealRequestAsync(databaseContextOfThisChainTest, "chaine-accent@exemple.test", "Mot-De-Passé-1");
+        var result = await LogInAsync(databaseContext, "chaine-accent@exemple.test", "Mot-De-Passé-1");
 
-        Assert.True(resultOfTheLoginOfTheAccount.IsLoggedIn);
+        Assert.IsType<AccountLoginResult.LoggedIn>(result);
     }
 
     [Fact]
     public async Task FiveWrongPasswordsReallyLockTheAccountThenItOpensAgainAfterTheLockout()
     {
-        await using var databaseContextOfThisChainTest = CreateDatabaseContextConnectedToLocalDatabase();
-        await using var transactionCancelledAtTheEndOfThisTest = await databaseContextOfThisChainTest.Database.BeginTransactionAsync();
-        var identifierOfTheNewUserAccount = await RegisterThenConfirmNewUserAccountAsync(databaseContextOfThisChainTest, "chaine-blocage@exemple.test", ValidPasswordChosenInTheseTests);
+        await using var databaseContext = CreateDatabaseContext();
+        await using var transaction = await databaseContext.Database.BeginTransactionAsync();
+        var newUserId = await RegisterThenConfirmAsync(databaseContext, "chaine-blocage@exemple.test", ValidPassword);
 
-        for (var numberOfTheWrongPasswordBeingTried = 1; numberOfTheWrongPasswordBeingTried <= 5; numberOfTheWrongPasswordBeingTried++)
+        for (var attemptNumber = 1; attemptNumber <= 5; attemptNumber++)
         {
-            var resultOfTheWrongPasswordAttempt = await TryToLogInLikeOneRealRequestAsync(databaseContextOfThisChainTest, "chaine-blocage@exemple.test", WrongPasswordTypedInTheseTests);
-            Assert.False(resultOfTheWrongPasswordAttempt.IsLoggedIn);
+            var wrongPasswordResult = await LogInAsync(databaseContext, "chaine-blocage@exemple.test", WrongPassword);
+            Assert.IsNotType<AccountLoginResult.LoggedIn>(wrongPasswordResult);
         }
 
-        var accountReadAgainAfterTheLockout = await databaseContextOfThisChainTest.Users.AsNoTracking().SingleAsync(userSearchedInTheDatabaseTable => userSearchedInTheDatabaseTable.Id == identifierOfTheNewUserAccount);
-        Assert.Equal(5, accountReadAgainAfterTheLockout.FailedLoginAttemptCount);
-        Assert.Equal(1, accountReadAgainAfterTheLockout.LockoutCount);
-        Assert.Equal(clockThatOnlyMovesWhenTestsAskIt.GetUtcNow().UtcDateTime.AddMinutes(15), accountReadAgainAfterTheLockout.LockoutEndsAt);
+        var lockedAccount = await databaseContext.Users.AsNoTracking().SingleAsync(row => row.Id == newUserId);
+        Assert.Equal(5, lockedAccount.FailedLoginAttemptCount);
+        Assert.Equal(1, lockedAccount.LockoutCount);
+        Assert.Equal(clock.GetUtcNow().UtcDateTime.AddMinutes(15), lockedAccount.LockoutEndsAt);
 
-        var resultDuringTheLockoutOfTheAccount = await TryToLogInLikeOneRealRequestAsync(databaseContextOfThisChainTest, "chaine-blocage@exemple.test", ValidPasswordChosenInTheseTests);
-        Assert.Equal(AccountLoginService.ErrorMessageForWrongLoginCredentials, resultDuringTheLockoutOfTheAccount.WrongCredentialsErrorMessage);
+        var lockedResult = await LogInAsync(databaseContext, "chaine-blocage@exemple.test", ValidPassword);
+        Assert.IsType<AccountLoginResult.WrongCredentials>(lockedResult);
 
-        clockThatOnlyMovesWhenTestsAskIt.MoveFakeClockForwardByThisDuration(TimeSpan.FromMinutes(15));
-        var resultAfterTheEndOfTheLockout = await TryToLogInLikeOneRealRequestAsync(databaseContextOfThisChainTest, "chaine-blocage@exemple.test", ValidPasswordChosenInTheseTests);
-        Assert.True(resultAfterTheEndOfTheLockout.IsLoggedIn);
+        clock.Advance(TimeSpan.FromMinutes(15));
+        var unlockedResult = await LogInAsync(databaseContext, "chaine-blocage@exemple.test", ValidPassword);
+        Assert.IsType<AccountLoginResult.LoggedIn>(unlockedResult);
 
-        var accountReadAgainAfterTheLogin = await databaseContextOfThisChainTest.Users.AsNoTracking().SingleAsync(userSearchedInTheDatabaseTable => userSearchedInTheDatabaseTable.Id == identifierOfTheNewUserAccount);
-        Assert.Equal(0, accountReadAgainAfterTheLogin.FailedLoginAttemptCount);
-        Assert.Equal(0, accountReadAgainAfterTheLogin.LockoutCount);
-        Assert.Null(accountReadAgainAfterTheLogin.LockoutEndsAt);
+        var loggedInAccount = await databaseContext.Users.AsNoTracking().SingleAsync(row => row.Id == newUserId);
+        Assert.Equal(0, loggedInAccount.FailedLoginAttemptCount);
+        Assert.Equal(0, loggedInAccount.LockoutCount);
+        Assert.Null(loggedInAccount.LockoutEndsAt);
 
-        Assert.Equal(6, await CountSecurityEventsOfThisAccountAsync(databaseContextOfThisChainTest, identifierOfTheNewUserAccount, SecurityEventType.Login, SecurityEventResult.Failure));
-        Assert.Equal(1, await CountSecurityEventsOfThisAccountAsync(databaseContextOfThisChainTest, identifierOfTheNewUserAccount, SecurityEventType.Lockout, SecurityEventResult.Success));
-        Assert.Equal(1, await CountSecurityEventsOfThisAccountAsync(databaseContextOfThisChainTest, identifierOfTheNewUserAccount, SecurityEventType.Login, SecurityEventResult.Success));
+        Assert.Equal(6, await CountSecurityEventsAsync(databaseContext, newUserId, SecurityEventType.Login, SecurityEventResult.Failure));
+        Assert.Equal(1, await CountSecurityEventsAsync(databaseContext, newUserId, SecurityEventType.Lockout, SecurityEventResult.Success));
+        Assert.Equal(1, await CountSecurityEventsAsync(databaseContext, newUserId, SecurityEventType.Login, SecurityEventResult.Success));
     }
 
     [Fact]
     public async Task SessionExpiresAfterThirtyMinutesOnTheRealDatabaseAndActivityExtendsIt()
     {
-        await using var databaseContextOfThisChainTest = CreateDatabaseContextConnectedToLocalDatabase();
-        await using var transactionCancelledAtTheEndOfThisTest = await databaseContextOfThisChainTest.Database.BeginTransactionAsync();
-        var identifierOfTheNewUserAccount = await RegisterThenConfirmNewUserAccountAsync(databaseContextOfThisChainTest, "chaine-expiration@exemple.test", ValidPasswordChosenInTheseTests);
-        var resultOfTheLoginOfTheAccount = await TryToLogInLikeOneRealRequestAsync(databaseContextOfThisChainTest, "chaine-expiration@exemple.test", ValidPasswordChosenInTheseTests);
-        var serviceOfTheSessionsBeingTested = CreateRealSessionServiceOnThisDatabaseContext(databaseContextOfThisChainTest);
+        await using var databaseContext = CreateDatabaseContext();
+        await using var transaction = await databaseContext.Database.BeginTransactionAsync();
+        var newUserId = await RegisterThenConfirmAsync(databaseContext, "chaine-expiration@exemple.test", ValidPassword);
+        var result = await LogInAsync(databaseContext, "chaine-expiration@exemple.test", ValidPassword);
+        var sessionService = CreateSessionService(databaseContext);
 
-        clockThatOnlyMovesWhenTestsAskIt.MoveFakeClockForwardByThisDuration(TimeSpan.FromMinutes(29));
-        Assert.Equal(identifierOfTheNewUserAccount, await serviceOfTheSessionsBeingTested.FindOwnerOfTheActiveSessionThenRecordItsActivityAsync(resultOfTheLoginOfTheAccount.SessionTokenToPutInTheCookie!));
+        clock.Advance(TimeSpan.FromMinutes(29));
+        Assert.Equal(newUserId, await sessionService.FindOwnerAndRecordActivityAsync(Assert.IsType<AccountLoginResult.LoggedIn>(result).SessionToken));
 
-        clockThatOnlyMovesWhenTestsAskIt.MoveFakeClockForwardByThisDuration(TimeSpan.FromMinutes(29));
-        Assert.Equal(identifierOfTheNewUserAccount, await serviceOfTheSessionsBeingTested.FindOwnerOfTheActiveSessionThenRecordItsActivityAsync(resultOfTheLoginOfTheAccount.SessionTokenToPutInTheCookie!));
+        clock.Advance(TimeSpan.FromMinutes(29));
+        Assert.Equal(newUserId, await sessionService.FindOwnerAndRecordActivityAsync(Assert.IsType<AccountLoginResult.LoggedIn>(result).SessionToken));
 
-        clockThatOnlyMovesWhenTestsAskIt.MoveFakeClockForwardByThisDuration(TimeSpan.FromMinutes(30));
-        Assert.Null(await serviceOfTheSessionsBeingTested.FindOwnerOfTheActiveSessionThenRecordItsActivityAsync(resultOfTheLoginOfTheAccount.SessionTokenToPutInTheCookie!));
+        clock.Advance(TimeSpan.FromMinutes(30));
+        Assert.Null(await sessionService.FindOwnerAndRecordActivityAsync(Assert.IsType<AccountLoginResult.LoggedIn>(result).SessionToken));
     }
 
     [Fact]
     public async Task UnconfirmedAccountIsInvitedToConfirmOnTheRealDatabase()
     {
-        await using var databaseContextOfThisChainTest = CreateDatabaseContextConnectedToLocalDatabase();
-        await using var transactionCancelledAtTheEndOfThisTest = await databaseContextOfThisChainTest.Database.BeginTransactionAsync();
-        var identifierOfTheNewUserAccount = await RegisterAccountWithoutConfirmingItAsync(databaseContextOfThisChainTest, "chaine-non-confirme@exemple.test", ValidPasswordChosenInTheseTests);
+        await using var databaseContext = CreateDatabaseContext();
+        await using var transaction = await databaseContext.Database.BeginTransactionAsync();
+        var newUserId = await RegisterUnconfirmedAccountAsync(databaseContext, "chaine-non-confirme@exemple.test", ValidPassword);
 
-        var resultOfTheLoginOfTheAccount = await TryToLogInLikeOneRealRequestAsync(databaseContextOfThisChainTest, "chaine-non-confirme@exemple.test", ValidPasswordChosenInTheseTests);
+        var result = await LogInAsync(databaseContext, "chaine-non-confirme@exemple.test", ValidPassword);
 
-        Assert.Equal(AccountLoginService.ErrorMessageForEmailAddressNotConfirmed, resultOfTheLoginOfTheAccount.EmailAddressNotConfirmedErrorMessage);
-        Assert.Equal(0, await databaseContextOfThisChainTest.UserSessions.CountAsync(sessionSearchedInTheDatabaseTable => sessionSearchedInTheDatabaseTable.UserId == identifierOfTheNewUserAccount));
-        Assert.Equal(1, await CountSecurityEventsOfThisAccountAsync(databaseContextOfThisChainTest, identifierOfTheNewUserAccount, SecurityEventType.Login, SecurityEventResult.Failure));
+        Assert.IsType<AccountLoginResult.EmailAddressNotConfirmed>(result);
+        Assert.Equal(0, await databaseContext.UserSessions.CountAsync(row => row.UserId == newUserId));
+        Assert.Equal(1, await CountSecurityEventsAsync(databaseContext, newUserId, SecurityEventType.Login, SecurityEventResult.Failure));
     }
 
     // Une adresse inconnue laisse une trace sans identifiant, et l'adresse tapée n'est écrite nulle part (SS §7).
     [Fact]
     public async Task UnknownEmailAddressIsWrittenInTheRealJournalWithoutIdentifier()
     {
-        await using var databaseContextOfThisChainTest = CreateDatabaseContextConnectedToLocalDatabase();
-        await using var transactionCancelledAtTheEndOfThisTest = await databaseContextOfThisChainTest.Database.BeginTransactionAsync();
-        var numberOfEventsWithoutIdentifierBeforeTheLogin = await databaseContextOfThisChainTest.SecurityEvents.CountAsync(eventSearchedInTheDatabaseTable => eventSearchedInTheDatabaseTable.UserId == null);
+        await using var databaseContext = CreateDatabaseContext();
+        await using var transaction = await databaseContext.Database.BeginTransactionAsync();
+        var anonymousEventCountBefore = await databaseContext.SecurityEvents.CountAsync(row => row.UserId == null);
 
-        var resultOfTheLoginOfTheAccount = await TryToLogInLikeOneRealRequestAsync(databaseContextOfThisChainTest, "adresse-sans-compte@exemple.test", ValidPasswordChosenInTheseTests);
+        var result = await LogInAsync(databaseContext, "adresse-sans-compte@exemple.test", ValidPassword);
 
-        Assert.Equal(AccountLoginService.ErrorMessageForWrongLoginCredentials, resultOfTheLoginOfTheAccount.WrongCredentialsErrorMessage);
-        Assert.Equal(numberOfEventsWithoutIdentifierBeforeTheLogin + 1, await databaseContextOfThisChainTest.SecurityEvents.CountAsync(eventSearchedInTheDatabaseTable => eventSearchedInTheDatabaseTable.UserId == null));
+        Assert.IsType<AccountLoginResult.WrongCredentials>(result);
+        Assert.Equal(anonymousEventCountBefore + 1, await databaseContext.SecurityEvents.CountAsync(row => row.UserId == null));
     }
 
     // PostgreSQL refuse le caractère nul : sans le contrôle du format, ce visiteur recevrait une erreur 500.
     [Fact]
     public async Task EmailAddressWithNullCharacterGetsTheNormalRefusalOnTheRealDatabase()
     {
-        await using var databaseContextOfThisChainTest = CreateDatabaseContextConnectedToLocalDatabase();
-        await using var transactionCancelledAtTheEndOfThisTest = await databaseContextOfThisChainTest.Database.BeginTransactionAsync();
+        await using var databaseContext = CreateDatabaseContext();
+        await using var transaction = await databaseContext.Database.BeginTransactionAsync();
 
-        var resultOfTheLoginOfTheAccount = await TryToLogInLikeOneRealRequestAsync(databaseContextOfThisChainTest, "nul\0caractere@exemple.test", ValidPasswordChosenInTheseTests);
+        var result = await LogInAsync(databaseContext, "nul\0caractere@exemple.test", ValidPassword);
 
-        Assert.Equal(AccountLoginService.ErrorMessageForWrongLoginCredentials, resultOfTheLoginOfTheAccount.WrongCredentialsErrorMessage);
+        Assert.IsType<AccountLoginResult.WrongCredentials>(result);
     }
 }

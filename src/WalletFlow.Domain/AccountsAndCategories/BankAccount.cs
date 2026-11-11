@@ -5,20 +5,20 @@ namespace WalletFlow.Domain.AccountsAndCategories;
 public class BankAccount
 {
     // id_compte
-    public Guid Id { get; set; } = Guid.NewGuid();
+    public Guid Id { get; init; } = Guid.NewGuid();
 
     // id_compte_externe : identifiant du compte chez le prestataire.
-    public string ExternalAccountId { get; set; } = string.Empty;
+    public string ExternalAccountId { get; init; } = string.Empty;
 
     // nom_compte : fourni par la banque, 50 caractères au plus.
-    public string Name { get; set; } = string.Empty;
+    public string Name { get; init; } = string.Empty;
 
     // solde_compte : en centimes, peut être négatif.
-    public int BalanceInCents { get; set; }
+    public int BalanceInCents { get; init; }
 
     // date_solde : date et heure de la dernière mise à jour réussie.
-    public DateTime BalanceUpdatedAt { get; set; }
+    public DateTime BalanceUpdatedAt { get; init; }
 
     // id_connexion
-    public Guid BankConnectionId { get; set; }
+    public Guid BankConnectionId { get; init; }
 }

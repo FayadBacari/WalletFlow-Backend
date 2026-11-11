@@ -25,12 +25,12 @@ namespace WalletFlow.Tests.Api;
 public class UserSessionEndpointTests
 {
     // Connecte le compte des tests et renvoie le cookie de session, tel qu'il a été écrit par la réponse.
-    private static async Task<string> LogInThenReadTheSessionCookieAsync(HttpClient clientThatKeepsTheCookiesOfTheBrowser)
+    private static async Task<string> LogInThenReadSessionCookieAsync(HttpClient browserClient)
     {
-        var answerToTheVisitorLoginRequest = await SendLoginRequestToTheApiAsync(clientThatKeepsTheCookiesOfTheBrowser);
-        Assert.Equal(HttpStatusCode.OK, answerToTheVisitorLoginRequest.StatusCode);
+        var response = await SendLoginRequestAsync(browserClient);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
 
-        return "__Host-walletflow-session=" + FindCookieWrittenByTheAnswer(answerToTheVisitorLoginRequest, "__Host-walletflow-session")!.Value;
+        return "__Host-walletflow-session=" + FindCookie(response, "__Host-walletflow-session")!.Value;
     }
 
     // --- Une session est nécessaire
@@ -39,81 +39,81 @@ public class UserSessionEndpointTests
     [Fact]
     public async Task RouteOfLoggedInUserRefusesVisitorWithoutSession()
     {
-        using var apiStartedInMemoryForThisTest = new ApiFactoryWithFakeRepositoryAndEmails();
-        var clientWithoutAnyOpenUserSession = CreateClientThatKeepsCookiesLikeABrowser(apiStartedInMemoryForThisTest);
+        using var api = new ApiFactoryWithFakes();
+        var client = CreateBrowserClient(api);
 
-        var answerGivenWithoutAnyUserSession = await clientWithoutAnyOpenUserSession.GetAsync(AddressOfTheCsrfTokenEndpoint);
+        var response = await client.GetAsync(CsrfTokenEndpoint);
 
-        await CheckThatAnswerIsProblemWithThisExactTitleAsync(answerGivenWithoutAnyUserSession, HttpStatusCode.Unauthorized, "Connecte-toi pour continuer.");
-        SecurityHeadersAssertions.CheckThatAnswerCarriesTheExactSecurityHeaders(answerGivenWithoutAnyUserSession);
+        await AssertProblemTitleAsync(response, HttpStatusCode.Unauthorized, "Connecte-toi pour continuer.");
+        SecurityHeadersAssertions.AssertExactSecurityHeaders(response);
     }
 
     [Fact]
     public async Task ErrorWithoutSessionIsAlsoFrenchInProductionMode()
     {
-        using var apiStartedLikeInProductionForThisTest = new ApiFactoryRunningLikeInProduction();
-        var clientWithoutAnyOpenUserSession = CreateClientThatKeepsCookiesLikeABrowser(apiStartedLikeInProductionForThisTest);
+        using var productionApi = new ApiFactoryInProduction();
+        var client = CreateBrowserClient(productionApi);
 
-        var answerGivenWithoutAnyUserSession = await clientWithoutAnyOpenUserSession.GetAsync(AddressOfTheCsrfTokenEndpoint);
+        var response = await client.GetAsync(CsrfTokenEndpoint);
 
-        await CheckThatAnswerIsProblemWithThisExactTitleAsync(answerGivenWithoutAnyUserSession, HttpStatusCode.Unauthorized, UserSessionAuthenticationHandler.MessageShownWhenTheVisitorMustLogIn);
+        await AssertProblemTitleAsync(response, HttpStatusCode.Unauthorized, UserSessionAuthenticationHandler.LoginRequiredMessage);
     }
 
     // Sans session, le refus arrive avant le contrôle du jeton anti-CSRF : un visiteur reçoit « connecte-toi ».
     [Fact]
     public async Task LogoutWithoutAnySessionIsAnsweredWithUnauthorizedStatus()
     {
-        using var apiStartedInMemoryForThisTest = new ApiFactoryWithFakeRepositoryAndEmails();
-        var clientWithoutAnyOpenUserSession = CreateClientThatKeepsCookiesLikeABrowser(apiStartedInMemoryForThisTest);
+        using var api = new ApiFactoryWithFakes();
+        var client = CreateBrowserClient(api);
 
-        var answerToTheUserLogoutRequest = await SendLogoutRequestWithThisCsrfTokenAsync(clientWithoutAnyOpenUserSession, null);
+        var response = await SendLogoutRequestAsync(client, null);
 
-        Assert.Equal(HttpStatusCode.Unauthorized, answerToTheUserLogoutRequest.StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
     }
 
     // ASP.NET Core ne transmet pas un cookie vide : il ne provoque donc aucune lecture de la base.
     [Fact]
     public async Task EmptySessionCookieIsNeverSearchedInTheDatabase()
     {
-        using var apiStartedInMemoryForThisTest = new ApiFactoryWithFakeRepositoryAndEmails();
-        var clientThatSendsAnEmptyCookie = CreateClientThatOnlySendsHandwrittenCookies(apiStartedInMemoryForThisTest, "__Host-walletflow-session=");
+        using var api = new ApiFactoryWithFakes();
+        var client = CreateClientWithManualCookies(api, "__Host-walletflow-session=");
 
-        var answerWithTheEmptySessionCookie = await clientThatSendsAnEmptyCookie.GetAsync(AddressOfTheCsrfTokenEndpoint);
+        var response = await client.GetAsync(CsrfTokenEndpoint);
 
-        Assert.Equal(HttpStatusCode.Unauthorized, answerWithTheEmptySessionCookie.StatusCode);
-        Assert.Equal(0, apiStartedInMemoryForThisTest.RepositoryThatKeepsSessionsInMemory.NumberOfSearchesOfSessionsInTheDatabase);
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+        Assert.Equal(0, api.SessionRepository.SessionSearchCount);
     }
 
     // La limite de débit passe avant toute lecture de la base : un robot arrêté ne coûte plus rien au serveur.
     [Fact]
     public async Task RequestOverTheRateLimitNeverReadsTheSessionInTheDatabase()
     {
-        using var apiStartedInMemoryForThisTest = new ApiFactoryWithFakeRepositoryAndEmails();
-        var clientThatSendsASessionCookie = CreateClientThatOnlySendsHandwrittenCookies(apiStartedInMemoryForThisTest, "__Host-walletflow-session=faux-jeton");
+        using var api = new ApiFactoryWithFakes();
+        var client = CreateClientWithManualCookies(api, "__Host-walletflow-session=faux-jeton");
 
-        for (var numberOfTheAttemptBeingSent = 1; numberOfTheAttemptBeingSent <= 10; numberOfTheAttemptBeingSent++)
+        for (var attemptNumber = 1; attemptNumber <= 10; attemptNumber++)
         {
-            await SendLoginRequestToTheApiAsync(clientThatSendsASessionCookie, "inconnu@exemple.test");
+            await SendLoginRequestAsync(client, "inconnu@exemple.test");
         }
 
-        var numberOfSearchesBeforeTheLimit = apiStartedInMemoryForThisTest.RepositoryThatKeepsSessionsInMemory.NumberOfSearchesOfSessionsInTheDatabase;
-        var answerOverTheRateLimitOfTheLogin = await SendLoginRequestToTheApiAsync(clientThatSendsASessionCookie, "inconnu@exemple.test");
+        var searcheCount = api.SessionRepository.SessionSearchCount;
+        var response = await SendLoginRequestAsync(client, "inconnu@exemple.test");
 
-        Assert.Equal(HttpStatusCode.TooManyRequests, answerOverTheRateLimitOfTheLogin.StatusCode);
-        Assert.Equal(numberOfSearchesBeforeTheLimit, apiStartedInMemoryForThisTest.RepositoryThatKeepsSessionsInMemory.NumberOfSearchesOfSessionsInTheDatabase);
+        Assert.Equal(HttpStatusCode.TooManyRequests, response.StatusCode);
+        Assert.Equal(searcheCount, api.SessionRepository.SessionSearchCount);
     }
 
     // Un client qui refuse le JSON ne doit pas provoquer une erreur 500 : le code d'erreur reste juste.
     [Fact]
     public async Task ClientThatRefusesJsonStillGetsUnauthorized()
     {
-        using var apiStartedInMemoryForThisTest = new ApiFactoryWithFakeRepositoryAndEmails();
-        var clientThatRefusesJsonInTheAnswers = CreateClientThatKeepsCookiesLikeABrowser(apiStartedInMemoryForThisTest);
-        clientThatRefusesJsonInTheAnswers.DefaultRequestHeaders.Accept.Add(new System.Net.Http.Headers.MediaTypeWithQualityHeaderValue("text/html"));
+        using var api = new ApiFactoryWithFakes();
+        var client = CreateBrowserClient(api);
+        client.DefaultRequestHeaders.Accept.Add(new System.Net.Http.Headers.MediaTypeWithQualityHeaderValue("text/html"));
 
-        var answerToTheClientThatRefusesJson = await clientThatRefusesJsonInTheAnswers.GetAsync(AddressOfTheCsrfTokenEndpoint);
+        var response = await client.GetAsync(CsrfTokenEndpoint);
 
-        Assert.Equal(HttpStatusCode.Unauthorized, answerToTheClientThatRefusesJson.StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
     }
 
     // Aucune de ces valeurs ne doit provoquer d'erreur 500, ni ouvrir une session.
@@ -124,44 +124,44 @@ public class UserSessionEndpointTests
     [InlineData("__Host-walletflow-session=' OR 1=1 --")]
     [InlineData("__Host-walletflow-session=" + "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")]
     [InlineData("walletflow-session=faux-jeton")]
-    public async Task JunkSessionCookieIsAnsweredWithUnauthorizedStatus(string cookiesWrittenByHandInTheTest)
+    public async Task JunkSessionCookieIsAnsweredWithUnauthorizedStatus(string cookies)
     {
-        using var apiStartedInMemoryForThisTest = new ApiFactoryWithFakeRepositoryAndEmails();
-        var clientThatSendsAJunkCookie = CreateClientThatOnlySendsHandwrittenCookies(apiStartedInMemoryForThisTest, cookiesWrittenByHandInTheTest);
+        using var api = new ApiFactoryWithFakes();
+        var client = CreateClientWithManualCookies(api, cookies);
 
-        var answerWithTheJunkSessionCookie = await clientThatSendsAJunkCookie.GetAsync(AddressOfTheCsrfTokenEndpoint);
+        var response = await client.GetAsync(CsrfTokenEndpoint);
 
-        Assert.Equal(HttpStatusCode.Unauthorized, answerWithTheJunkSessionCookie.StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
     }
 
     // La base ne contient que l'empreinte : quelqu'un qui lit la base ne peut pas s'en servir comme cookie.
     [Fact]
     public async Task HashReadInTheDatabaseCannotBeUsedAsSessionCookie()
     {
-        using var apiStartedInMemoryForThisTest = new ApiFactoryWithFakeRepositoryAndEmails();
-        AddAccountToTheFakeRepositoryOfTheApi(apiStartedInMemoryForThisTest);
-        await SendLoginRequestToTheApiAsync(CreateClientThatKeepsCookiesLikeABrowser(apiStartedInMemoryForThisTest));
-        var hashOfTheSessionReadInTheDatabase = Assert.Single(apiStartedInMemoryForThisTest.RepositoryThatKeepsSessionsInMemory.SavedSessions).Id;
-        var clientThatReadTheHashInTheDatabase = CreateClientThatOnlySendsHandwrittenCookies(apiStartedInMemoryForThisTest, "__Host-walletflow-session=" + hashOfTheSessionReadInTheDatabase);
+        using var api = new ApiFactoryWithFakes();
+        await AddAccountAsync(api);
+        await SendLoginRequestAsync(CreateBrowserClient(api));
+        var sessionHash = Assert.Single(api.SessionRepository.SavedSessions).Id;
+        var client = CreateClientWithManualCookies(api, "__Host-walletflow-session=" + sessionHash);
 
-        var answerWithTheHashOfTheDatabase = await clientThatReadTheHashInTheDatabase.GetAsync(AddressOfTheCsrfTokenEndpoint);
+        var response = await client.GetAsync(CsrfTokenEndpoint);
 
-        Assert.Equal(HttpStatusCode.Unauthorized, answerWithTheHashOfTheDatabase.StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
     }
 
     // Le compte supprimé emporte ses sessions (ON DELETE CASCADE, testé sur la vraie base).
     [Fact]
     public async Task SessionDeletedFromTheServerNoLongerWorks()
     {
-        using var apiStartedInMemoryForThisTest = new ApiFactoryWithFakeRepositoryAndEmails();
-        AddAccountToTheFakeRepositoryOfTheApi(apiStartedInMemoryForThisTest);
-        var clientThatKeepsTheCookiesOfTheBrowser = CreateClientThatKeepsCookiesLikeABrowser(apiStartedInMemoryForThisTest);
-        await SendLoginRequestToTheApiAsync(clientThatKeepsTheCookiesOfTheBrowser);
+        using var api = new ApiFactoryWithFakes();
+        await AddAccountAsync(api);
+        var browserClient = CreateBrowserClient(api);
+        await SendLoginRequestAsync(browserClient);
 
-        apiStartedInMemoryForThisTest.RepositoryThatKeepsSessionsInMemory.SavedSessions.Clear();
-        var answerAfterTheDeletionOfTheSession = await clientThatKeepsTheCookiesOfTheBrowser.GetAsync(AddressOfTheCsrfTokenEndpoint);
+        api.SessionRepository.SavedSessions.Clear();
+        var response = await browserClient.GetAsync(CsrfTokenEndpoint);
 
-        Assert.Equal(HttpStatusCode.Unauthorized, answerAfterTheDeletionOfTheSession.StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
     }
 
     // --- 30 minutes d'inactivité
@@ -169,19 +169,19 @@ public class UserSessionEndpointTests
     [Fact]
     public async Task SessionStaysOpenWhileItIsUsedAndClosesAfterThirtyMinutesWithoutActivity()
     {
-        using var apiStartedInMemoryForThisTest = new ApiFactoryWithFakeRepositoryAndEmails();
-        AddAccountToTheFakeRepositoryOfTheApi(apiStartedInMemoryForThisTest);
-        var clientThatKeepsTheCookiesOfTheBrowser = CreateClientThatKeepsCookiesLikeABrowser(apiStartedInMemoryForThisTest);
-        await SendLoginRequestToTheApiAsync(clientThatKeepsTheCookiesOfTheBrowser);
+        using var api = new ApiFactoryWithFakes();
+        await AddAccountAsync(api);
+        var browserClient = CreateBrowserClient(api);
+        await SendLoginRequestAsync(browserClient);
 
-        apiStartedInMemoryForThisTest.ClockThatOnlyMovesWhenTestsAskIt.MoveFakeClockForwardByThisDuration(TimeSpan.FromMinutes(29));
-        Assert.Equal(HttpStatusCode.OK, (await clientThatKeepsTheCookiesOfTheBrowser.GetAsync(AddressOfTheCsrfTokenEndpoint)).StatusCode);
+        api.Clock.Advance(TimeSpan.FromMinutes(29));
+        Assert.Equal(HttpStatusCode.OK, (await browserClient.GetAsync(CsrfTokenEndpoint)).StatusCode);
 
-        apiStartedInMemoryForThisTest.ClockThatOnlyMovesWhenTestsAskIt.MoveFakeClockForwardByThisDuration(TimeSpan.FromMinutes(29));
-        Assert.Equal(HttpStatusCode.OK, (await clientThatKeepsTheCookiesOfTheBrowser.GetAsync(AddressOfTheCsrfTokenEndpoint)).StatusCode);
+        api.Clock.Advance(TimeSpan.FromMinutes(29));
+        Assert.Equal(HttpStatusCode.OK, (await browserClient.GetAsync(CsrfTokenEndpoint)).StatusCode);
 
-        apiStartedInMemoryForThisTest.ClockThatOnlyMovesWhenTestsAskIt.MoveFakeClockForwardByThisDuration(TimeSpan.FromMinutes(30));
-        Assert.Equal(HttpStatusCode.Unauthorized, (await clientThatKeepsTheCookiesOfTheBrowser.GetAsync(AddressOfTheCsrfTokenEndpoint)).StatusCode);
+        api.Clock.Advance(TimeSpan.FromMinutes(30));
+        Assert.Equal(HttpStatusCode.Unauthorized, (await browserClient.GetAsync(CsrfTokenEndpoint)).StatusCode);
     }
 
     // --- Jeton anti-CSRF
@@ -189,101 +189,101 @@ public class UserSessionEndpointTests
     [Fact]
     public async Task CsrfTokenRouteGivesTokenThatIsNotKeptInAnyCache()
     {
-        using var apiStartedInMemoryForThisTest = new ApiFactoryWithFakeRepositoryAndEmails();
-        AddAccountToTheFakeRepositoryOfTheApi(apiStartedInMemoryForThisTest);
-        var clientThatKeepsTheCookiesOfTheBrowser = CreateClientThatKeepsCookiesLikeABrowser(apiStartedInMemoryForThisTest);
-        await SendLoginRequestToTheApiAsync(clientThatKeepsTheCookiesOfTheBrowser);
+        using var api = new ApiFactoryWithFakes();
+        await AddAccountAsync(api);
+        var browserClient = CreateBrowserClient(api);
+        await SendLoginRequestAsync(browserClient);
 
-        var answerToTheCsrfTokenRequest = await clientThatKeepsTheCookiesOfTheBrowser.GetAsync(AddressOfTheCsrfTokenEndpoint);
+        var response = await browserClient.GetAsync(CsrfTokenEndpoint);
 
-        Assert.Equal(HttpStatusCode.OK, answerToTheCsrfTokenRequest.StatusCode);
-        Assert.True(answerToTheCsrfTokenRequest.Headers.CacheControl!.NoStore);
-        Assert.False(answerToTheCsrfTokenRequest.Headers.Contains("X-Frame-Options"));
-        SecurityHeadersAssertions.CheckThatAnswerCarriesTheExactSecurityHeaders(answerToTheCsrfTokenRequest);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.True(response.Headers.CacheControl!.NoStore);
+        Assert.False(response.Headers.Contains("X-Frame-Options"));
+        SecurityHeadersAssertions.AssertExactSecurityHeaders(response);
     }
 
     // Par défaut, ASP.NET Core ne met pas Secure sur ce cookie : le réglage doit être vérifié.
     [Fact]
     public async Task CsrfCookieHasItsExactAttributes()
     {
-        using var apiStartedInMemoryForThisTest = new ApiFactoryWithFakeRepositoryAndEmails();
-        AddAccountToTheFakeRepositoryOfTheApi(apiStartedInMemoryForThisTest);
-        var clientThatKeepsTheCookiesOfTheBrowser = CreateClientThatKeepsCookiesLikeABrowser(apiStartedInMemoryForThisTest);
-        await SendLoginRequestToTheApiAsync(clientThatKeepsTheCookiesOfTheBrowser);
+        using var api = new ApiFactoryWithFakes();
+        await AddAccountAsync(api);
+        var browserClient = CreateBrowserClient(api);
+        await SendLoginRequestAsync(browserClient);
 
-        var answerToTheCsrfTokenRequest = await clientThatKeepsTheCookiesOfTheBrowser.GetAsync(AddressOfTheCsrfTokenEndpoint);
+        var response = await browserClient.GetAsync(CsrfTokenEndpoint);
 
-        var csrfCookieWrittenByTheAnswer = FindCookieWrittenByTheAnswer(answerToTheCsrfTokenRequest, "__Host-walletflow-csrf");
-        Assert.NotNull(csrfCookieWrittenByTheAnswer);
-        Assert.True(csrfCookieWrittenByTheAnswer.Secure);
-        Assert.True(csrfCookieWrittenByTheAnswer.HttpOnly);
-        Assert.Equal(SameSiteMode.Strict, csrfCookieWrittenByTheAnswer.SameSite);
-        Assert.Equal("/", csrfCookieWrittenByTheAnswer.Path.ToString());
-        Assert.Equal(0, csrfCookieWrittenByTheAnswer.Domain.Length);
+        var csrfCookie = FindCookie(response, "__Host-walletflow-csrf");
+        Assert.NotNull(csrfCookie);
+        Assert.True(csrfCookie.Secure);
+        Assert.True(csrfCookie.HttpOnly);
+        Assert.Equal(SameSiteMode.Strict, csrfCookie.SameSite);
+        Assert.Equal("/", csrfCookie.Path.ToString());
+        Assert.Equal(0, csrfCookie.Domain.Length);
     }
 
     // Un site piégé envoie le cookie de session mais ne peut pas lire le jeton : sa requête est refusée.
     [Fact]
     public async Task LogoutWithoutCsrfTokenIsRefusedAndKeepsTheSession()
     {
-        using var apiStartedInMemoryForThisTest = new ApiFactoryWithFakeRepositoryAndEmails();
-        AddAccountToTheFakeRepositoryOfTheApi(apiStartedInMemoryForThisTest);
-        var clientThatKeepsTheCookiesOfTheBrowser = CreateClientThatKeepsCookiesLikeABrowser(apiStartedInMemoryForThisTest);
-        await SendLoginRequestToTheApiAsync(clientThatKeepsTheCookiesOfTheBrowser);
+        using var api = new ApiFactoryWithFakes();
+        await AddAccountAsync(api);
+        var browserClient = CreateBrowserClient(api);
+        await SendLoginRequestAsync(browserClient);
 
-        var answerGivenWithoutAnyCsrfToken = await SendLogoutRequestWithThisCsrfTokenAsync(clientThatKeepsTheCookiesOfTheBrowser, null);
+        var response = await SendLogoutRequestAsync(browserClient, null);
 
-        await CheckThatAnswerIsProblemWithThisExactTitleAsync(answerGivenWithoutAnyCsrfToken, HttpStatusCode.BadRequest, ApiErrorConfiguration.TitleOfEveryRefusedRequestAnswer);
-        Assert.Single(apiStartedInMemoryForThisTest.RepositoryThatKeepsSessionsInMemory.SavedSessions);
+        await AssertProblemTitleAsync(response, HttpStatusCode.BadRequest, ApiErrorConfiguration.RefusedRequestTitle);
+        Assert.Single(api.SessionRepository.SavedSessions);
     }
 
     [Fact]
     public async Task LogoutWithInventedCsrfTokenIsRefusedAndKeepsTheSession()
     {
-        using var apiStartedInMemoryForThisTest = new ApiFactoryWithFakeRepositoryAndEmails();
-        AddAccountToTheFakeRepositoryOfTheApi(apiStartedInMemoryForThisTest);
-        var clientThatKeepsTheCookiesOfTheBrowser = CreateClientThatKeepsCookiesLikeABrowser(apiStartedInMemoryForThisTest);
-        await SendLoginRequestToTheApiAsync(clientThatKeepsTheCookiesOfTheBrowser);
-        await AskForTheCsrfTokenOfTheLoggedInUserAsync(clientThatKeepsTheCookiesOfTheBrowser);
+        using var api = new ApiFactoryWithFakes();
+        await AddAccountAsync(api);
+        var browserClient = CreateBrowserClient(api);
+        await SendLoginRequestAsync(browserClient);
+        await GetCsrfTokenAsync(browserClient);
 
-        var answerWithInventedCsrfTokenInHeader = await SendLogoutRequestWithThisCsrfTokenAsync(clientThatKeepsTheCookiesOfTheBrowser, "jeton-invente");
+        var response = await SendLogoutRequestAsync(browserClient, "jeton-invente");
 
-        Assert.Equal(HttpStatusCode.BadRequest, answerWithInventedCsrfTokenInHeader.StatusCode);
-        Assert.Single(apiStartedInMemoryForThisTest.RepositoryThatKeepsSessionsInMemory.SavedSessions);
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Single(api.SessionRepository.SavedSessions);
     }
 
     // Le jeton est lié à l'utilisateur : celui d'un compte ne sert pas à un autre compte.
     [Fact]
     public async Task CsrfTokenOfAnotherUserIsRefused()
     {
-        using var apiStartedInMemoryForThisTest = new ApiFactoryWithFakeRepositoryAndEmails();
-        AddAccountToTheFakeRepositoryOfTheApi(apiStartedInMemoryForThisTest);
-        AddAccountToTheFakeRepositoryOfTheApi(apiStartedInMemoryForThisTest, "autre-utilisateur@exemple.test");
-        var clientThatKeepsTheCookiesOfTheBrowser = CreateClientThatKeepsCookiesLikeABrowser(apiStartedInMemoryForThisTest);
-        await SendLoginRequestToTheApiAsync(clientThatKeepsTheCookiesOfTheBrowser);
-        var csrfTokenOfTheFirstUser = await AskForTheCsrfTokenOfTheLoggedInUserAsync(clientThatKeepsTheCookiesOfTheBrowser);
+        using var api = new ApiFactoryWithFakes();
+        await AddAccountAsync(api);
+        await AddAccountAsync(api, "autre-utilisateur@exemple.test");
+        var browserClient = CreateBrowserClient(api);
+        await SendLoginRequestAsync(browserClient);
+        var csrfToken = await GetCsrfTokenAsync(browserClient);
 
-        await SendLoginRequestToTheApiAsync(clientThatKeepsTheCookiesOfTheBrowser, "autre-utilisateur@exemple.test");
-        var answerWithTheTokenOfTheFirstUser = await SendLogoutRequestWithThisCsrfTokenAsync(clientThatKeepsTheCookiesOfTheBrowser, csrfTokenOfTheFirstUser);
+        await SendLoginRequestAsync(browserClient, "autre-utilisateur@exemple.test");
+        var response = await SendLogoutRequestAsync(browserClient, csrfToken);
 
-        Assert.Equal(HttpStatusCode.BadRequest, answerWithTheTokenOfTheFirstUser.StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
     }
 
     // SS §6 : le jeton n'est lu que dans l'en-tête, jamais dans un formulaire qu'un site piégé pourrait construire.
     [Fact]
     public async Task CsrfTokenSentInAFormIsNotAccepted()
     {
-        using var apiStartedInMemoryForThisTest = new ApiFactoryWithFakeRepositoryAndEmails();
-        AddAccountToTheFakeRepositoryOfTheApi(apiStartedInMemoryForThisTest);
-        var clientThatKeepsTheCookiesOfTheBrowser = CreateClientThatKeepsCookiesLikeABrowser(apiStartedInMemoryForThisTest);
-        await SendLoginRequestToTheApiAsync(clientThatKeepsTheCookiesOfTheBrowser);
-        var csrfTokenOfTheLoggedInUser = await AskForTheCsrfTokenOfTheLoggedInUserAsync(clientThatKeepsTheCookiesOfTheBrowser);
-        var formContainingTheCsrfTokenOfTheUser = new FormUrlEncodedContent(new[] { new KeyValuePair<string, string>("__RequestVerificationToken", csrfTokenOfTheLoggedInUser) });
+        using var api = new ApiFactoryWithFakes();
+        await AddAccountAsync(api);
+        var browserClient = CreateBrowserClient(api);
+        await SendLoginRequestAsync(browserClient);
+        var csrfToken = await GetCsrfTokenAsync(browserClient);
+        var form = new FormUrlEncodedContent(new[] { new KeyValuePair<string, string>("__RequestVerificationToken", csrfToken) });
 
-        var answerToTheFormOfTheBrowser = await clientThatKeepsTheCookiesOfTheBrowser.PostAsync(AddressOfTheUserLogoutEndpoint, formContainingTheCsrfTokenOfTheUser);
+        var response = await browserClient.PostAsync(LogoutEndpoint, form);
 
-        Assert.Equal(HttpStatusCode.BadRequest, answerToTheFormOfTheBrowser.StatusCode);
-        Assert.Single(apiStartedInMemoryForThisTest.RepositoryThatKeepsSessionsInMemory.SavedSessions);
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Single(api.SessionRepository.SavedSessions);
     }
 
     // --- Déconnexion
@@ -291,79 +291,79 @@ public class UserSessionEndpointTests
     [Fact]
     public async Task LogoutDestroysTheServerSessionAndDeletesTheSessionCookie()
     {
-        using var apiStartedInMemoryForThisTest = new ApiFactoryWithFakeRepositoryAndEmails();
-        AddAccountToTheFakeRepositoryOfTheApi(apiStartedInMemoryForThisTest);
-        var clientThatKeepsTheCookiesOfTheBrowser = CreateClientThatKeepsCookiesLikeABrowser(apiStartedInMemoryForThisTest);
-        await SendLoginRequestToTheApiAsync(clientThatKeepsTheCookiesOfTheBrowser);
-        var csrfTokenOfTheLoggedInUser = await AskForTheCsrfTokenOfTheLoggedInUserAsync(clientThatKeepsTheCookiesOfTheBrowser);
+        using var api = new ApiFactoryWithFakes();
+        await AddAccountAsync(api);
+        var browserClient = CreateBrowserClient(api);
+        await SendLoginRequestAsync(browserClient);
+        var csrfToken = await GetCsrfTokenAsync(browserClient);
 
-        var answerToTheUserLogoutRequest = await SendLogoutRequestWithThisCsrfTokenAsync(clientThatKeepsTheCookiesOfTheBrowser, csrfTokenOfTheLoggedInUser);
+        var response = await SendLogoutRequestAsync(browserClient, csrfToken);
 
-        Assert.Equal(HttpStatusCode.OK, answerToTheUserLogoutRequest.StatusCode);
-        Assert.Contains(UserSessionController.MessageSentWhenTheUserIsLoggedOut, await answerToTheUserLogoutRequest.Content.ReadAsStringAsync());
-        Assert.Empty(apiStartedInMemoryForThisTest.RepositoryThatKeepsSessionsInMemory.SavedSessions);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Contains(UserSessionController.LoggedOutMessage, await response.Content.ReadAsStringAsync());
+        Assert.Empty(api.SessionRepository.SavedSessions);
 
         // Avec le préfixe __Host-, un navigateur n'efface le cookie que si Secure et le chemin / sont présents.
-        var deletionOfTheUserSessionCookie = FindCookieWrittenByTheAnswer(answerToTheUserLogoutRequest, "__Host-walletflow-session");
-        Assert.NotNull(deletionOfTheUserSessionCookie);
-        Assert.True(deletionOfTheUserSessionCookie.Expires < DateTimeOffset.UtcNow);
-        Assert.True(deletionOfTheUserSessionCookie.Secure);
-        Assert.Equal("/", deletionOfTheUserSessionCookie.Path.ToString());
+        var sessionCookieDeletion = FindCookie(response, "__Host-walletflow-session");
+        Assert.NotNull(sessionCookieDeletion);
+        Assert.True(sessionCookieDeletion.Expires < DateTimeOffset.UtcNow);
+        Assert.True(sessionCookieDeletion.Secure);
+        Assert.Equal("/", sessionCookieDeletion.Path.ToString());
 
         // Le navigateur reste reconnu à la prochaine connexion.
-        Assert.Null(FindCookieWrittenByTheAnswer(answerToTheUserLogoutRequest, "__Host-walletflow-device"));
+        Assert.Null(FindCookie(response, "__Host-walletflow-device"));
 
-        Assert.Equal(HttpStatusCode.Unauthorized, (await clientThatKeepsTheCookiesOfTheBrowser.GetAsync(AddressOfTheCsrfTokenEndpoint)).StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, (await browserClient.GetAsync(CsrfTokenEndpoint)).StatusCode);
     }
 
     // SS §3 : la session est détruite côté serveur, pas seulement le cookie. Un cookie copié avant ne vaut plus rien.
     [Fact]
     public async Task CookieCopiedBeforeTheLogoutNoLongerWorksAfterIt()
     {
-        using var apiStartedInMemoryForThisTest = new ApiFactoryWithFakeRepositoryAndEmails();
-        AddAccountToTheFakeRepositoryOfTheApi(apiStartedInMemoryForThisTest);
-        var clientThatKeepsTheCookiesOfTheBrowser = CreateClientThatKeepsCookiesLikeABrowser(apiStartedInMemoryForThisTest);
-        var sessionCookieCopiedBeforeTheLogout = await LogInThenReadTheSessionCookieAsync(clientThatKeepsTheCookiesOfTheBrowser);
-        var clientWithTheCopiedSessionCookie = CreateClientThatOnlySendsHandwrittenCookies(apiStartedInMemoryForThisTest, sessionCookieCopiedBeforeTheLogout);
-        Assert.Equal(HttpStatusCode.OK, (await clientWithTheCopiedSessionCookie.GetAsync(AddressOfTheCsrfTokenEndpoint)).StatusCode);
+        using var api = new ApiFactoryWithFakes();
+        await AddAccountAsync(api);
+        var browserClient = CreateBrowserClient(api);
+        var copiedSessionCookie = await LogInThenReadSessionCookieAsync(browserClient);
+        var copiedCookieClient = CreateClientWithManualCookies(api, copiedSessionCookie);
+        Assert.Equal(HttpStatusCode.OK, (await copiedCookieClient.GetAsync(CsrfTokenEndpoint)).StatusCode);
 
-        var csrfTokenOfTheLoggedInUser = await AskForTheCsrfTokenOfTheLoggedInUserAsync(clientThatKeepsTheCookiesOfTheBrowser);
-        await SendLogoutRequestWithThisCsrfTokenAsync(clientThatKeepsTheCookiesOfTheBrowser, csrfTokenOfTheLoggedInUser);
+        var csrfToken = await GetCsrfTokenAsync(browserClient);
+        await SendLogoutRequestAsync(browserClient, csrfToken);
 
-        Assert.Equal(HttpStatusCode.Unauthorized, (await clientWithTheCopiedSessionCookie.GetAsync(AddressOfTheCsrfTokenEndpoint)).StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, (await copiedCookieClient.GetAsync(CsrfTokenEndpoint)).StatusCode);
     }
 
     // Une deuxième déconnexion ne trouve plus de session.
     [Fact]
     public async Task SecondLogoutIsAnsweredWithUnauthorizedStatus()
     {
-        using var apiStartedInMemoryForThisTest = new ApiFactoryWithFakeRepositoryAndEmails();
-        AddAccountToTheFakeRepositoryOfTheApi(apiStartedInMemoryForThisTest);
-        var clientThatKeepsTheCookiesOfTheBrowser = CreateClientThatKeepsCookiesLikeABrowser(apiStartedInMemoryForThisTest);
-        await SendLoginRequestToTheApiAsync(clientThatKeepsTheCookiesOfTheBrowser);
-        var csrfTokenOfTheLoggedInUser = await AskForTheCsrfTokenOfTheLoggedInUserAsync(clientThatKeepsTheCookiesOfTheBrowser);
-        await SendLogoutRequestWithThisCsrfTokenAsync(clientThatKeepsTheCookiesOfTheBrowser, csrfTokenOfTheLoggedInUser);
+        using var api = new ApiFactoryWithFakes();
+        await AddAccountAsync(api);
+        var browserClient = CreateBrowserClient(api);
+        await SendLoginRequestAsync(browserClient);
+        var csrfToken = await GetCsrfTokenAsync(browserClient);
+        await SendLogoutRequestAsync(browserClient, csrfToken);
 
-        var answerToTheSecondLogoutRequest = await SendLogoutRequestWithThisCsrfTokenAsync(clientThatKeepsTheCookiesOfTheBrowser, csrfTokenOfTheLoggedInUser);
+        var response = await SendLogoutRequestAsync(browserClient, csrfToken);
 
-        Assert.Equal(HttpStatusCode.Unauthorized, answerToTheSecondLogoutRequest.StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
     }
 
     // Se déconnecter dans un navigateur ne ferme pas la session de l'autre.
     [Fact]
     public async Task LogoutClosesOnlyTheSessionOfThisBrowser()
     {
-        using var apiStartedInMemoryForThisTest = new ApiFactoryWithFakeRepositoryAndEmails();
-        AddAccountToTheFakeRepositoryOfTheApi(apiStartedInMemoryForThisTest);
-        var clientThatPlaysTheFirstBrowser = CreateClientThatKeepsCookiesLikeABrowser(apiStartedInMemoryForThisTest);
-        var clientThatPlaysTheSecondBrowser = CreateClientThatKeepsCookiesLikeABrowser(apiStartedInMemoryForThisTest);
-        await SendLoginRequestToTheApiAsync(clientThatPlaysTheFirstBrowser);
-        await SendLoginRequestToTheApiAsync(clientThatPlaysTheSecondBrowser);
-        var csrfTokenOfTheFirstBrowser = await AskForTheCsrfTokenOfTheLoggedInUserAsync(clientThatPlaysTheFirstBrowser);
+        using var api = new ApiFactoryWithFakes();
+        await AddAccountAsync(api);
+        var firstClient = CreateBrowserClient(api);
+        var secondClient = CreateBrowserClient(api);
+        await SendLoginRequestAsync(firstClient);
+        await SendLoginRequestAsync(secondClient);
+        var csrfToken = await GetCsrfTokenAsync(firstClient);
 
-        await SendLogoutRequestWithThisCsrfTokenAsync(clientThatPlaysTheFirstBrowser, csrfTokenOfTheFirstBrowser);
+        await SendLogoutRequestAsync(firstClient, csrfToken);
 
-        Assert.Equal(HttpStatusCode.OK, (await clientThatPlaysTheSecondBrowser.GetAsync(AddressOfTheCsrfTokenEndpoint)).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await secondClient.GetAsync(CsrfTokenEndpoint)).StatusCode);
     }
 
     // --- Pannes
@@ -372,44 +372,44 @@ public class UserSessionEndpointTests
     [Fact]
     public async Task DatabaseFailureWhileReadingTheSessionIsAnsweredWithoutAnyTechnicalDetail()
     {
-        using var apiStartedLikeInProductionForThisTest = new ApiFactoryRunningLikeInProduction();
-        apiStartedLikeInProductionForThisTest.RepositoryThatKeepsSessionsInMemory.DatabaseIsDownDuringThisTest = true;
-        var clientThatSendsASessionCookie = CreateClientThatOnlySendsHandwrittenCookies(apiStartedLikeInProductionForThisTest, "__Host-walletflow-session=jeton");
+        using var productionApi = new ApiFactoryInProduction();
+        productionApi.SessionRepository.IsDown = true;
+        var client = CreateClientWithManualCookies(productionApi, "__Host-walletflow-session=jeton");
 
-        var answerDuringTheSimulatedDatabaseFailure = await clientThatSendsASessionCookie.GetAsync(AddressOfTheCsrfTokenEndpoint);
+        var response = await client.GetAsync(CsrfTokenEndpoint);
 
-        Assert.Equal(HttpStatusCode.InternalServerError, answerDuringTheSimulatedDatabaseFailure.StatusCode);
-        Assert.DoesNotContain(Fakes.FakeUserSessionRepository.TechnicalDetailOfTheSimulatedSessionFailure, await answerDuringTheSimulatedDatabaseFailure.Content.ReadAsStringAsync());
+        Assert.Equal(HttpStatusCode.InternalServerError, response.StatusCode);
+        Assert.DoesNotContain(Fakes.FakeUserSessionRepository.FailureDetail, await response.Content.ReadAsStringAsync());
     }
 
     [Fact]
     public async Task DatabaseFailureDuringLoginIsAnsweredWithoutCookieNorTechnicalDetail()
     {
-        using var apiStartedLikeInProductionForThisTest = new ApiFactoryRunningLikeInProduction();
-        AddAccountToTheFakeRepositoryOfTheApi(apiStartedLikeInProductionForThisTest);
-        apiStartedLikeInProductionForThisTest.RepositoryThatKeepsSessionsInMemory.DatabaseIsDownDuringThisTest = true;
-        var clientThatKeepsTheCookiesOfTheBrowser = CreateClientThatKeepsCookiesLikeABrowser(apiStartedLikeInProductionForThisTest);
+        using var productionApi = new ApiFactoryInProduction();
+        await AddAccountAsync(productionApi);
+        productionApi.SessionRepository.IsDown = true;
+        var browserClient = CreateBrowserClient(productionApi);
 
-        var answerDuringTheSimulatedDatabaseFailure = await SendLoginRequestToTheApiAsync(clientThatKeepsTheCookiesOfTheBrowser);
+        var response = await SendLoginRequestAsync(browserClient);
 
-        Assert.Equal(HttpStatusCode.InternalServerError, answerDuringTheSimulatedDatabaseFailure.StatusCode);
-        Assert.False(answerDuringTheSimulatedDatabaseFailure.Headers.Contains("Set-Cookie"));
-        Assert.DoesNotContain(Fakes.FakeUserSessionRepository.TechnicalDetailOfTheSimulatedSessionFailure, await answerDuringTheSimulatedDatabaseFailure.Content.ReadAsStringAsync());
+        Assert.Equal(HttpStatusCode.InternalServerError, response.StatusCode);
+        Assert.False(response.Headers.Contains("Set-Cookie"));
+        Assert.DoesNotContain(Fakes.FakeUserSessionRepository.FailureDetail, await response.Content.ReadAsStringAsync());
     }
 
     [Fact]
     public async Task JournalFailureDuringRefusedLoginIsAnsweredWithoutCookieNorTechnicalDetail()
     {
-        using var apiStartedLikeInProductionForThisTest = new ApiFactoryRunningLikeInProduction();
-        AddAccountToTheFakeRepositoryOfTheApi(apiStartedLikeInProductionForThisTest);
-        apiStartedLikeInProductionForThisTest.RepositoryThatKeepsSecurityEventsInMemory.DatabaseIsDownDuringThisTest = true;
-        var clientThatKeepsTheCookiesOfTheBrowser = CreateClientThatKeepsCookiesLikeABrowser(apiStartedLikeInProductionForThisTest);
+        using var productionApi = new ApiFactoryInProduction();
+        await AddAccountAsync(productionApi);
+        productionApi.SecurityEventRepository.IsDown = true;
+        var browserClient = CreateBrowserClient(productionApi);
 
-        var answerDuringTheSimulatedJournalFailure = await SendLoginRequestToTheApiAsync(clientThatKeepsTheCookiesOfTheBrowser, EmailAddressOfTheLoginTests, WrongPasswordTypedInTheLoginTests);
+        var response = await SendLoginRequestAsync(browserClient, Email, WrongPassword);
 
-        Assert.Equal(HttpStatusCode.InternalServerError, answerDuringTheSimulatedJournalFailure.StatusCode);
-        Assert.False(answerDuringTheSimulatedJournalFailure.Headers.Contains("Set-Cookie"));
-        Assert.DoesNotContain(Fakes.FakeSecurityEventRepository.TechnicalDetailOfTheSimulatedJournalFailure, await answerDuringTheSimulatedJournalFailure.Content.ReadAsStringAsync());
+        Assert.Equal(HttpStatusCode.InternalServerError, response.StatusCode);
+        Assert.False(response.Headers.Contains("Set-Cookie"));
+        Assert.DoesNotContain(Fakes.FakeSecurityEventRepository.FailureDetail, await response.Content.ReadAsStringAsync());
     }
 
     // --- Services réels
@@ -418,81 +418,78 @@ public class UserSessionEndpointTests
     [Fact]
     public void ApiUsesTheRealRepositoriesWhenNothingIsReplaced()
     {
-        using var apiStartedWithItsRealServices = new WebApplicationFactory<Program>().WithWebHostBuilder(builderOfTheApiWithItsRealServices =>
-        {
-            // Cette base n'est jamais contactée par ce test : les tâches de fond notent seulement leur panne dans le journal technique.
-            builderOfTheApiWithItsRealServices.UseSetting("ConnectionStrings:WalletFlowDatabase", "Host=localhost;Database=base_jamais_contactee");
-            builderOfTheApiWithItsRealServices.UseSetting("TwoFactorSecretEncryptionKey", TwoFactorTestTools.CreateNewEncryptionKeyForOneTest());
-        });
+        // La base indiquée n'est jamais contactée par ce test : les tâches de fond notent seulement leur panne dans le journal technique.
+        using var api = new WebApplicationFactory<Program>().WithWebHostBuilder(apiBuilder =>
+            TestApiSettings.Apply(apiBuilder, TwoFactorTestTools.CreateEncryptionKey()));
 
-        using var scopeOfTheRealServicesOfTheApi = apiStartedWithItsRealServices.Services.CreateScope();
+        using var scope = api.Services.CreateScope();
 
-        Assert.IsType<UserSessionRepository>(scopeOfTheRealServicesOfTheApi.ServiceProvider.GetRequiredService<IUserSessionRepository>());
-        Assert.IsType<SecurityEventRepository>(scopeOfTheRealServicesOfTheApi.ServiceProvider.GetRequiredService<ISecurityEventRepository>());
-        Assert.IsType<TwoFactorAuthenticationRepository>(scopeOfTheRealServicesOfTheApi.ServiceProvider.GetRequiredService<ITwoFactorAuthenticationRepository>());
-        Assert.IsType<OtpNetAuthenticatorCodeTool>(scopeOfTheRealServicesOfTheApi.ServiceProvider.GetRequiredService<IAuthenticatorCodeTool>());
-        Assert.IsType<AesGcmTotpSecretProtector>(scopeOfTheRealServicesOfTheApi.ServiceProvider.GetRequiredService<ITotpSecretProtector>());
-        Assert.IsType<InMemoryLoginsWaitingForTheirCodeStore>(scopeOfTheRealServicesOfTheApi.ServiceProvider.GetRequiredService<ILoginsWaitingForTheirCodeStore>());
-        Assert.IsType<InMemorySecretsWaitingForActivationStore>(scopeOfTheRealServicesOfTheApi.ServiceProvider.GetRequiredService<ISecretsWaitingForActivationStore>());
-        Assert.IsType<InMemoryUsedAuthenticatorCodesRegister>(scopeOfTheRealServicesOfTheApi.ServiceProvider.GetRequiredService<IUsedAuthenticatorCodesRegister>());
-        Assert.NotNull(scopeOfTheRealServicesOfTheApi.ServiceProvider.GetRequiredService<TwoFactorLoginService>());
-        Assert.NotNull(scopeOfTheRealServicesOfTheApi.ServiceProvider.GetRequiredService<TwoFactorActivationService>());
-        Assert.NotNull(scopeOfTheRealServicesOfTheApi.ServiceProvider.GetRequiredService<TwoFactorDeactivationService>());
-        Assert.NotNull(scopeOfTheRealServicesOfTheApi.ServiceProvider.GetRequiredService<AccountLoginService>());
-        Assert.NotNull(scopeOfTheRealServicesOfTheApi.ServiceProvider.GetRequiredService<UserSessionService>());
-        Assert.NotNull(scopeOfTheRealServicesOfTheApi.ServiceProvider.GetRequiredService<ExpiredUserSessionsCleanupService>());
-        Assert.NotNull(scopeOfTheRealServicesOfTheApi.ServiceProvider.GetRequiredService<PasswordRecoveryRequestService>());
-        Assert.NotNull(scopeOfTheRealServicesOfTheApi.ServiceProvider.GetRequiredService<PasswordResetService>());
-        Assert.NotNull(scopeOfTheRealServicesOfTheApi.ServiceProvider.GetRequiredService<AccountUnlockService>());
-        Assert.NotNull(scopeOfTheRealServicesOfTheApi.ServiceProvider.GetRequiredService<BackgroundEmailRequestProcessingService>());
-        Assert.IsType<InMemoryBackgroundEmailRequestQueue>(scopeOfTheRealServicesOfTheApi.ServiceProvider.GetRequiredService<IBackgroundEmailRequestQueue>());
-        Assert.IsType<InMemoryPasswordRecoveryRequestLimiter>(scopeOfTheRealServicesOfTheApi.ServiceProvider.GetRequiredService<IPasswordRecoveryRequestLimiter>());
+        Assert.IsType<UserSessionRepository>(scope.ServiceProvider.GetRequiredService<IUserSessionRepository>());
+        Assert.IsType<SecurityEventRepository>(scope.ServiceProvider.GetRequiredService<ISecurityEventRepository>());
+        Assert.IsType<TwoFactorAuthenticationRepository>(scope.ServiceProvider.GetRequiredService<ITwoFactorAuthenticationRepository>());
+        Assert.IsType<OtpNetAuthenticatorCodeTool>(scope.ServiceProvider.GetRequiredService<IAuthenticatorCodeTool>());
+        Assert.IsType<AesGcmTotpSecretProtector>(scope.ServiceProvider.GetRequiredService<ITotpSecretProtector>());
+        Assert.IsType<InMemoryWaitingLoginStore>(scope.ServiceProvider.GetRequiredService<IWaitingLoginStore>());
+        Assert.IsType<InMemoryWaitingSecretStore>(scope.ServiceProvider.GetRequiredService<IWaitingSecretStore>());
+        Assert.IsType<InMemoryUsedAuthenticatorCodesRegister>(scope.ServiceProvider.GetRequiredService<IUsedAuthenticatorCodesRegister>());
+        Assert.NotNull(scope.ServiceProvider.GetRequiredService<TwoFactorLoginService>());
+        Assert.NotNull(scope.ServiceProvider.GetRequiredService<TwoFactorActivationService>());
+        Assert.NotNull(scope.ServiceProvider.GetRequiredService<TwoFactorDeactivationService>());
+        Assert.NotNull(scope.ServiceProvider.GetRequiredService<AccountLoginService>());
+        Assert.NotNull(scope.ServiceProvider.GetRequiredService<UserSessionService>());
+        Assert.NotNull(scope.ServiceProvider.GetRequiredService<ExpiredUserSessionsCleanupService>());
+        Assert.NotNull(scope.ServiceProvider.GetRequiredService<PasswordRecoveryRequestService>());
+        Assert.NotNull(scope.ServiceProvider.GetRequiredService<PasswordResetService>());
+        Assert.NotNull(scope.ServiceProvider.GetRequiredService<AccountUnlockService>());
+        Assert.NotNull(scope.ServiceProvider.GetRequiredService<BackgroundEmailRequestProcessingService>());
+        Assert.IsType<InMemoryBackgroundEmailRequestQueue>(scope.ServiceProvider.GetRequiredService<IBackgroundEmailRequestQueue>());
+        Assert.IsType<InMemoryPasswordRecoveryRequestLimiter>(scope.ServiceProvider.GetRequiredService<IPasswordRecoveryRequestLimiter>());
     }
 
     // Le nom de l'en-tête est un contrat avec le site : il ne doit pas changer sans qu'on le voie.
     [Fact]
     public void CsrfTokenIsReadInTheExpectedHeader()
     {
-        Assert.Equal("X-CSRF-TOKEN", AntiforgeryConfiguration.NameOfTheHeaderCarryingTheCsrfToken);
+        Assert.Equal("X-CSRF-TOKEN", AntiforgeryConfiguration.CsrfHeaderName);
     }
 
     // --- Liste des routes publiques
 
     // Donne les routes de l'API qui portent cet attribut.
-    private static List<string> ListRoutesCarryingThisAttribute<TAttribute>(ApiFactoryWithFakeRepositoryAndEmails apiStartedInMemoryForThisTest)
+    private static List<string> ListRoutesWithAttribute<TAttribute>(ApiFactoryWithFakes api)
     {
-        var providerOfTheRoutesOfTheApi = apiStartedInMemoryForThisTest.Services.GetRequiredService<IActionDescriptorCollectionProvider>();
-        var routesOfTheApiCarryingThisAttribute = new List<string>();
+        var routeProvider = api.Services.GetRequiredService<IActionDescriptorCollectionProvider>();
+        var routes = new List<string>();
 
-        foreach (var oneRouteOfTheWalletFlowApi in providerOfTheRoutesOfTheApi.ActionDescriptors.Items)
+        foreach (var route in routeProvider.ActionDescriptors.Items)
         {
-            if (oneRouteOfTheWalletFlowApi.EndpointMetadata.OfType<TAttribute>().Any())
+            if (route.EndpointMetadata.OfType<TAttribute>().Any())
             {
-                routesOfTheApiCarryingThisAttribute.Add(oneRouteOfTheWalletFlowApi.AttributeRouteInfo!.Template!);
+                routes.Add(route.AttributeRouteInfo!.Template!);
             }
         }
 
-        routesOfTheApiCarryingThisAttribute.Sort(StringComparer.Ordinal);
-        return routesOfTheApiCarryingThisAttribute;
+        routes.Sort(StringComparer.Ordinal);
+        return routes;
     }
 
     // Ajouter une route publique doit être un choix conscient : ce test oblige à la déclarer ici.
     [Fact]
     public void OnlyTheSevenExpectedRoutesCanBeCalledWithoutSession()
     {
-        using var apiStartedInMemoryForThisTest = new ApiFactoryWithFakeRepositoryAndEmails();
-        var routesExpectedToBePublicInTheApi = new List<string> { "api/account/confirm-email", "api/account/forgot-password", "api/account/login", "api/account/login/two-factor", "api/account/register", "api/account/reset-password", "api/account/unlock" };
+        using var api = new ApiFactoryWithFakes();
+        var publicRoutes = new List<string> { "api/account/confirm-email", "api/account/forgot-password", "api/account/login", "api/account/login/two-factor", "api/account/register", "api/account/reset-password", "api/account/unlock" };
 
-        Assert.Equal(routesExpectedToBePublicInTheApi, ListRoutesCarryingThisAttribute<Microsoft.AspNetCore.Authorization.IAllowAnonymous>(apiStartedInMemoryForThisTest));
+        Assert.Equal(publicRoutes, ListRoutesWithAttribute<Microsoft.AspNetCore.Authorization.IAllowAnonymous>(api));
     }
 
     // SS §6 : seules les routes appelées sans session n'ont pas besoin du jeton anti-CSRF.
     [Fact]
     public void OnlyTheSevenExpectedRoutesIgnoreTheCsrfToken()
     {
-        using var apiStartedInMemoryForThisTest = new ApiFactoryWithFakeRepositoryAndEmails();
-        var routesExpectedToBePublicInTheApi = new List<string> { "api/account/confirm-email", "api/account/forgot-password", "api/account/login", "api/account/login/two-factor", "api/account/register", "api/account/reset-password", "api/account/unlock" };
+        using var api = new ApiFactoryWithFakes();
+        var publicRoutes = new List<string> { "api/account/confirm-email", "api/account/forgot-password", "api/account/login", "api/account/login/two-factor", "api/account/register", "api/account/reset-password", "api/account/unlock" };
 
-        Assert.Equal(routesExpectedToBePublicInTheApi, ListRoutesCarryingThisAttribute<IgnoreAntiforgeryTokenAttribute>(apiStartedInMemoryForThisTest));
+        Assert.Equal(publicRoutes, ListRoutesWithAttribute<IgnoreAntiforgeryTokenAttribute>(api));
     }
 }

@@ -4,76 +4,59 @@ using WalletFlow.Domain.UsersAndSecurity;
 namespace WalletFlow.Tests.Fakes;
 
 // Remplace la vraie base dans les tests : garde les sessions et les appareils en mémoire.
-public class FakeUserSessionRepository : IUserSessionRepository
+// Les sessions et les appareils préparés ne sont gardés qu'avec les autres changements (voir FakeDatabaseUnitOfWork).
+public class FakeUserSessionRepository : IUserSessionRepository, ITransactionalFakeRepository
 {
-    public const string TechnicalDetailOfTheSimulatedSessionFailure = "detail-technique-de-la-panne-des-sessions";
+    public const string FailureDetail = "detail-technique-de-la-panne-des-sessions";
 
-    private readonly FakeSecurityEventRepository repositoryThatKeepsTheSecurityEventsInMemory;
+    private readonly object pendingChangesLock = new object();
+    private readonly List<UserSession> preparedSessions = new List<UserSession>();
+    private readonly List<Device> preparedDevices = new List<Device>();
 
+    // Ce que la fausse base contient.
     public List<UserSession> SavedSessions { get; } = new List<UserSession>();
     public List<Device> SavedDevices { get; } = new List<Device>();
-    public List<DateTime> DatesOfTheCleanupsRequested { get; } = new List<DateTime>();
-    public int NumberOfSearchesOfSessionsInTheDatabase { get; private set; } = 0;
 
-    // Simule d'autres requêtes qui changent le compte juste avant l'enregistrement de la connexion.
-    public int NumberOfConflictsBeforeTheLoginIsSaved { get; set; } = 0;
+    // Ce que les tests vérifient : les passages du nettoyage et les recherches de session.
+    public List<DateTime> CleanupDates { get; } = new List<DateTime>();
+    public int SessionSearchCount { get; private set; } = 0;
 
     // Simule une panne de la base : enregistrer une connexion ou chercher une session échoue.
-    public bool DatabaseIsDownDuringThisTest { get; set; } = false;
+    public bool IsDown { get; set; } = false;
 
     // Simule une panne de la base au moment de fermer toutes les sessions d'un compte.
-    public bool DatabaseIsDownWhileClosingEverySession { get; set; } = false;
+    public bool FailsWhenClosingAllSessions { get; set; } = false;
 
     // Simule une panne de la base pendant l'effacement des sessions expirées.
-    public bool DatabaseIsDownDuringTheCleanup { get; set; } = false;
+    public bool FailsDuringCleanup { get; set; } = false;
 
-    // Reçoit le faux journal, où la connexion réussie écrit aussi son événement.
-    public FakeUserSessionRepository(FakeSecurityEventRepository repositoryThatKeepsTheSecurityEventsInMemory)
+    // Simule d'autres requêtes qui changent le compte juste avant l'enregistrement de la connexion : un conflit chacune.
+    public int LoginConflicts { get; set; } = 0;
+
+    // Garde la session de côté : elle ne sera gardée qu'avec les autres changements.
+    public void PrepareSession(UserSession session)
     {
-        this.repositoryThatKeepsTheSecurityEventsInMemory = repositoryThatKeepsTheSecurityEventsInMemory;
+        lock (pendingChangesLock)
+        {
+            preparedSessions.Add(session);
+        }
     }
 
-    // Garde tout en mémoire, sauf si un conflit est simulé : rien n'est alors gardé, comme avec la vraie transaction.
-    public Task<bool> TryToSaveSuccessfulLoginOfThisAccountAsync(
-        User accountThatHasJustLoggedIn,
-        UserSession newSessionOfTheUserAccount,
-        Device? newDeviceOfTheUserAccount,
-        BackupCode? backupCodeUsedForThisLogin,
-        SecurityEvent securityEventOfTheSuccessfulLogin)
+    // Garde l'appareil de côté : il ne sera gardé qu'avec les autres changements.
+    public void PrepareDevice(Device device)
     {
-        if (DatabaseIsDownDuringThisTest)
+        lock (pendingChangesLock)
         {
-            throw new InvalidOperationException(TechnicalDetailOfTheSimulatedSessionFailure);
+            preparedDevices.Add(device);
         }
-
-        if (NumberOfConflictsBeforeTheLoginIsSaved > 0)
-        {
-            NumberOfConflictsBeforeTheLoginIsSaved = NumberOfConflictsBeforeTheLoginIsSaved - 1;
-            return Task.FromResult(false);
-        }
-
-        SavedSessions.Add(newSessionOfTheUserAccount);
-        repositoryThatKeepsTheSecurityEventsInMemory.SavedSecurityEvents.Add(securityEventOfTheSuccessfulLogin);
-
-        if (newDeviceOfTheUserAccount != null)
-        {
-            SavedDevices.Add(newDeviceOfTheUserAccount);
-        }
-
-        if (backupCodeUsedForThisLogin != null)
-        {
-            backupCodeUsedForThisLogin.UsedAt = newSessionOfTheUserAccount.LastActivityAt;
-        }
-
-        return Task.FromResult(true);
     }
 
     // Cherche en mémoire cette empreinte de jeton d'appareil, pour ce compte.
-    public Task<bool> CheckThatDeviceTokenBelongsToThisAccountAsync(string hashOfTheDeviceTokenFromCookie, Guid identifierOfTheAccountLoggingIn)
+    public Task<bool> DeviceBelongsToAccountAsync(string deviceTokenHash, Guid accountId)
     {
-        foreach (var deviceAlreadyKeptInThisMemoryList in SavedDevices)
+        foreach (var device in SavedDevices)
         {
-            if (deviceAlreadyKeptInThisMemoryList.DeviceToken == hashOfTheDeviceTokenFromCookie && deviceAlreadyKeptInThisMemoryList.UserId == identifierOfTheAccountLoggingIn)
+            if (device.DeviceToken == deviceTokenHash && device.UserId == accountId)
             {
                 return Task.FromResult(true);
             }
@@ -83,34 +66,34 @@ public class FakeUserSessionRepository : IUserSessionRepository
     }
 
     // Cherche en mémoire une session par son empreinte.
-    public Task<UserSession?> FindUserSessionByItsHashAsync(string hashOfTheTokenOfTheSession)
+    public Task<UserSession?> FindAsync(string sessionTokenHash)
     {
-        if (DatabaseIsDownDuringThisTest)
+        if (IsDown)
         {
-            throw new InvalidOperationException(TechnicalDetailOfTheSimulatedSessionFailure);
+            throw new InvalidOperationException(FailureDetail);
         }
 
-        NumberOfSearchesOfSessionsInTheDatabase = NumberOfSearchesOfSessionsInTheDatabase + 1;
+        SessionSearchCount = SessionSearchCount + 1;
 
-        foreach (var sessionAlreadyKeptInThisMemoryList in SavedSessions)
+        foreach (var session in SavedSessions)
         {
-            if (sessionAlreadyKeptInThisMemoryList.Id == hashOfTheTokenOfTheSession)
+            if (session.Id == sessionTokenHash)
             {
-                return Task.FromResult<UserSession?>(sessionAlreadyKeptInThisMemoryList);
+                return Task.FromResult<UserSession?>(session);
             }
         }
 
         return Task.FromResult<UserSession?>(null);
     }
 
-    // Change la date de dernière activité de la session gardée en mémoire.
-    public Task RecordActivityOfThisUserSessionAsync(string hashOfTheTokenOfTheSession, DateTime dateOfTheCurrentHttpRequest)
+    // Avance la date de dernière activité de la session gardée en mémoire.
+    public Task RecordActivityAsync(string sessionTokenHash, DateTime now)
     {
-        foreach (var sessionAlreadyKeptInThisMemoryList in SavedSessions)
+        foreach (var session in SavedSessions)
         {
-            if (sessionAlreadyKeptInThisMemoryList.Id == hashOfTheTokenOfTheSession)
+            if (session.Id == sessionTokenHash)
             {
-                sessionAlreadyKeptInThisMemoryList.LastActivityAt = dateOfTheCurrentHttpRequest;
+                session.RecordActivity(now);
             }
         }
 
@@ -118,35 +101,87 @@ public class FakeUserSessionRepository : IUserSessionRepository
     }
 
     // Retire la session de la liste.
-    public Task DeleteUserSessionByItsHashAsync(string hashOfTheTokenOfTheSession)
+    public Task DeleteAsync(string sessionTokenHash)
     {
-        SavedSessions.RemoveAll(sessionAlreadyKeptInThisMemoryList => sessionAlreadyKeptInThisMemoryList.Id == hashOfTheTokenOfTheSession);
-
+        SavedSessions.RemoveAll(session => session.Id == sessionTokenHash);
         return Task.CompletedTask;
     }
 
     // Retire de la liste toutes les sessions du compte.
-    public Task DeleteAllUserSessionsOfThisAccountAsync(Guid identifierOfTheAccountToDisconnectEverywhere)
+    public Task DeleteAllForUserAsync(Guid userId)
     {
-        if (DatabaseIsDownWhileClosingEverySession)
+        if (FailsWhenClosingAllSessions)
         {
-            throw new InvalidOperationException(TechnicalDetailOfTheSimulatedSessionFailure);
+            throw new InvalidOperationException(FailureDetail);
         }
 
-        SavedSessions.RemoveAll(sessionAlreadyKeptInThisMemoryList => sessionAlreadyKeptInThisMemoryList.UserId == identifierOfTheAccountToDisconnectEverywhere);
-
+        SavedSessions.RemoveAll(session => session.UserId == userId);
         return Task.CompletedTask;
     }
 
     // Garde la date du passage. La vraie règle d'effacement est testée sur la vraie base.
-    public Task<int> DeleteUserSessionsInactiveSinceThisDateAsync(DateTime oldestDateOfActivityStillAccepted)
+    public Task<int> DeleteInactiveSinceAsync(DateTime activityCutoff)
     {
-        if (DatabaseIsDownDuringTheCleanup)
+        if (FailsDuringCleanup)
         {
-            throw new InvalidOperationException(TechnicalDetailOfTheSimulatedSessionFailure);
+            throw new InvalidOperationException(FailureDetail);
         }
 
-        DatesOfTheCleanupsRequested.Add(oldestDateOfActivityStillAccepted);
+        CleanupDates.Add(activityCutoff);
         return Task.FromResult(0);
+    }
+
+    // La panne simulée touche l'enregistrement d'une connexion.
+    public void ThrowIfTableIsDown()
+    {
+        lock (pendingChangesLock)
+        {
+            if (IsDown && preparedSessions.Count > 0)
+            {
+                throw new InvalidOperationException(FailureDetail);
+            }
+        }
+    }
+
+    // Une autre requête change le compte juste avant l'enregistrement de la connexion, tant que le réglage le demande.
+    public bool HasConcurrentChange()
+    {
+        lock (pendingChangesLock)
+        {
+            if (preparedSessions.Count > 0 && LoginConflicts > 0)
+            {
+                LoginConflicts = LoginConflicts - 1;
+                return true;
+            }
+
+            return false;
+        }
+    }
+
+    // Oublie les sessions et les appareils préparés.
+    public void Rollback()
+    {
+        lock (pendingChangesLock)
+        {
+            preparedSessions.Clear();
+            preparedDevices.Clear();
+        }
+    }
+
+    // L'autre requête simulée a changé le compte, pas les sessions : il n'y a rien à écrire ici.
+    public void ApplyConcurrentChanges()
+    {
+    }
+
+    // Garde les sessions et les appareils préparés.
+    public void Commit()
+    {
+        lock (pendingChangesLock)
+        {
+            SavedSessions.AddRange(preparedSessions);
+            SavedDevices.AddRange(preparedDevices);
+            preparedSessions.Clear();
+            preparedDevices.Clear();
+        }
     }
 }

@@ -10,23 +10,23 @@ namespace WalletFlow.Infrastructure.Persistence.TableConfigurations.AccountsAndC
 public class BankConnectionTableConfiguration : IEntityTypeConfiguration<BankConnection>
 {
     // Appelée par EF Core au démarrage (nom imposé par le framework).
-    public void Configure(EntityTypeBuilder<BankConnection> builderOfTheBankConnectionTableMapping)
+    public void Configure(EntityTypeBuilder<BankConnection> builder)
     {
-        builderOfTheBankConnectionTableMapping.ToTable("connexion_bancaire");
+        builder.ToTable("connexion_bancaire");
 
         // L'identifiant est créé par l'entité elle-même, jamais par EF Core.
-        builderOfTheBankConnectionTableMapping.HasKey(nameof(BankConnection.Id));
-        builderOfTheBankConnectionTableMapping.Property(nameof(BankConnection.Id)).HasColumnName("id_connexion").ValueGeneratedNever();
+        builder.HasKey(nameof(BankConnection.Id));
+        builder.Property(nameof(BankConnection.Id)).HasColumnName("id_connexion").ValueGeneratedNever();
 
-        builderOfTheBankConnectionTableMapping.Property(nameof(BankConnection.ExternalConnectionId)).HasColumnName("id_connexion_externe");
-        builderOfTheBankConnectionTableMapping.Property(nameof(BankConnection.BankName)).HasColumnName("nom_banque");
-        builderOfTheBankConnectionTableMapping.Property(nameof(BankConnection.Status)).HasColumnName("statut_connexion")
-            .HasConversion(BankConnectionStatusDatabaseCodes.ConverterBetweenBankConnectionStatusAndDatabaseCode);
-        builderOfTheBankConnectionTableMapping.Property(nameof(BankConnection.AuthorizationExpiresAt)).HasColumnName("date_expiration_autorisation");
-        builderOfTheBankConnectionTableMapping.Property(nameof(BankConnection.UserId)).HasColumnName("id_utilisateur");
+        builder.Property(nameof(BankConnection.ExternalConnectionId)).HasColumnName("id_connexion_externe");
+        builder.Property(nameof(BankConnection.BankName)).HasColumnName("nom_banque");
+        builder.Property(nameof(BankConnection.Status)).HasColumnName("statut_connexion")
+            .HasConversion(BankConnectionStatusDatabaseCodes.Table.Converter);
+        builder.Property(nameof(BankConnection.AuthorizationExpiresAt)).HasColumnName("date_expiration_autorisation");
+        builder.Property(nameof(BankConnection.UserId)).HasColumnName("id_utilisateur");
 
         // Une connexion bancaire appartient à un utilisateur et disparaît avec lui (ON DELETE CASCADE).
-        builderOfTheBankConnectionTableMapping.HasOne<User>().WithMany()
+        builder.HasOne<User>().WithMany()
             .HasForeignKey(nameof(BankConnection.UserId))
             .OnDelete(DeleteBehavior.Cascade);
     }

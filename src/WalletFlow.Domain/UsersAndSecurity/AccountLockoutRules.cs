@@ -1,84 +1,30 @@
 namespace WalletFlow.Domain.UsersAndSecurity;
 
-// Règles du blocage d'un compte après des échecs de connexion (GR Auth, SS §2, DD §3).
+// Nombres et durées du blocage d'un compte après des échecs de connexion (GR Auth, SS §2, DD §3).
+// Les règles elles-mêmes sont dans le compte : voir User.
 public static class AccountLockoutRules
 {
-    public const short MaximumNumberOfFailedLoginAttempts = 5;
-    public const short MaximumNumberOfLockoutsCountedOnOneAccount = 8;
+    public const short MaximumFailedAttempts = 5;
+    public const short MaximumLockoutCount = 8;
 
-    // Un conflit veut dire qu'une autre requête a réussi à écrire. Le compte se bloque au bout de 5 essais :
-    // 10 passages suffisent donc largement. Au-delà, la demande est refusée, jamais acceptée sans contrôle.
-    public const int MaximumNumberOfTriesWhileOtherRequestsChangeTheAccount = 10;
-
-    public static readonly TimeSpan DurationOfTheFirstLockoutOfAnAccount = TimeSpan.FromMinutes(15);
-    public static readonly TimeSpan MaximumDurationOfOneLockoutOfAnAccount = TimeSpan.FromHours(24);
-
-    // Renvoie vrai si le compte est bloqué à cette date. Le blocage finit à sa date de fin exacte.
-    public static bool CheckThatAccountIsLockedAtThisDate(User accountToCheckForALockout, DateTime dateOfTheCurrentLoginAttempt)
-    {
-        return accountToCheckForALockout.LockoutEndsAt != null && accountToCheckForALockout.LockoutEndsAt > dateOfTheCurrentLoginAttempt;
-    }
-
-    // Compte un essai de plus, avant même de vérifier le mot de passe : des requêtes simultanées
-    // ne peuvent donc pas tester plus de 5 mots de passe. Le dernier essai bloque aussitôt le compte :
-    // si le serveur s'arrête ensuite, le blocage a quand même une date de fin.
-    // Renvoie vrai si c'est cet essai qui bloque le compte.
-    public static bool CountOneLoginAttemptAndLockAccountOnTheLastOne(User accountThatReceivesTheLoginAttempt, DateTime dateOfTheCurrentLoginAttempt)
-    {
-        // Le blocage précédent est terminé : le compte retrouve ses 5 essais.
-        if (accountThatReceivesTheLoginAttempt.FailedLoginAttemptCount >= MaximumNumberOfFailedLoginAttempts)
-        {
-            accountThatReceivesTheLoginAttempt.FailedLoginAttemptCount = 0;
-            accountThatReceivesTheLoginAttempt.LockoutEndsAt = null;
-        }
-
-        accountThatReceivesTheLoginAttempt.FailedLoginAttemptCount = (short)(accountThatReceivesTheLoginAttempt.FailedLoginAttemptCount + 1);
-
-        if (accountThatReceivesTheLoginAttempt.FailedLoginAttemptCount < MaximumNumberOfFailedLoginAttempts)
-        {
-            return false;
-        }
-
-        if (accountThatReceivesTheLoginAttempt.LockoutCount < MaximumNumberOfLockoutsCountedOnOneAccount)
-        {
-            accountThatReceivesTheLoginAttempt.LockoutCount = (short)(accountThatReceivesTheLoginAttempt.LockoutCount + 1);
-        }
-
-        accountThatReceivesTheLoginAttempt.LockoutEndsAt = dateOfTheCurrentLoginAttempt + CalculateDurationOfTheLockoutWithThisNumber(accountThatReceivesTheLoginAttempt.LockoutCount);
-        return true;
-    }
+    public static readonly TimeSpan FirstLockoutDuration = TimeSpan.FromMinutes(15);
+    public static readonly TimeSpan MaximumLockoutDuration = TimeSpan.FromHours(24);
 
     // Donne la durée d'un blocage : 15 minutes × 2^(nb_blocages − 1), 24 heures au plus (DD).
-    public static TimeSpan CalculateDurationOfTheLockoutWithThisNumber(short numberOfLockoutsCountedOnTheAccount)
+    public static TimeSpan CalculateLockoutDuration(short lockoutCount)
     {
-        var durationOfTheLockoutBeingCalculated = DurationOfTheFirstLockoutOfAnAccount;
+        var duration = FirstLockoutDuration;
 
-        for (var numberOfTheLockoutBeingDoubled = 2; numberOfTheLockoutBeingDoubled <= numberOfLockoutsCountedOnTheAccount; numberOfTheLockoutBeingDoubled++)
+        for (var lockoutNumber = 2; lockoutNumber <= lockoutCount; lockoutNumber++)
         {
-            durationOfTheLockoutBeingCalculated = durationOfTheLockoutBeingCalculated * 2;
+            duration = duration * 2;
         }
 
-        if (durationOfTheLockoutBeingCalculated > MaximumDurationOfOneLockoutOfAnAccount)
+        if (duration > MaximumLockoutDuration)
         {
-            return MaximumDurationOfOneLockoutOfAnAccount;
+            return MaximumLockoutDuration;
         }
 
-        return durationOfTheLockoutBeingCalculated;
-    }
-
-    // Termine le blocage en cours et redonne ses 5 essais au compte : lien de déblocage ou récupération réussie (GR Auth).
-    // Le nombre de blocages ne change pas : il ne repart à zéro qu'après une connexion réussie.
-    public static void RemoveCurrentLockoutOfThisAccount(User accountThatIsGettingUnlockedNow)
-    {
-        accountThatIsGettingUnlockedNow.FailedLoginAttemptCount = 0;
-        accountThatIsGettingUnlockedNow.LockoutEndsAt = null;
-    }
-
-    // Remet tout à zéro après une connexion réussie (GR Auth).
-    public static void ResetLoginCountersAfterSuccessfulLogin(User accountThatHasJustLoggedIn)
-    {
-        accountThatHasJustLoggedIn.FailedLoginAttemptCount = 0;
-        accountThatHasJustLoggedIn.LockoutCount = 0;
-        accountThatHasJustLoggedIn.LockoutEndsAt = null;
+        return duration;
     }
 }

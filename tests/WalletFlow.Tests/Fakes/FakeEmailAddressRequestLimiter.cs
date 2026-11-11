@@ -5,16 +5,16 @@ namespace WalletFlow.Tests.Fakes;
 // Remplace la limite par adresse e-mail dans les tests : garde les adresses comptées en mémoire.
 public class FakeEmailAddressRequestLimiter : IEmailAddressRequestLimiter
 {
-    public List<string> EmailAddressesCounted { get; } = new List<string>();
+    public List<string> CountedAddresses { get; } = new List<string>();
 
     // Simule une limite déjà atteinte.
-    public bool EveryRequestIsRefusedDuringThisTest { get; set; } = false;
+    public bool RefusesEveryRequest { get; set; } = false;
 
     // Garde l'adresse en mémoire, puis accepte ou refuse selon le test.
-    public bool TryToCountNewRequestForThisEmailAddress(string emailAddressInItsStoredForm)
+    public bool TryCountRequest(string email)
     {
-        EmailAddressesCounted.Add(emailAddressInItsStoredForm);
+        CountedAddresses.Add(email);
 
-        return !EveryRequestIsRefusedDuringThisTest;
+        return !RefusesEveryRequest;
     }
 }

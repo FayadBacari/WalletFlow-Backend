@@ -2,17 +2,35 @@ using System.Net;
 
 namespace WalletFlow.Application.AccountRecovery;
 
-// Une demande d'e-mail à traiter en arrière-plan.
-// Une classe plutôt qu'un record : un record afficherait l'adresse e-mail si on l'écrivait dans un journal.
-public class BackgroundEmailRequest
+// Une demande d'e-mail à traiter en arrière-plan : toujours une seule des formes écrites dans ce fichier.
+// Chaque forme porte seulement ce dont elle a besoin : aucun champ n'est facultatif selon le type.
+// Des classes plutôt que des records : un record afficherait l'adresse e-mail si on l'écrivait dans un journal.
+public abstract class BackgroundEmailRequest
 {
-    public required BackgroundEmailRequestType TypeOfTheRequestedBackgroundEmail { get; init; }
+    // Constructeur privé : aucune autre forme ne peut être créée en dehors de ce fichier.
+    private BackgroundEmailRequest()
+    {
+    }
 
-    // Adresse donnée par le visiteur, pour une récupération de mot de passe.
-    public string? EmailAddressOfTheRecoveryRequest { get; init; }
+    // Le type de la demande, pour le journal technique.
+    public abstract BackgroundEmailRequestType Type { get; }
 
-    // Compte qu'un essai de connexion vient de bloquer, pour un déblocage.
-    public Guid? IdentifierOfTheAccountJustLocked { get; init; }
+    public IPAddress? IpAddress { get; init; }
 
-    public IPAddress? IpAddressOfTheRequestingVisitor { get; init; }
+    // Un visiteur demande à retrouver son mot de passe.
+    public sealed class PasswordRecovery : BackgroundEmailRequest
+    {
+        public override BackgroundEmailRequestType Type => BackgroundEmailRequestType.PasswordRecovery;
+
+        // Adresse donnée par le visiteur.
+        public required string EmailAddress { get; init; }
+    }
+
+    // Un essai de connexion vient de bloquer un compte : son propriétaire reçoit un lien de déblocage.
+    public sealed class AccountUnlock : BackgroundEmailRequest
+    {
+        public override BackgroundEmailRequestType Type => BackgroundEmailRequestType.AccountUnlock;
+
+        public required Guid AccountId { get; init; }
+    }
 }

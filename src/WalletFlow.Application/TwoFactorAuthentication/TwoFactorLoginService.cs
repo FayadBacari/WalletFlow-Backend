@@ -8,153 +8,128 @@ namespace WalletFlow.Application.TwoFactorAuthentication;
 // Cas d'utilisation : un visiteur qui a donné le bon mot de passe finit sa connexion avec un code (GR Auth, SS §2 et §6).
 public class TwoFactorLoginService
 {
-    public const string ErrorMessageForLoginThatMustRestart = "Cette connexion n'est plus valable. Reconnecte-toi.";
-
-    private readonly IUserAccountRepository repositoryOfTheUserAccountsInDatabase;
-    private readonly ISecurityEventRepository repositoryOfTheSecurityEventsInDatabase;
-    private readonly ISecureTokenGenerator generatorOfTheSecureRandomTokens;
-    private readonly ILoginsWaitingForTheirCodeStore storeOfTheLoginsWaitingForTheirCode;
-    private readonly TwoFactorCodeCheckingService serviceThatChecksTheTwoFactorCodes;
-    private readonly UserSessionOpeningService serviceThatOpensTheUserSessions;
-    private readonly TimeProvider clockThatGivesTheCurrentDateAndTime;
+    private readonly IUserAccountRepository accountRepository;
+    private readonly SecurityJournalService securityJournal;
+    private readonly ISecureTokenGenerator tokenGenerator;
+    private readonly IWaitingLoginStore waitingLoginStore;
+    private readonly TwoFactorCodeCheckingService codeCheckingService;
+    private readonly UserSessionOpeningService sessionOpeningService;
 
     // Reçoit les outils dont la fin de la connexion a besoin.
     public TwoFactorLoginService(
-        IUserAccountRepository repositoryOfTheUserAccountsInDatabase,
-        ISecurityEventRepository repositoryOfTheSecurityEventsInDatabase,
-        ISecureTokenGenerator generatorOfTheSecureRandomTokens,
-        ILoginsWaitingForTheirCodeStore storeOfTheLoginsWaitingForTheirCode,
-        TwoFactorCodeCheckingService serviceThatChecksTheTwoFactorCodes,
-        UserSessionOpeningService serviceThatOpensTheUserSessions,
-        TimeProvider clockThatGivesTheCurrentDateAndTime)
+        IUserAccountRepository accountRepository,
+        SecurityJournalService securityJournal,
+        ISecureTokenGenerator tokenGenerator,
+        IWaitingLoginStore waitingLoginStore,
+        TwoFactorCodeCheckingService codeCheckingService,
+        UserSessionOpeningService sessionOpeningService)
     {
-        this.repositoryOfTheUserAccountsInDatabase = repositoryOfTheUserAccountsInDatabase;
-        this.repositoryOfTheSecurityEventsInDatabase = repositoryOfTheSecurityEventsInDatabase;
-        this.generatorOfTheSecureRandomTokens = generatorOfTheSecureRandomTokens;
-        this.storeOfTheLoginsWaitingForTheirCode = storeOfTheLoginsWaitingForTheirCode;
-        this.serviceThatChecksTheTwoFactorCodes = serviceThatChecksTheTwoFactorCodes;
-        this.serviceThatOpensTheUserSessions = serviceThatOpensTheUserSessions;
-        this.clockThatGivesTheCurrentDateAndTime = clockThatGivesTheCurrentDateAndTime;
+        this.accountRepository = accountRepository;
+        this.securityJournal = securityJournal;
+        this.tokenGenerator = tokenGenerator;
+        this.waitingLoginStore = waitingLoginStore;
+        this.codeCheckingService = codeCheckingService;
+        this.sessionOpeningService = sessionOpeningService;
     }
 
     // Vérifie le code de la connexion en attente, puis ouvre la session. Seul ce moment rend la connexion réussie (GR Auth).
-    public async Task<TwoFactorLoginResult> FinishLoginOfTheVisitorWithThisCodeAsync(TwoFactorCodeAttemptFromVisitor codeAttemptReceivedFromTheVisitor)
+    public async Task<TwoFactorLoginResult> FinishAsync(TwoFactorCodeAttempt attempt)
     {
-        if (codeAttemptReceivedFromTheVisitor.WaitingLoginTokenReadInTheCookie == null)
+        if (attempt.WaitingLoginToken == null)
         {
-            return CreateResultForTheLoginThatMustRestart();
+            return new TwoFactorLoginResult.LoginMustRestart();
         }
 
-        var hashOfTheTokenOfTheWaitingLogin = generatorOfTheSecureRandomTokens.ConvertSecureTokenIntoItsHash(codeAttemptReceivedFromTheVisitor.WaitingLoginTokenReadInTheCookie);
-        var loginOfTheVisitorWaitingForItsCode = storeOfTheLoginsWaitingForTheirCode.TryToCountOneCodeAttemptOfThisWaitingLogin(hashOfTheTokenOfTheWaitingLogin);
+        var tokenHash = tokenGenerator.HashToken(attempt.WaitingLoginToken);
+        var waitingLogin = waitingLoginStore.TryCountCodeAttempt(tokenHash);
 
-        if (loginOfTheVisitorWaitingForItsCode == null)
+        if (waitingLogin == null)
         {
-            return CreateResultForTheLoginThatMustRestart();
+            return new TwoFactorLoginResult.LoginMustRestart();
         }
 
-        var accountOwningTheLoginWaitingForItsCode = await repositoryOfTheUserAccountsInDatabase.FindUserAccountByIdentifierAsync(loginOfTheVisitorWaitingForItsCode.IdentifierOfTheAccountLoggingIn);
+        var account = await accountRepository.FindByIdAsync(waitingLogin.AccountId);
 
-        if (!CheckThatWaitingLoginIsStillValidForThisAccount(loginOfTheVisitorWaitingForItsCode, accountOwningTheLoginWaitingForItsCode))
+        if (account == null || !IsStillValid(waitingLogin, account))
         {
-            return await AbandonWaitingLoginOfTheVisitorAsync(hashOfTheTokenOfTheWaitingLogin, accountOwningTheLoginWaitingForItsCode?.Id, codeAttemptReceivedFromTheVisitor);
+            return await AbandonAsync(tokenHash, account?.Id, attempt);
         }
 
         // Lu avant la vérification, pas après : l'enregistrement contrôlera que ce secret, celui qui a servi au contrôle, est toujours le bon.
-        var encryptedTotpSecretOfTheCodeJustChecked = accountOwningTheLoginWaitingForItsCode!.EncryptedTotpSecret;
-        var resultOfTheCheckOfTheCode = await serviceThatChecksTheTwoFactorCodes.CheckThatCodeIsValidForThisActivatedAccountAsync(accountOwningTheLoginWaitingForItsCode, codeAttemptReceivedFromTheVisitor.CodeTypedByTheVisitor);
+        var encryptedTotpSecret = account.EncryptedTotpSecret;
+        var codeCheck = await codeCheckingService.CheckAsync(account, attempt.Code);
 
-        if (!resultOfTheCheckOfTheCode.IsCodeValid)
+        if (!codeCheck.IsCodeValid)
         {
-            return await RefuseWrongCodeOfTheVisitorAsync(hashOfTheTokenOfTheWaitingLogin, loginOfTheVisitorWaitingForItsCode, codeAttemptReceivedFromTheVisitor);
+            return await RefuseWrongCodeAsync(tokenHash, waitingLogin, attempt);
         }
 
-        return await OpenSessionOfTheWaitingLoginAsync(hashOfTheTokenOfTheWaitingLogin, loginOfTheVisitorWaitingForItsCode, encryptedTotpSecretOfTheCodeJustChecked, resultOfTheCheckOfTheCode, codeAttemptReceivedFromTheVisitor);
+        return await OpenSessionAsync(tokenHash, waitingLogin, encryptedTotpSecret, codeCheck, attempt);
     }
 
-    // Une récupération du mot de passe, une désactivation ou un effacement a pu passer pendant l'attente.
-    private static bool CheckThatWaitingLoginIsStillValidForThisAccount(LoginWaitingForItsCode loginOfTheVisitorWaitingForItsCode, User? accountOwningTheLoginWaitingForItsCode)
+    // Une récupération du mot de passe ou une désactivation a pu passer pendant l'attente.
+    private static bool IsStillValid(WaitingLogin waitingLogin, User account)
     {
-        return accountOwningTheLoginWaitingForItsCode != null
-            && accountOwningTheLoginWaitingForItsCode.IsTwoFactorEnabled
-            && accountOwningTheLoginWaitingForItsCode.PasswordHash == loginOfTheVisitorWaitingForItsCode.SecureHashOfThePasswordJustChecked;
+        return account.IsTwoFactorEnabled
+            && account.PasswordHash == waitingLogin.PasswordHash;
     }
 
     // Note l'échec dans le journal. Au 5e mauvais code, la connexion doit recommencer, ce qui compte un essai de plus sur le compte (SS §6).
-    private async Task<TwoFactorLoginResult> RefuseWrongCodeOfTheVisitorAsync(
-        string hashOfTheTokenOfTheWaitingLogin,
-        LoginWaitingForItsCode loginOfTheVisitorWaitingForItsCode,
-        TwoFactorCodeAttemptFromVisitor codeAttemptReceivedFromTheVisitor)
+    private async Task<TwoFactorLoginResult> RefuseWrongCodeAsync(
+        string tokenHash,
+        WaitingLogin waitingLogin,
+        TwoFactorCodeAttempt attempt)
     {
-        if (loginOfTheVisitorWaitingForItsCode.NumberOfCodesTriedSoFar >= TwoFactorAuthenticationRules.MaximumNumberOfCodesTriedDuringOneLogin)
+        if (waitingLogin.TriedCodeCount >= TwoFactorAuthenticationRules.MaximumCodesPerLogin)
         {
-            return await AbandonWaitingLoginOfTheVisitorAsync(hashOfTheTokenOfTheWaitingLogin, loginOfTheVisitorWaitingForItsCode.IdentifierOfTheAccountLoggingIn, codeAttemptReceivedFromTheVisitor);
+            return await AbandonAsync(tokenHash, waitingLogin.AccountId, attempt);
         }
 
-        await SaveFailedLoginInTheSecurityJournalAsync(loginOfTheVisitorWaitingForItsCode.IdentifierOfTheAccountLoggingIn, codeAttemptReceivedFromTheVisitor);
+        await securityJournal.SaveEventNowAsync(SecurityEventType.Login, SecurityEventResult.Failure, waitingLogin.AccountId, attempt.IpAddress);
 
-        return new TwoFactorLoginResult { WrongCodeErrorMessage = TwoFactorCodeCheckingService.ErrorMessageForWrongTwoFactorCode };
+        return new TwoFactorLoginResult.WrongCode();
     }
 
     // Ouvre la session, marque le code de secours comme utilisé s'il y en a un, puis oublie la connexion en attente.
-    private async Task<TwoFactorLoginResult> OpenSessionOfTheWaitingLoginAsync(
-        string hashOfTheTokenOfTheWaitingLogin,
-        LoginWaitingForItsCode loginOfTheVisitorWaitingForItsCode,
-        string? encryptedTotpSecretOfTheCodeJustChecked,
-        TwoFactorCodeCheckResult resultOfTheCheckOfTheCode,
-        TwoFactorCodeAttemptFromVisitor codeAttemptReceivedFromTheVisitor)
+    private async Task<TwoFactorLoginResult> OpenSessionAsync(
+        string tokenHash,
+        WaitingLogin waitingLogin,
+        string? encryptedTotpSecret,
+        TwoFactorCodeCheckResult codeCheck,
+        TwoFactorCodeAttempt attempt)
     {
-        var sessionJustOpenedForTheAccount = await serviceThatOpensTheUserSessions.TryToOpenSessionForThisSuccessfulLoginAsync(new SuccessfulLoginToSave
+        var session = await sessionOpeningService.TryOpenSessionAsync(new SuccessfulLogin
         {
-            IdentifierOfTheAccountLoggingIn = loginOfTheVisitorWaitingForItsCode.IdentifierOfTheAccountLoggingIn,
-            SecureHashOfThePasswordJustChecked = loginOfTheVisitorWaitingForItsCode.SecureHashOfThePasswordJustChecked,
-            EncryptedTotpSecretJustChecked = encryptedTotpSecretOfTheCodeJustChecked,
-            IdentifierOfTheBackupCodeJustUsed = resultOfTheCheckOfTheCode.IdentifierOfTheBackupCodeUsed,
-            IpAddressOfTheVisitor = codeAttemptReceivedFromTheVisitor.IpAddressOfTheVisitor,
-            DeviceTokenReadInTheCookie = codeAttemptReceivedFromTheVisitor.DeviceTokenReadInTheCookie,
-            SessionTokenReadInTheCookie = codeAttemptReceivedFromTheVisitor.SessionTokenReadInTheCookie
+            AccountId = waitingLogin.AccountId,
+            PasswordHash = waitingLogin.PasswordHash,
+            EncryptedTotpSecret = encryptedTotpSecret,
+            BackupCodeId = codeCheck.BackupCodeId,
+            IpAddress = attempt.IpAddress,
+            DeviceToken = attempt.DeviceToken,
+            SessionToken = attempt.SessionToken
         });
 
-        if (sessionJustOpenedForTheAccount == null)
+        if (session == null)
         {
-            return await AbandonWaitingLoginOfTheVisitorAsync(hashOfTheTokenOfTheWaitingLogin, loginOfTheVisitorWaitingForItsCode.IdentifierOfTheAccountLoggingIn, codeAttemptReceivedFromTheVisitor);
+            return await AbandonAsync(tokenHash, waitingLogin.AccountId, attempt);
         }
 
-        storeOfTheLoginsWaitingForTheirCode.RemoveThisLoginWaitingForItsCode(hashOfTheTokenOfTheWaitingLogin);
+        waitingLoginStore.Remove(tokenHash);
 
-        return new TwoFactorLoginResult
+        return new TwoFactorLoginResult.LoggedIn
         {
-            SessionTokenToPutInTheCookie = sessionJustOpenedForTheAccount.SessionTokenToPutInTheCookie,
-            DeviceTokenToPutInTheCookie = sessionJustOpenedForTheAccount.DeviceTokenToPutInTheCookie
+            SessionToken = session.SessionToken,
+            DeviceToken = session.DeviceToken
         };
     }
 
     // Oublie la connexion en attente, note l'échec dans le journal, et demande de recommencer.
-    private async Task<TwoFactorLoginResult> AbandonWaitingLoginOfTheVisitorAsync(string hashOfTheTokenOfTheWaitingLogin, Guid? identifierOfTheAccountIfItExists, TwoFactorCodeAttemptFromVisitor codeAttemptReceivedFromTheVisitor)
+    private async Task<TwoFactorLoginResult> AbandonAsync(string tokenHash, Guid? accountId, TwoFactorCodeAttempt attempt)
     {
-        storeOfTheLoginsWaitingForTheirCode.RemoveThisLoginWaitingForItsCode(hashOfTheTokenOfTheWaitingLogin);
+        waitingLoginStore.Remove(tokenHash);
 
-        await SaveFailedLoginInTheSecurityJournalAsync(identifierOfTheAccountIfItExists, codeAttemptReceivedFromTheVisitor);
+        await securityJournal.SaveEventNowAsync(SecurityEventType.Login, SecurityEventResult.Failure, accountId, attempt.IpAddress);
 
-        return CreateResultForTheLoginThatMustRestart();
-    }
-
-    // Écrit l'échec dans le journal de sécurité : date, utilisateur, adresse IP, événement et résultat (SS §11).
-    private async Task SaveFailedLoginInTheSecurityJournalAsync(Guid? identifierOfTheAccountIfItExists, TwoFactorCodeAttemptFromVisitor codeAttemptReceivedFromTheVisitor)
-    {
-        await repositoryOfTheSecurityEventsInDatabase.SaveSecurityEventInTheJournalAsync(new SecurityEvent
-        {
-            Type = SecurityEventType.Login,
-            Result = SecurityEventResult.Failure,
-            OccurredAt = clockThatGivesTheCurrentDateAndTime.GetUtcNow().UtcDateTime,
-            IpAddress = codeAttemptReceivedFromTheVisitor.IpAddressOfTheVisitor,
-            UserId = identifierOfTheAccountIfItExists
-        });
-    }
-
-    // Donne le même refus dans tous les cas, sans dire pourquoi : attente finie, code de trop ou compte qui a changé.
-    private static TwoFactorLoginResult CreateResultForTheLoginThatMustRestart()
-    {
-        return new TwoFactorLoginResult { LoginMustRestartErrorMessage = ErrorMessageForLoginThatMustRestart };
+        return new TwoFactorLoginResult.LoginMustRestart();
     }
 }

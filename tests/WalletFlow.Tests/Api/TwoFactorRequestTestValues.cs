@@ -4,6 +4,7 @@ using WalletFlow.Api.Configuration;
 using WalletFlow.Domain.UsersAndSecurity;
 using WalletFlow.Infrastructure.Security;
 using WalletFlow.Tests.Fakes;
+using WalletFlow.Tests.Infrastructure;
 using static WalletFlow.Tests.Api.LoginRequestTestValues;
 using static WalletFlow.Tests.Api.RegistrationRequestTestValues;
 
@@ -12,104 +13,103 @@ namespace WalletFlow.Tests.Api;
 // Valeurs et outils communs aux tests des routes de la double authentification.
 public static class TwoFactorRequestTestValues
 {
-    public const string AddressOfTheTwoFactorLoginEndpoint = "/api/account/login/two-factor";
-    public const string AddressOfTheActivationStartEndpoint = "/api/account/two-factor/start-activation";
-    public const string AddressOfTheActivationFinishEndpoint = "/api/account/two-factor/finish-activation";
-    public const string AddressOfTheTwoFactorDeactivationEndpoint = "/api/account/two-factor/deactivate";
-    public const string NameOfTheWaitingLoginCookieInTheseTests = "__Host-walletflow-two-factor";
+    public const string TwoFactorLoginEndpoint = "/api/account/login/two-factor";
+    public const string ActivationStartEndpoint = "/api/account/two-factor/start-activation";
+    public const string ActivationFinishEndpoint = "/api/account/two-factor/finish-activation";
+    public const string DeactivationEndpoint = "/api/account/two-factor/deactivate";
+    public const string WaitingLoginCookieName = "__Host-walletflow-two-factor";
 
     // Ajoute à la fausse base un compte déjà activé, avec le vrai Argon2. Renvoie le secret de son téléphone.
     // Un seul code de secours, avec le vrai Argon2 aussi : 10 ralentiraient chaque test sans rien vérifier de plus.
-    public static ActivatedApiAccountOfTheseTests AddActivatedAccountToTheFakeRepositoryOfTheApi(ApiFactoryWithFakeRepositoryAndEmails apiStartedInMemoryForThisTest, string emailAddressOfTheAccountToAdd = EmailAddressOfTheLoginTests)
+    public static async Task<ActivatedApiAccount> AddActivatedAccountAsync(ApiFactoryWithFakes api, string emailAddress = Email)
     {
-        var accountAddedToTheFakeRepository = AddAccountToTheFakeRepositoryOfTheApi(apiStartedInMemoryForThisTest, emailAddressOfTheAccountToAdd);
-        var secretSharedWithTheAuthenticatorApplication = new OtpNetAuthenticatorCodeTool().GenerateNewRandomSecretForTheAuthenticatorApplication();
-        var backupCodeInItsCleanForm = new RandomSecureTokenGenerator().GenerateNewRandomBackupCodeInItsCleanForm();
+        var account = await AddAccountAsync(api, emailAddress);
+        var secret = new OtpNetAuthenticatorCodeTool().GenerateSecret();
+        var cleanedCode = new RandomSecureTokenGenerator().GenerateBackupCode();
 
-        accountAddedToTheFakeRepository.IsTwoFactorEnabled = true;
-        accountAddedToTheFakeRepository.EncryptedTotpSecret = new AesGcmTotpSecretProtector(apiStartedInMemoryForThisTest.EncryptionKeyOfTheTotpSecretsInTheseTests).EncryptSecretOfThisUserAccount(secretSharedWithTheAuthenticatorApplication, accountAddedToTheFakeRepository.Id);
-        apiStartedInMemoryForThisTest.RepositoryThatKeepsTwoFactorDataInMemory.SavedBackupCodes.Add(new BackupCode
+        account.ActivateTwoFactor(new AesGcmTotpSecretProtector(api.TotpEncryptionKey).Encrypt(secret, account.Id));
+        api.TwoFactorRepository.SavedBackupCodes.Add(new BackupCode
         {
-            CodeHash = new LibsodiumPasswordHasher().ConvertPasswordIntoItsSecureHash(backupCodeInItsCleanForm),
-            UserId = accountAddedToTheFakeRepository.Id
+            CodeHash = await RealArgonHashers.CreateBackupCodeHasher().HashAsync(cleanedCode, account.Id),
+            UserId = account.Id
         });
 
-        return new ActivatedApiAccountOfTheseTests
+        return new ActivatedApiAccount
         {
-            UserAccount = accountAddedToTheFakeRepository,
-            SecretOfTheAuthenticatorApplication = secretSharedWithTheAuthenticatorApplication,
-            BackupCodeInItsCleanForm = backupCodeInItsCleanForm
+            UserAccount = account,
+            Secret = secret,
+            BackupCode = cleanedCode
         };
     }
 
     // Calcule le code qu'affiche le téléphone à la date de la fausse horloge de l'API.
-    public static string CalculateCodeShownOnThePhoneNow(ApiFactoryWithFakeRepositoryAndEmails apiStartedInMemoryForThisTest, string secretSharedWithTheAuthenticatorApplication)
+    public static string CalculateCurrentCode(ApiFactoryWithFakes api, string secret)
     {
-        return TwoFactorTestTools.CalculateAuthenticatorCodeShownAtThisDate(secretSharedWithTheAuthenticatorApplication, apiStartedInMemoryForThisTest.ClockThatOnlyMovesWhenTestsAskIt.GetUtcNow());
+        return TwoFactorTestTools.CalculateCodeAt(secret, api.Clock.GetUtcNow());
     }
 
     // Donne un code à 6 chiffres qui ne vaut rien à la date de la fausse horloge de l'API.
-    public static string FindCodeThatIsWrongNow(ApiFactoryWithFakeRepositoryAndEmails apiStartedInMemoryForThisTest, string secretSharedWithTheAuthenticatorApplication)
+    public static string FindWrongCode(ApiFactoryWithFakes api, string secret)
     {
-        return TwoFactorTestTools.FindAuthenticatorCodeThatIsWrongAtThisDate(secretSharedWithTheAuthenticatorApplication, apiStartedInMemoryForThisTest.ClockThatOnlyMovesWhenTestsAskIt.GetUtcNow());
+        return TwoFactorTestTools.FindWrongCodeAt(secret, api.Clock.GetUtcNow());
     }
 
     // Passe à la période suivante : le téléphone affiche un nouveau code.
-    public static void WaitForTheNextCodeOnThePhone(ApiFactoryWithFakeRepositoryAndEmails apiStartedInMemoryForThisTest)
+    public static void WaitForNextCode(ApiFactoryWithFakes api)
     {
-        apiStartedInMemoryForThisTest.ClockThatOnlyMovesWhenTestsAskIt.MoveFakeClockForwardByThisDuration(TimeSpan.FromSeconds(TwoFactorTestTools.NumberOfSecondsInOneAuthenticatorPeriod));
+        api.Clock.Advance(TimeSpan.FromSeconds(TwoFactorTestTools.PeriodInSeconds));
     }
 
     // Envoie un code pour finir la connexion.
-    public static async Task<HttpResponseMessage> SendTwoFactorLoginRequestToTheApiAsync(HttpClient clientThatCallsTheApiInMemory, string codeTypedByTheVisitorInThisTest)
+    public static async Task<HttpResponseMessage> SendTwoFactorLoginRequestAsync(HttpClient client, string code)
     {
-        return await clientThatCallsTheApiInMemory.PostAsJsonAsync(AddressOfTheTwoFactorLoginEndpoint, new { code = codeTypedByTheVisitorInThisTest });
+        return await client.PostAsJsonAsync(TwoFactorLoginEndpoint, new { code = code });
     }
 
     // Se connecte complètement, avec le mot de passe puis le code, et renvoie le jeton anti-CSRF de la session.
-    public static async Task<string> LogInWithPasswordAndCodeThenAskForTheCsrfTokenAsync(ApiFactoryWithFakeRepositoryAndEmails apiStartedInMemoryForThisTest, HttpClient clientThatCallsTheApiInMemory, string secretSharedWithTheAuthenticatorApplication)
+    public static async Task<string> LogInWithCodeThenGetCsrfTokenAsync(ApiFactoryWithFakes api, HttpClient client, string secret)
     {
-        await SendLoginRequestToTheApiAsync(clientThatCallsTheApiInMemory);
-        await SendTwoFactorLoginRequestToTheApiAsync(clientThatCallsTheApiInMemory, CalculateCodeShownOnThePhoneNow(apiStartedInMemoryForThisTest, secretSharedWithTheAuthenticatorApplication));
+        await SendLoginRequestAsync(client);
+        await SendTwoFactorLoginRequestAsync(client, CalculateCurrentCode(api, secret));
 
-        return await AskForTheCsrfTokenOfTheLoggedInUserAsync(clientThatCallsTheApiInMemory);
+        return await GetCsrfTokenAsync(client);
     }
 
     // Se connecte avec le mot de passe seul, et renvoie le jeton anti-CSRF de la session.
-    public static async Task<string> LogInWithPasswordThenAskForTheCsrfTokenAsync(HttpClient clientThatCallsTheApiInMemory, string emailAddressTypedInThisTest = EmailAddressOfTheLoginTests)
+    public static async Task<string> LogInThenGetCsrfTokenAsync(HttpClient client, string emailAddress = Email)
     {
-        await SendLoginRequestToTheApiAsync(clientThatCallsTheApiInMemory, emailAddressTypedInThisTest);
+        await SendLoginRequestAsync(client, emailAddress);
 
-        return await AskForTheCsrfTokenOfTheLoggedInUserAsync(clientThatCallsTheApiInMemory);
+        return await GetCsrfTokenAsync(client);
     }
 
     // Envoie à une route de réglage ce corps de requête, avec ce jeton anti-CSRF si le test en donne un.
-    public static async Task<HttpResponseMessage> SendSettingsRequestWithThisCsrfTokenAsync(HttpClient clientThatCallsTheApiInMemory, string addressOfTheSettingsEndpointBeingTested, object bodySentToTheSettingsRouteOfTheApi, string? csrfTokenSentWithTheRequest)
+    public static async Task<HttpResponseMessage> SendSettingsRequestAsync(HttpClient client, string address, object body, string? csrfToken)
     {
-        var settingsRequestToSendToTheApi = new HttpRequestMessage(HttpMethod.Post, addressOfTheSettingsEndpointBeingTested) { Content = JsonContent.Create(bodySentToTheSettingsRouteOfTheApi) };
+        var request = new HttpRequestMessage(HttpMethod.Post, address) { Content = JsonContent.Create(body) };
 
-        if (csrfTokenSentWithTheRequest != null)
+        if (csrfToken != null)
         {
-            settingsRequestToSendToTheApi.Headers.Add(AntiforgeryConfiguration.NameOfTheHeaderCarryingTheCsrfToken, csrfTokenSentWithTheRequest);
+            request.Headers.Add(AntiforgeryConfiguration.CsrfHeaderName, csrfToken);
         }
 
-        return await clientThatCallsTheApiInMemory.SendAsync(settingsRequestToSendToTheApi);
+        return await client.SendAsync(request);
     }
 
     // Commence l'activation avec le mot de passe des tests, et renvoie le secret donné par l'API.
-    public static async Task<string> StartActivationThenReadTheSecretAsync(HttpClient clientThatCallsTheApiInMemory, string csrfTokenOfTheLoggedInUser)
+    public static async Task<string> StartActivationThenReadSecretAsync(HttpClient client, string csrfToken)
     {
-        var answerToTheStartOfTheActivation = await SendSettingsRequestWithThisCsrfTokenAsync(clientThatCallsTheApiInMemory, AddressOfTheActivationStartEndpoint, new { password = ValidPasswordChosenInTheseTests }, csrfTokenOfTheLoggedInUser);
-        var jsonDocumentOfTheApiAnswer = JsonDocument.Parse(await answerToTheStartOfTheActivation.Content.ReadAsStringAsync());
+        var response = await SendSettingsRequestAsync(client, ActivationStartEndpoint, new { password = ValidPassword }, csrfToken);
+        var jsonDocument = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
 
-        return jsonDocumentOfTheApiAnswer.RootElement.GetProperty("secret").GetString()!;
+        return jsonDocument.RootElement.GetProperty("secret").GetString()!;
     }
 }
 
 // Un compte activé dans la fausse base de l'API, avec ce que son propriétaire connaît.
-public class ActivatedApiAccountOfTheseTests
+public class ActivatedApiAccount
 {
     public required User UserAccount { get; init; }
-    public required string SecretOfTheAuthenticatorApplication { get; init; }
-    public required string BackupCodeInItsCleanForm { get; init; }
+    public required string Secret { get; init; }
+    public required string BackupCode { get; init; }
 }

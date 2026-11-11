@@ -1,4 +1,5 @@
 using System.Net;
+using WalletFlow.Application.Persistence;
 using WalletFlow.Application.Security;
 using WalletFlow.Application.UserAccounts;
 using WalletFlow.Domain.UsersAndSecurity;
@@ -9,121 +10,116 @@ namespace WalletFlow.Application.TwoFactorAuthentication;
 // Le code peut être un code de secours : c'est le seul moyen de changer de téléphone après en avoir perdu un.
 public class TwoFactorDeactivationService
 {
-    // Le même message pour un mauvais mot de passe et pour un mauvais code : une session volée ne peut pas servir à tester des mots de passe un par un.
-    public const string ErrorMessageForWrongPasswordOrCode = "Le mot de passe ou le code n'est pas bon.";
-    public const string ErrorMessageForTwoFactorNotEnabled = "La double authentification n'est pas activée.";
-
-    private readonly IUserAccountRepository repositoryOfTheUserAccountsInDatabase;
-    private readonly ITwoFactorAuthenticationRepository repositoryOfTheTwoFactorDataInDatabase;
-    private readonly ISecurityEventRepository repositoryOfTheSecurityEventsInDatabase;
-    private readonly IPasswordHasher hasherOfThePasswordsTypedByUsers;
-    private readonly TwoFactorCodeCheckingService serviceThatChecksTheTwoFactorCodes;
-    private readonly TimeProvider clockThatGivesTheCurrentDateAndTime;
+    private readonly IUserAccountRepository accountRepository;
+    private readonly ITwoFactorAuthenticationRepository twoFactorRepository;
+    private readonly DatabaseChangesSavingService savingService;
+    private readonly SecurityJournalService securityJournal;
+    private readonly IPasswordHasher passwordHasher;
+    private readonly TwoFactorCodeCheckingService codeCheckingService;
 
     // Reçoit les outils dont la désactivation a besoin.
     public TwoFactorDeactivationService(
-        IUserAccountRepository repositoryOfTheUserAccountsInDatabase,
-        ITwoFactorAuthenticationRepository repositoryOfTheTwoFactorDataInDatabase,
-        ISecurityEventRepository repositoryOfTheSecurityEventsInDatabase,
-        IPasswordHasher hasherOfThePasswordsTypedByUsers,
-        TwoFactorCodeCheckingService serviceThatChecksTheTwoFactorCodes,
-        TimeProvider clockThatGivesTheCurrentDateAndTime)
+        IUserAccountRepository accountRepository,
+        ITwoFactorAuthenticationRepository twoFactorRepository,
+        DatabaseChangesSavingService savingService,
+        SecurityJournalService securityJournal,
+        IPasswordHasher passwordHasher,
+        TwoFactorCodeCheckingService codeCheckingService)
     {
-        this.repositoryOfTheUserAccountsInDatabase = repositoryOfTheUserAccountsInDatabase;
-        this.repositoryOfTheTwoFactorDataInDatabase = repositoryOfTheTwoFactorDataInDatabase;
-        this.repositoryOfTheSecurityEventsInDatabase = repositoryOfTheSecurityEventsInDatabase;
-        this.hasherOfThePasswordsTypedByUsers = hasherOfThePasswordsTypedByUsers;
-        this.serviceThatChecksTheTwoFactorCodes = serviceThatChecksTheTwoFactorCodes;
-        this.clockThatGivesTheCurrentDateAndTime = clockThatGivesTheCurrentDateAndTime;
+        this.accountRepository = accountRepository;
+        this.twoFactorRepository = twoFactorRepository;
+        this.savingService = savingService;
+        this.securityJournal = securityJournal;
+        this.passwordHasher = passwordHasher;
+        this.codeCheckingService = codeCheckingService;
     }
 
     // Vérifie le mot de passe puis le code : un mauvais mot de passe ne consomme donc pas le code. Si tout est bon, désactive.
-    public async Task<TwoFactorDeactivationResult> DeactivateTwoFactorWithPasswordAndCodeOfTheUserAsync(
-        Guid identifierOfTheLoggedInUser,
-        string passwordTypedByTheLoggedInUser,
-        string codeTypedByTheLoggedInUser,
-        IPAddress? ipAddressOfTheLoggedInUser)
+    public async Task<TwoFactorDeactivationResult> DeactivateAsync(
+        Guid userId,
+        string password,
+        string code,
+        IPAddress? ipAddress)
     {
-        var accountOfTheLoggedInUser = await repositoryOfTheUserAccountsInDatabase.FindUserAccountByIdentifierAsync(identifierOfTheLoggedInUser);
+        var account = await accountRepository.FindByIdAsync(userId);
 
-        if (accountOfTheLoggedInUser == null || !accountOfTheLoggedInUser.IsTwoFactorEnabled)
+        if (account == null || !account.IsTwoFactorEnabled)
         {
-            return new TwoFactorDeactivationResult { NotEnabledErrorMessage = ErrorMessageForTwoFactorNotEnabled };
+            return TwoFactorDeactivationResult.TwoFactorNotEnabled;
         }
 
-        var secureHashOfThePasswordJustChecked = accountOfTheLoggedInUser.PasswordHash;
-        var encryptedTotpSecretOfTheCodeJustChecked = accountOfTheLoggedInUser.EncryptedTotpSecret;
-        var passwordWrittenInItsNormalizedForm = PasswordRules.ConvertPasswordIntoItsNormalizedForm(passwordTypedByTheLoggedInUser);
+        var passwordHash = account.PasswordHash;
+        var encryptedTotpSecret = account.EncryptedTotpSecret;
+        var normalizedPassword = PasswordRules.Normalize(password);
 
-        if (!hasherOfThePasswordsTypedByUsers.CheckThatPasswordMatchesItsSecureHash(passwordWrittenInItsNormalizedForm, secureHashOfThePasswordJustChecked))
+        if (!await passwordHasher.VerifyAsync(normalizedPassword, passwordHash))
         {
-            return await RefuseDeactivationWithWrongPasswordOrCodeAsync(identifierOfTheLoggedInUser, ipAddressOfTheLoggedInUser);
+            return await RefuseAsync(userId, ipAddress);
         }
 
-        var resultOfTheCheckOfTheCode = await serviceThatChecksTheTwoFactorCodes.CheckThatCodeIsValidForThisActivatedAccountAsync(accountOfTheLoggedInUser, codeTypedByTheLoggedInUser);
+        var codeCheck = await codeCheckingService.CheckAsync(account, code);
 
-        if (!resultOfTheCheckOfTheCode.IsCodeValid)
+        if (!codeCheck.IsCodeValid)
         {
-            return await RefuseDeactivationWithWrongPasswordOrCodeAsync(identifierOfTheLoggedInUser, ipAddressOfTheLoggedInUser);
+            return await RefuseAsync(userId, ipAddress);
         }
 
-        return await SaveDeactivationUnlessOtherRequestsKeepChangingTheAccountAsync(identifierOfTheLoggedInUser, secureHashOfThePasswordJustChecked, encryptedTotpSecretOfTheCodeJustChecked, ipAddressOfTheLoggedInUser);
+        return await SaveDeactivationAsync(userId, passwordHash, encryptedTotpSecret, ipAddress);
     }
 
-    // Enregistre la désactivation. Si une autre requête a changé le compte, relit le compte et recommence.
-    // Le mot de passe et le secret qui viennent d'être vérifiés doivent être encore les bons : une récupération a pu passer entre-temps.
-    private async Task<TwoFactorDeactivationResult> SaveDeactivationUnlessOtherRequestsKeepChangingTheAccountAsync(
-        Guid identifierOfTheLoggedInUser,
-        string secureHashOfThePasswordJustChecked,
-        string? encryptedTotpSecretOfTheCodeJustChecked,
-        IPAddress? ipAddressOfTheLoggedInUser)
+    // Enregistre la désactivation. Si une autre requête a changé le compte, le compte est relu et tout recommence.
+    // Si le compte change encore au bout de 10 passages, la désactivation est refusée.
+    private async Task<TwoFactorDeactivationResult> SaveDeactivationAsync(
+        Guid userId,
+        string passwordHash,
+        string? encryptedTotpSecret,
+        IPAddress? ipAddress)
     {
-        for (var numberOfTheTryBeingDone = 1; numberOfTheTryBeingDone <= AccountLockoutRules.MaximumNumberOfTriesWhileOtherRequestsChangeTheAccount; numberOfTheTryBeingDone++)
+        var result = await savingService.SaveWithRetriesAsync<TwoFactorDeactivationResult?>(
+            () => PrepareDeactivationAsync(userId, passwordHash, encryptedTotpSecret, ipAddress),
+            null);
+
+        if (result == null)
         {
-            var accountReadBeforeSavingTheDeactivation = await repositoryOfTheUserAccountsInDatabase.FindUserAccountByIdentifierAsync(identifierOfTheLoggedInUser);
-
-            if (accountReadBeforeSavingTheDeactivation == null || !accountReadBeforeSavingTheDeactivation.IsTwoFactorEnabled)
-            {
-                return new TwoFactorDeactivationResult { NotEnabledErrorMessage = ErrorMessageForTwoFactorNotEnabled };
-            }
-
-            if (accountReadBeforeSavingTheDeactivation.PasswordHash != secureHashOfThePasswordJustChecked
-                || accountReadBeforeSavingTheDeactivation.EncryptedTotpSecret != encryptedTotpSecretOfTheCodeJustChecked)
-            {
-                return await RefuseDeactivationWithWrongPasswordOrCodeAsync(identifierOfTheLoggedInUser, ipAddressOfTheLoggedInUser);
-            }
-
-            var deactivationWasSavedInTheDatabase = await repositoryOfTheTwoFactorDataInDatabase.TryToSaveTwoFactorDeactivationOfThisAccountAsync(
-                accountReadBeforeSavingTheDeactivation,
-                CreateSecurityEventOfThisDeactivationAttempt(SecurityEventResult.Success, identifierOfTheLoggedInUser, ipAddressOfTheLoggedInUser));
-
-            if (deactivationWasSavedInTheDatabase)
-            {
-                return new TwoFactorDeactivationResult();
-            }
+            return await RefuseAsync(userId, ipAddress);
         }
 
-        return await RefuseDeactivationWithWrongPasswordOrCodeAsync(identifierOfTheLoggedInUser, ipAddressOfTheLoggedInUser);
+        return result.Value;
     }
 
-    // Note le refus dans le journal, et donne le même message dans tous les cas.
-    private async Task<TwoFactorDeactivationResult> RefuseDeactivationWithWrongPasswordOrCodeAsync(Guid identifierOfTheLoggedInUser, IPAddress? ipAddressOfTheLoggedInUser)
+    // Un passage : lit le compte et vérifie que le mot de passe et le secret qui viennent d'être contrôlés sont encore les bons,
+    // car une récupération a pu passer entre-temps. Puis prépare le secret oublié, les codes de secours effacés et l'événement du journal.
+    private async Task<PreparedChanges<TwoFactorDeactivationResult?>> PrepareDeactivationAsync(
+        Guid userId,
+        string passwordHash,
+        string? encryptedTotpSecret,
+        IPAddress? ipAddress)
     {
-        await repositoryOfTheSecurityEventsInDatabase.SaveSecurityEventInTheJournalAsync(CreateSecurityEventOfThisDeactivationAttempt(SecurityEventResult.Failure, identifierOfTheLoggedInUser, ipAddressOfTheLoggedInUser));
+        var account = await accountRepository.FindByIdAsync(userId);
 
-        return new TwoFactorDeactivationResult { WrongPasswordOrCodeErrorMessage = ErrorMessageForWrongPasswordOrCode };
-    }
-
-    // Crée l'événement du journal de sécurité (SS §11).
-    private SecurityEvent CreateSecurityEventOfThisDeactivationAttempt(SecurityEventResult resultOfThisAttemptToDeactivateTheTwoFactor, Guid identifierOfTheLoggedInUser, IPAddress? ipAddressOfTheLoggedInUser)
-    {
-        return new SecurityEvent
+        if (account == null || !account.IsTwoFactorEnabled)
         {
-            Type = SecurityEventType.TwoFactorDeactivation,
-            Result = resultOfThisAttemptToDeactivateTheTwoFactor,
-            OccurredAt = clockThatGivesTheCurrentDateAndTime.GetUtcNow().UtcDateTime,
-            IpAddress = ipAddressOfTheLoggedInUser,
-            UserId = identifierOfTheLoggedInUser
-        };
+            return PreparedChanges<TwoFactorDeactivationResult?>.NothingToSave(TwoFactorDeactivationResult.TwoFactorNotEnabled);
+        }
+
+        if (account.PasswordHash != passwordHash
+            || account.EncryptedTotpSecret != encryptedTotpSecret)
+        {
+            return PreparedChanges<TwoFactorDeactivationResult?>.NothingToSave(await RefuseAsync(userId, ipAddress));
+        }
+
+        account.DeactivateTwoFactor();
+        await twoFactorRepository.PrepareBackupCodesRemovalAsync(userId);
+        securityJournal.PrepareEvent(SecurityEventType.TwoFactorDeactivation, SecurityEventResult.Success, userId, ipAddress);
+
+        return PreparedChanges<TwoFactorDeactivationResult?>.SaveThenReturn(TwoFactorDeactivationResult.TwoFactorDeactivated);
+    }
+
+    // Note le refus dans le journal, et donne le même refus pour un mauvais mot de passe et pour un mauvais code.
+    private async Task<TwoFactorDeactivationResult> RefuseAsync(Guid userId, IPAddress? ipAddress)
+    {
+        await securityJournal.SaveEventNowAsync(SecurityEventType.TwoFactorDeactivation, SecurityEventResult.Failure, userId, ipAddress);
+
+        return TwoFactorDeactivationResult.WrongPasswordOrCode;
     }
 }

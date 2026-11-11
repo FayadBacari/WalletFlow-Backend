@@ -6,44 +6,44 @@ namespace WalletFlow.Infrastructure.Emails;
 // Ce dossier est ignoré par Git, car les e-mails contiennent des liens à usage unique.
 public class LocalFolderEmailSender : IEmailSender
 {
-    private readonly string pathOfTheFolderThatReceivesTheEmails;
+    private readonly string folderPath;
 
     // Reçoit le chemin du dossier où écrire les e-mails.
-    public LocalFolderEmailSender(string pathOfTheFolderThatReceivesTheEmails)
+    public LocalFolderEmailSender(string folderPath)
     {
-        this.pathOfTheFolderThatReceivesTheEmails = pathOfTheFolderThatReceivesTheEmails;
+        this.folderPath = folderPath;
     }
 
     // Écrit l'e-mail dans un nouveau fichier, dont le nom commence par sa date.
-    public async Task SendEmailToItsRecipientAsync(EmailMessageToSend emailMessageToSendToItsRecipient)
+    public async Task SendAsync(EmailMessage message)
     {
         try
         {
-            await WriteEmailInNewFileOfTheFolderAsync(emailMessageToSendToItsRecipient);
+            await WriteFileAsync(message);
         }
-        catch (IOException technicalErrorRaisedWhileWritingTheFile)
+        catch (IOException exception)
         {
-            throw new EmailCouldNotBeSentException(technicalErrorRaisedWhileWritingTheFile);
+            throw new EmailCouldNotBeSentException(exception);
         }
-        catch (UnauthorizedAccessException technicalErrorRaisedWhileWritingTheFile)
+        catch (UnauthorizedAccessException exception)
         {
-            throw new EmailCouldNotBeSentException(technicalErrorRaisedWhileWritingTheFile);
+            throw new EmailCouldNotBeSentException(exception);
         }
     }
 
     // Crée le dossier s'il n'existe pas, puis y écrit l'e-mail.
-    private async Task WriteEmailInNewFileOfTheFolderAsync(EmailMessageToSend emailMessageToSendToItsRecipient)
+    private async Task WriteFileAsync(EmailMessage message)
     {
-        Directory.CreateDirectory(pathOfTheFolderThatReceivesTheEmails);
+        Directory.CreateDirectory(folderPath);
 
-        var nameOfTheFileCreatedForThisEmail = DateTime.UtcNow.ToString("yyyyMMdd-HHmmss-fff") + "-" + Guid.NewGuid() + ".txt";
-        var pathOfTheFileCreatedForThisEmail = Path.Combine(pathOfTheFolderThatReceivesTheEmails, nameOfTheFileCreatedForThisEmail);
+        var fileName = DateTime.UtcNow.ToString("yyyyMMdd-HHmmss-fff") + "-" + Guid.NewGuid() + ".txt";
+        var filePath = Path.Combine(folderPath, fileName);
 
-        var contentOfTheFileCreatedForThisEmail =
-            "À : " + emailMessageToSendToItsRecipient.RecipientAddress + "\n" +
-            "Objet : " + emailMessageToSendToItsRecipient.Subject + "\n\n" +
-            emailMessageToSendToItsRecipient.Body + "\n";
+        var content =
+            "À : " + message.RecipientAddress + "\n" +
+            "Objet : " + message.Subject + "\n\n" +
+            message.Body + "\n";
 
-        await File.WriteAllTextAsync(pathOfTheFileCreatedForThisEmail, contentOfTheFileCreatedForThisEmail);
+        await File.WriteAllTextAsync(filePath, content);
     }
 }

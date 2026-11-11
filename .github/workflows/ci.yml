@@ -1,0 +1,94 @@
+# Intégration continue de l'API WalletFlow (SS §10). À chaque envoi sur GitHub :
+# - la base est créée dans un PostgreSQL 18 neuf avec le script du MPD, puis vérifiée par ses tests SQL ;
+# - un paquet qui a une faille connue arrête la vérification ;
+# - le projet est compilé avec les versions verrouillées des paquets, puis tous les tests sont lancés ;
+# - gitleaks cherche dans tout l'historique un secret écrit par erreur.
+name: Intégration continue
+
+on:
+  push:
+  pull_request:
+
+# Le jeton de GitHub ne sert qu'à lire le code : ces vérifications n'écrivent rien dans le dépôt.
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    name: Base, paquets, compilation et tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_DB: walletflow
+          # Base jetable, joignable seulement depuis la machine de la vérification : aucun mot de passe n'est nécessaire.
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DOTNET_NOLOGO: true
+      # Les messages de dotnet en anglais, quelle que soit la machine : l'étape des paquets lit leur résultat.
+      DOTNET_CLI_UI_LANGUAGE: en
+      # Les tests C# utilisent cette base, avec le rôle de l'API (voir LocalTestDatabase).
+      WALLETFLOW_TEST_DATABASE: Host=localhost;Port=5432;Database=walletflow;Username=walletflow_app
+
+    steps:
+      - name: Récupérer le code
+        uses: actions/checkout@v4
+
+      - name: Installer .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Créer la base avec le script du MPD
+        run: psql -h localhost -U postgres -d walletflow -v ON_ERROR_STOP=1 -f database/001_create_walletflow_schema.sql
+
+      - name: Lancer les tests SQL du script
+        run: psql -h localhost -U walletflow_app -d walletflow -v ON_ERROR_STOP=1 -f database/tests/test_001_create_walletflow_schema.sql
+
+      - name: Restaurer les paquets avec leurs versions verrouillées
+        run: dotnet restore --locked-mode
+
+      - name: Refuser les paquets qui ont une faille connue
+        run: |
+          dotnet list package --vulnerable --include-transitive --format json > paquets-vulnerables.json
+          cat paquets-vulnerables.json
+          vulnerable_package_count=$(jq '[.projects[].frameworks[]? | (.topLevelPackages // []) + (.transitivePackages // []) | .[] | select(.vulnerabilities != null)] | length' paquets-vulnerables.json)
+          if [ "$vulnerable_package_count" -gt 0 ]; then
+            echo "Un paquet a une faille connue : mets-le à jour avant de continuer."
+            exit 1
+          fi
+
+      - name: Compiler
+        run: dotnet build --no-restore
+
+      - name: Lancer tous les tests
+        run: dotnet test --no-build
+
+  secrets:
+    name: Recherche de secrets
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Récupérer tout l'historique
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # La version est fixée : c'est celle qui a vérifié le dépôt, avec les exceptions de .gitleaks.toml.
+      - name: Lancer gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_VERSION: 8.30.1

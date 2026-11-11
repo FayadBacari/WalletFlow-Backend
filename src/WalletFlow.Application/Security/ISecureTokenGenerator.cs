@@ -4,11 +4,11 @@ namespace WalletFlow.Application.Security;
 public interface ISecureTokenGenerator
 {
     // Tire au hasard un nouveau jeton et calcule son empreinte.
-    GeneratedSecureToken GenerateNewRandomSecureTokenWithItsHash();
+    GeneratedSecureToken GenerateToken();
 
     // Calcule l'empreinte d'un jeton reçu dans un lien ou un cookie, pour le retrouver en base.
-    string ConvertSecureTokenIntoItsHash(string tokenToConvertIntoItsHash);
+    string HashToken(string token);
 
     // Tire au hasard un nouveau code de secours, écrit sans son tiret (SS §2).
-    string GenerateNewRandomBackupCodeInItsCleanForm();
+    string GenerateBackupCode();
 }

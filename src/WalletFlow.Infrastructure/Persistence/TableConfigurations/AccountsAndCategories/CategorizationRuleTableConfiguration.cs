@@ -8,19 +8,19 @@ namespace WalletFlow.Infrastructure.Persistence.TableConfigurations.AccountsAndC
 public class CategorizationRuleTableConfiguration : IEntityTypeConfiguration<CategorizationRule>
 {
     // Appelée par EF Core au démarrage (nom imposé par le framework).
-    public void Configure(EntityTypeBuilder<CategorizationRule> builderOfTheCategorizationRuleTableMapping)
+    public void Configure(EntityTypeBuilder<CategorizationRule> builder)
     {
-        builderOfTheCategorizationRuleTableMapping.ToTable("regle_classement");
+        builder.ToTable("regle_classement");
 
         // L'identifiant est créé par l'entité elle-même, jamais par EF Core.
-        builderOfTheCategorizationRuleTableMapping.HasKey(nameof(CategorizationRule.Id));
-        builderOfTheCategorizationRuleTableMapping.Property(nameof(CategorizationRule.Id)).HasColumnName("id_regle_classement").ValueGeneratedNever();
+        builder.HasKey(nameof(CategorizationRule.Id));
+        builder.Property(nameof(CategorizationRule.Id)).HasColumnName("id_regle_classement").ValueGeneratedNever();
 
-        builderOfTheCategorizationRuleTableMapping.Property(nameof(CategorizationRule.Label)).HasColumnName("libelle_regle");
-        builderOfTheCategorizationRuleTableMapping.Property(nameof(CategorizationRule.CategoryId)).HasColumnName("id_categorie");
+        builder.Property(nameof(CategorizationRule.Label)).HasColumnName("libelle_regle");
+        builder.Property(nameof(CategorizationRule.CategoryId)).HasColumnName("id_categorie");
 
         // Une règle n'a plus d'objet sans sa catégorie : elle disparaît avec elle (ON DELETE CASCADE).
-        builderOfTheCategorizationRuleTableMapping.HasOne<Category>().WithMany()
+        builder.HasOne<Category>().WithMany()
             .HasForeignKey(nameof(CategorizationRule.CategoryId))
             .OnDelete(DeleteBehavior.Cascade);
     }

@@ -16,70 +16,67 @@ namespace WalletFlow.Api.Controllers;
 public class PasswordRecoveryController : ControllerBase
 {
     // Le même message pour toute demande acceptée, que l'adresse ait un compte ou non (GR Auth, SS §2).
-    public const string MessageSentForEveryPasswordRecoveryRequest = "Si un compte existe avec cette adresse, un e-mail vient d'être envoyé.";
+    public const string RecoveryRequestedMessage = "Si un compte existe avec cette adresse, un e-mail vient d'être envoyé.";
 
-    public const string MessageSentWhenThePasswordIsChanged = "Ton mot de passe est changé. Tu peux maintenant te connecter.";
+    public const string PasswordChangedMessage = "Ton mot de passe est changé. Tu peux maintenant te connecter.";
 
-    private readonly PasswordRecoveryRequestService serviceThatRequestsThePasswordRecoveries;
-    private readonly PasswordResetService serviceThatChangesTheForgottenPasswords;
+    private readonly PasswordRecoveryRequestService recoveryRequestService;
+    private readonly PasswordResetService passwordResetService;
 
     // Reçoit les cas d'utilisation de la récupération.
-    public PasswordRecoveryController(PasswordRecoveryRequestService serviceThatRequestsThePasswordRecoveries, PasswordResetService serviceThatChangesTheForgottenPasswords)
+    public PasswordRecoveryController(PasswordRecoveryRequestService recoveryRequestService, PasswordResetService passwordResetService)
     {
-        this.serviceThatRequestsThePasswordRecoveries = serviceThatRequestsThePasswordRecoveries;
-        this.serviceThatChangesTheForgottenPasswords = serviceThatChangesTheForgottenPasswords;
+        this.recoveryRequestService = recoveryRequestService;
+        this.passwordResetService = passwordResetService;
     }
 
     // POST api/account/forgot-password : demande un lien de récupération. L'e-mail part en arrière-plan.
     [HttpPost("forgot-password")]
-    [EnableRateLimiting(RateLimitingConfiguration.PolicyNameForPasswordRecoveryRequestsPerIpAddress)]
-    [RequestSizeLimit(RequestSizeConfiguration.MaximumNumberOfBytesInOneAccountRequest)]
-    public IActionResult RequestPasswordRecoveryFromTheVisitorRequest(ForgotPasswordRequest requestSentByTheVisitorToRecover)
+    [EnableRateLimiting(RateLimitingConfiguration.PasswordRecoveryPolicy)]
+    [RequestSizeLimit(RequestSizeConfiguration.MaximumAccountRequestBytes)]
+    public IActionResult RequestRecovery(ForgotPasswordRequest request)
     {
-        var resultOfThePasswordRecoveryRequest = serviceThatRequestsThePasswordRecoveries.RequestPasswordRecoveryForThisEmailAddress(
-            requestSentByTheVisitorToRecover.Email,
+        var result = recoveryRequestService.Request(
+            request.Email,
             HttpContext.Connection.RemoteIpAddress);
 
-        if (resultOfThePasswordRecoveryRequest.IsAccepted)
+        if (result == PasswordRecoveryRequestResult.RequestAccepted)
         {
-            return Ok(new MessageResponse(MessageSentForEveryPasswordRecoveryRequest));
+            return Ok(new MessageResponse(RecoveryRequestedMessage));
         }
 
-        if (resultOfThePasswordRecoveryRequest.TooManyRequestsForThisEmailAddress)
+        if (result == PasswordRecoveryRequestResult.TooManyRequests)
         {
             return StatusCode(StatusCodes.Status429TooManyRequests);
         }
 
-        ModelState.AddModelError(nameof(ForgotPasswordRequest.Email), resultOfThePasswordRecoveryRequest.EmailAddressErrorMessage!);
+        ModelState.AddModelError(nameof(ForgotPasswordRequest.Email), ErrorMessages.InvalidEmailAddress);
         return ValidationProblem();
     }
 
     // POST api/account/reset-password : change le mot de passe, avec le jeton du lien.
     [HttpPost("reset-password")]
-    [EnableRateLimiting(RateLimitingConfiguration.PolicyNameForPasswordResetAttemptsPerIpAddress)]
-    [RequestSizeLimit(RequestSizeConfiguration.MaximumNumberOfBytesInOneAccountRequest)]
-    public async Task<IActionResult> ResetPasswordFromTheVisitorRequest(ResetPasswordRequest requestSentByTheVisitorToReset)
+    [EnableRateLimiting(RateLimitingConfiguration.PasswordResetPolicy)]
+    [RequestSizeLimit(RequestSizeConfiguration.MaximumAccountRequestBytes)]
+    public async Task<IActionResult> ResetPassword(ResetPasswordRequest request)
     {
-        var resultOfThePasswordResetRequest = await serviceThatChangesTheForgottenPasswords.ResetPasswordWithLinkTokenAsync(
-            requestSentByTheVisitorToReset.Token,
-            requestSentByTheVisitorToReset.NewPassword,
+        var result = await passwordResetService.ResetAsync(
+            request.Token,
+            request.NewPassword,
             HttpContext.Connection.RemoteIpAddress);
 
-        if (resultOfThePasswordResetRequest.IsPasswordChanged)
+        if (result == PasswordResetResult.PasswordChanged)
         {
-            return Ok(new MessageResponse(MessageSentWhenThePasswordIsChanged));
+            return Ok(new MessageResponse(PasswordChangedMessage));
         }
 
-        if (resultOfThePasswordResetRequest.LinkErrorMessage != null)
+        if (result == PasswordResetResult.PasswordBreaksRules)
         {
-            ModelState.AddModelError(nameof(ResetPasswordRequest.Token), resultOfThePasswordResetRequest.LinkErrorMessage);
+            ModelState.AddModelError(nameof(ResetPasswordRequest.NewPassword), ErrorMessages.PasswordBreaksRules);
+            return ValidationProblem();
         }
 
-        if (resultOfThePasswordResetRequest.PasswordErrorMessage != null)
-        {
-            ModelState.AddModelError(nameof(ResetPasswordRequest.NewPassword), resultOfThePasswordResetRequest.PasswordErrorMessage);
-        }
-
+        ModelState.AddModelError(nameof(ResetPasswordRequest.Token), ErrorMessages.RecoveryLinkNoLongerValid);
         return ValidationProblem();
     }
 }

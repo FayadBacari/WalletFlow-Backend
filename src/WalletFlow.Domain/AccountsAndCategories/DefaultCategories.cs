@@ -4,31 +4,31 @@ namespace WalletFlow.Domain.AccountsAndCategories;
 public static class DefaultCategories
 {
     // Crée les 8 catégories par défaut d'un nouvel utilisateur.
-    public static List<Category> CreateTheEightDefaultCategoriesForNewUser(Guid identifierOfTheNewlyRegisteredUser)
+    public static List<Category> CreateForUser(Guid userId)
     {
-        var namesOfTheOrdinaryDefaultCategories = new List<string>
+        var ordinaryCategoryNames = new List<string>
         {
             "Logement", "Alimentation", "Transport", "Loisirs", "Santé", "Shopping", "Revenus"
         };
-        var defaultCategoriesOfTheNewUser = new List<Category>();
+        var categories = new List<Category>();
 
-        foreach (var nameOfTheDefaultCategoryToCreate in namesOfTheOrdinaryDefaultCategories)
+        foreach (var name in ordinaryCategoryNames)
         {
-            defaultCategoriesOfTheNewUser.Add(new Category
+            categories.Add(new Category
             {
-                Name = nameOfTheDefaultCategoryToCreate,
-                UserId = identifierOfTheNewlyRegisteredUser
+                Name = name,
+                UserId = userId
             });
         }
 
         // « Autres » reçoit les transactions sans catégorie : elle ne se renomme ni ne se supprime.
-        defaultCategoriesOfTheNewUser.Add(new Category
+        categories.Add(new Category
         {
             Name = "Autres",
             IsOtherCategory = true,
-            UserId = identifierOfTheNewlyRegisteredUser
+            UserId = userId
         });
 
-        return defaultCategoriesOfTheNewUser;
+        return categories;
     }
 }

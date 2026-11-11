@@ -8,16 +8,26 @@ namespace WalletFlow.Infrastructure.Security;
 // ont donc deux empreintes différentes.
 public class LibsodiumPasswordHasher : IPasswordHasher
 {
+    private readonly ArgonComputationsLimiter argonLimiter;
+
+    // Reçoit le limiteur partagé par tous les calculs Argon2id du serveur.
+    public LibsodiumPasswordHasher(ArgonComputationsLimiter argonLimiter)
+    {
+        this.argonLimiter = argonLimiter;
+    }
+
     // Le niveau « Interactive » de Sodium.Core (32 Mio de mémoire, 4 passes) est prévu pour une connexion
     // en ligne. Il dépasse le minimum recommandé par l'OWASP pour Argon2id (19 Mio de mémoire, 2 passes).
-    public string ConvertPasswordIntoItsSecureHash(string passwordToConvertIntoSecureHash)
+    public async Task<string> HashAsync(string password)
     {
-        return PasswordHash.ArgonHashString(passwordToConvertIntoSecureHash, PasswordHash.StrengthArgon.Interactive);
+        return await argonLimiter.RunAsync(() =>
+            PasswordHash.ArgonHashString(password, PasswordHash.StrengthArgon.Interactive));
     }
 
     // Renvoie vrai si le mot de passe correspond à l'empreinte enregistrée en base.
-    public bool CheckThatPasswordMatchesItsSecureHash(string passwordToCompareWithItsHash, string secureHashStoredInTheDatabase)
+    public async Task<bool> VerifyAsync(string password, string storedHash)
     {
-        return PasswordHash.ArgonHashStringVerify(secureHashStoredInTheDatabase, passwordToCompareWithItsHash);
+        return await argonLimiter.RunAsync(() =>
+            PasswordHash.ArgonHashStringVerify(storedHash, password));
     }
 }

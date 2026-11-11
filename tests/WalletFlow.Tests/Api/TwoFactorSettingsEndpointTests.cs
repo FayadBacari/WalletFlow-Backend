@@ -1,3 +1,4 @@
+using WalletFlow.Api.Contracts;
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
@@ -18,44 +19,44 @@ namespace WalletFlow.Tests.Api;
 public class TwoFactorSettingsEndpointTests
 {
     // Calcule le premier code d'un secret à la date de la fausse horloge.
-    private static object CreateBodyWithTheCodeOfThisSecret(ApiFactoryWithFakeRepositoryAndEmails apiStartedInMemoryForThisTest, string secretSharedWithTheAuthenticatorApplication)
+    private static object CreateCodeBody(ApiFactoryWithFakes api, string secret)
     {
-        return new { code = CalculateCodeShownOnThePhoneNow(apiStartedInMemoryForThisTest, secretSharedWithTheAuthenticatorApplication) };
+        return new { code = CalculateCurrentCode(api, secret) };
     }
 
     // --- La session et le jeton anti-CSRF
 
     // SS §4 : aucune de ces routes ne s'ouvre sans session.
     [Theory]
-    [InlineData(AddressOfTheActivationStartEndpoint)]
-    [InlineData(AddressOfTheActivationFinishEndpoint)]
-    [InlineData(AddressOfTheTwoFactorDeactivationEndpoint)]
-    public async Task RouteWithoutSessionIsAnsweredWithUnauthorizedStatus(string addressOfTheSettingsEndpointBeingTested)
+    [InlineData(ActivationStartEndpoint)]
+    [InlineData(ActivationFinishEndpoint)]
+    [InlineData(DeactivationEndpoint)]
+    public async Task RouteWithoutSessionIsAnsweredWithUnauthorizedStatus(string address)
     {
-        using var apiStartedInMemoryForThisTest = new ApiFactoryWithFakeRepositoryAndEmails();
-        var clientThatKeepsTheCookiesOfTheBrowser = CreateClientThatKeepsCookiesLikeABrowser(apiStartedInMemoryForThisTest);
+        using var api = new ApiFactoryWithFakes();
+        var browserClient = CreateBrowserClient(api);
 
-        var answerToTheRequestOnTheSettingsRoute = await SendSettingsRequestWithThisCsrfTokenAsync(clientThatKeepsTheCookiesOfTheBrowser, addressOfTheSettingsEndpointBeingTested, new { password = ValidPasswordChosenInTheseTests, code = "123456" }, null);
+        var response = await SendSettingsRequestAsync(browserClient, address, new { password = ValidPassword, code = "123456" }, null);
 
-        Assert.Equal(HttpStatusCode.Unauthorized, answerToTheRequestOnTheSettingsRoute.StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
     }
 
     // SS §6 : un site piégé ne peut pas déclencher ces routes avec le cookie du navigateur.
     [Theory]
-    [InlineData(AddressOfTheActivationStartEndpoint)]
-    [InlineData(AddressOfTheActivationFinishEndpoint)]
-    [InlineData(AddressOfTheTwoFactorDeactivationEndpoint)]
-    public async Task RouteWithASessionButWithoutCsrfTokenIsRefused(string addressOfTheSettingsEndpointBeingTested)
+    [InlineData(ActivationStartEndpoint)]
+    [InlineData(ActivationFinishEndpoint)]
+    [InlineData(DeactivationEndpoint)]
+    public async Task RouteWithASessionButWithoutCsrfTokenIsRefused(string address)
     {
-        using var apiStartedInMemoryForThisTest = new ApiFactoryWithFakeRepositoryAndEmails();
-        var accountUsedByThisTwoFactorTest = AddAccountToTheFakeRepositoryOfTheApi(apiStartedInMemoryForThisTest);
-        var clientThatKeepsTheCookiesOfTheBrowser = CreateClientThatKeepsCookiesLikeABrowser(apiStartedInMemoryForThisTest);
-        await SendLoginRequestToTheApiAsync(clientThatKeepsTheCookiesOfTheBrowser);
+        using var api = new ApiFactoryWithFakes();
+        var account = await AddAccountAsync(api);
+        var browserClient = CreateBrowserClient(api);
+        await SendLoginRequestAsync(browserClient);
 
-        var answerToTheRequestOnTheSettingsRoute = await SendSettingsRequestWithThisCsrfTokenAsync(clientThatKeepsTheCookiesOfTheBrowser, addressOfTheSettingsEndpointBeingTested, new { password = ValidPasswordChosenInTheseTests, code = "123456" }, null);
+        var response = await SendSettingsRequestAsync(browserClient, address, new { password = ValidPassword, code = "123456" }, null);
 
-        Assert.Equal(HttpStatusCode.BadRequest, answerToTheRequestOnTheSettingsRoute.StatusCode);
-        Assert.False(accountUsedByThisTwoFactorTest.IsTwoFactorEnabled);
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.False(account.IsTwoFactorEnabled);
     }
 
     // --- L'activation
@@ -63,149 +64,149 @@ public class TwoFactorSettingsEndpointTests
     [Fact]
     public async Task RightPasswordGivesTheSecretAndItsLinkInAnAnswerNobodyKeeps()
     {
-        using var apiStartedInMemoryForThisTest = new ApiFactoryWithFakeRepositoryAndEmails();
-        var accountUsedByThisTwoFactorTest = AddAccountToTheFakeRepositoryOfTheApi(apiStartedInMemoryForThisTest);
-        var clientThatKeepsTheCookiesOfTheBrowser = CreateClientThatKeepsCookiesLikeABrowser(apiStartedInMemoryForThisTest);
-        var csrfTokenOfTheLoggedInUser = await LogInWithPasswordThenAskForTheCsrfTokenAsync(clientThatKeepsTheCookiesOfTheBrowser);
+        using var api = new ApiFactoryWithFakes();
+        var account = await AddAccountAsync(api);
+        var browserClient = CreateBrowserClient(api);
+        var csrfToken = await LogInThenGetCsrfTokenAsync(browserClient);
 
-        var answerToTheStartOfTheActivation = await SendSettingsRequestWithThisCsrfTokenAsync(clientThatKeepsTheCookiesOfTheBrowser, AddressOfTheActivationStartEndpoint, new { password = ValidPasswordChosenInTheseTests }, csrfTokenOfTheLoggedInUser);
+        var response = await SendSettingsRequestAsync(browserClient, ActivationStartEndpoint, new { password = ValidPassword }, csrfToken);
 
-        Assert.Equal(HttpStatusCode.OK, answerToTheStartOfTheActivation.StatusCode);
-        var jsonDocumentOfTheApiAnswer = JsonDocument.Parse(await answerToTheStartOfTheActivation.Content.ReadAsStringAsync());
-        var secretOfThePhoneGivenByTheApi = jsonDocumentOfTheApiAnswer.RootElement.GetProperty("secret").GetString()!;
-        Assert.Matches("^[A-Z2-7]{32}$", secretOfThePhoneGivenByTheApi);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var jsonDocument = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        var secret = jsonDocument.RootElement.GetProperty("secret").GetString()!;
+        Assert.Matches("^[A-Z2-7]{32}$", secret);
         Assert.Equal(
-            "otpauth://totp/WalletFlow:utilisateur%40exemple.test?secret=" + secretOfThePhoneGivenByTheApi + "&issuer=WalletFlow&algorithm=SHA1&digits=6&period=30",
-            jsonDocumentOfTheApiAnswer.RootElement.GetProperty("linkForTheAuthenticatorApplication").GetString());
-        Assert.Contains("no-store", answerToTheStartOfTheActivation.Headers.GetValues("Cache-Control").Single());
-        SecurityHeadersAssertions.CheckThatAnswerCarriesTheExactSecurityHeaders(answerToTheStartOfTheActivation);
-        Assert.False(accountUsedByThisTwoFactorTest.IsTwoFactorEnabled);
-        Assert.Null(accountUsedByThisTwoFactorTest.EncryptedTotpSecret);
+            "otpauth://totp/WalletFlow:utilisateur%40exemple.test?secret=" + secret + "&issuer=WalletFlow&algorithm=SHA1&digits=6&period=30",
+            jsonDocument.RootElement.GetProperty("linkForTheAuthenticatorApplication").GetString());
+        Assert.Contains("no-store", response.Headers.GetValues("Cache-Control").Single());
+        SecurityHeadersAssertions.AssertExactSecurityHeaders(response);
+        Assert.False(account.IsTwoFactorEnabled);
+        Assert.Null(account.EncryptedTotpSecret);
     }
 
     [Fact]
     public async Task WrongPasswordAnswersWithAFieldErrorAndNoSecret()
     {
-        using var apiStartedInMemoryForThisTest = new ApiFactoryWithFakeRepositoryAndEmails();
-        AddAccountToTheFakeRepositoryOfTheApi(apiStartedInMemoryForThisTest);
-        var clientThatKeepsTheCookiesOfTheBrowser = CreateClientThatKeepsCookiesLikeABrowser(apiStartedInMemoryForThisTest);
-        var csrfTokenOfTheLoggedInUser = await LogInWithPasswordThenAskForTheCsrfTokenAsync(clientThatKeepsTheCookiesOfTheBrowser);
+        using var api = new ApiFactoryWithFakes();
+        await AddAccountAsync(api);
+        var browserClient = CreateBrowserClient(api);
+        var csrfToken = await LogInThenGetCsrfTokenAsync(browserClient);
 
-        var answerToTheStartOfTheActivation = await SendSettingsRequestWithThisCsrfTokenAsync(clientThatKeepsTheCookiesOfTheBrowser, AddressOfTheActivationStartEndpoint, new { password = WrongPasswordTypedInTheLoginTests }, csrfTokenOfTheLoggedInUser);
+        var response = await SendSettingsRequestAsync(browserClient, ActivationStartEndpoint, new { password = WrongPassword }, csrfToken);
 
-        Assert.Equal(HttpStatusCode.BadRequest, answerToTheStartOfTheActivation.StatusCode);
-        Assert.Equal(TwoFactorActivationService.ErrorMessageForWrongPasswordAtActivation, await ReadErrorMessageOfThisRequestFieldAsync(answerToTheStartOfTheActivation, "Password"));
-        Assert.DoesNotContain("secret", await answerToTheStartOfTheActivation.Content.ReadAsStringAsync());
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal(ErrorMessages.WrongActivationPassword, await ReadFieldErrorAsync(response, "Password"));
+        Assert.DoesNotContain("secret", await response.Content.ReadAsStringAsync());
     }
 
     [Fact]
     public async Task AccountAlreadyActivatedIsAnsweredWithConflictStatus()
     {
-        using var apiStartedInMemoryForThisTest = new ApiFactoryWithFakeRepositoryAndEmails();
-        var activatedAccountUsedByThisTest = AddActivatedAccountToTheFakeRepositoryOfTheApi(apiStartedInMemoryForThisTest);
-        var clientThatKeepsTheCookiesOfTheBrowser = CreateClientThatKeepsCookiesLikeABrowser(apiStartedInMemoryForThisTest);
-        var csrfTokenOfTheLoggedInUser = await LogInWithPasswordAndCodeThenAskForTheCsrfTokenAsync(apiStartedInMemoryForThisTest, clientThatKeepsTheCookiesOfTheBrowser, activatedAccountUsedByThisTest.SecretOfTheAuthenticatorApplication);
+        using var api = new ApiFactoryWithFakes();
+        var activatedAccount = await AddActivatedAccountAsync(api);
+        var browserClient = CreateBrowserClient(api);
+        var csrfToken = await LogInWithCodeThenGetCsrfTokenAsync(api, browserClient, activatedAccount.Secret);
 
-        var answerToTheStartOfTheActivation = await SendSettingsRequestWithThisCsrfTokenAsync(clientThatKeepsTheCookiesOfTheBrowser, AddressOfTheActivationStartEndpoint, new { password = ValidPasswordChosenInTheseTests }, csrfTokenOfTheLoggedInUser);
+        var response = await SendSettingsRequestAsync(browserClient, ActivationStartEndpoint, new { password = ValidPassword }, csrfToken);
 
-        await CheckThatAnswerIsProblemWithThisExactTitleAsync(answerToTheStartOfTheActivation, HttpStatusCode.Conflict, TwoFactorActivationService.ErrorMessageForTwoFactorAlreadyEnabled);
+        await AssertProblemTitleAsync(response, HttpStatusCode.Conflict, ErrorMessages.TwoFactorAlreadyEnabled);
     }
 
     [Fact]
     public async Task RightFirstCodeActivatesAndGivesTheBackupCodesInAnAnswerNobodyKeeps()
     {
-        using var apiStartedInMemoryForThisTest = new ApiFactoryWithFakeRepositoryAndEmails();
-        var accountUsedByThisTwoFactorTest = AddAccountToTheFakeRepositoryOfTheApi(apiStartedInMemoryForThisTest);
-        var clientThatKeepsTheCookiesOfTheBrowser = CreateClientThatKeepsCookiesLikeABrowser(apiStartedInMemoryForThisTest);
-        var csrfTokenOfTheLoggedInUser = await LogInWithPasswordThenAskForTheCsrfTokenAsync(clientThatKeepsTheCookiesOfTheBrowser);
-        var secretOfThePhoneGivenByTheApi = await StartActivationThenReadTheSecretAsync(clientThatKeepsTheCookiesOfTheBrowser, csrfTokenOfTheLoggedInUser);
+        using var api = new ApiFactoryWithFakes();
+        var account = await AddAccountAsync(api);
+        var browserClient = CreateBrowserClient(api);
+        var csrfToken = await LogInThenGetCsrfTokenAsync(browserClient);
+        var secret = await StartActivationThenReadSecretAsync(browserClient, csrfToken);
 
-        var answerToTheEndOfTheActivation = await SendSettingsRequestWithThisCsrfTokenAsync(clientThatKeepsTheCookiesOfTheBrowser, AddressOfTheActivationFinishEndpoint, CreateBodyWithTheCodeOfThisSecret(apiStartedInMemoryForThisTest, secretOfThePhoneGivenByTheApi), csrfTokenOfTheLoggedInUser);
+        var response = await SendSettingsRequestAsync(browserClient, ActivationFinishEndpoint, CreateCodeBody(api, secret), csrfToken);
 
-        Assert.Equal(HttpStatusCode.OK, answerToTheEndOfTheActivation.StatusCode);
-        var jsonDocumentOfTheApiAnswer = JsonDocument.Parse(await answerToTheEndOfTheActivation.Content.ReadAsStringAsync());
-        Assert.Equal(10, jsonDocumentOfTheApiAnswer.RootElement.GetProperty("backupCodes").GetArrayLength());
-        Assert.Contains("no-store", answerToTheEndOfTheActivation.Headers.GetValues("Cache-Control").Single());
-        Assert.True(accountUsedByThisTwoFactorTest.IsTwoFactorEnabled);
-        Assert.DoesNotContain(secretOfThePhoneGivenByTheApi, accountUsedByThisTwoFactorTest.EncryptedTotpSecret);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var jsonDocument = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.Equal(10, jsonDocument.RootElement.GetProperty("backupCodes").GetArrayLength());
+        Assert.Contains("no-store", response.Headers.GetValues("Cache-Control").Single());
+        Assert.True(account.IsTwoFactorEnabled);
+        Assert.DoesNotContain(secret, account.EncryptedTotpSecret);
 
         // Le secret en base se relit avec la clé donnée à l'API : c'est bien cette clé qui l'a chiffré.
-        var protectorWithTheKeyOfTheApi = new AesGcmTotpSecretProtector(apiStartedInMemoryForThisTest.EncryptionKeyOfTheTotpSecretsInTheseTests);
-        Assert.Equal(secretOfThePhoneGivenByTheApi, protectorWithTheKeyOfTheApi.DecryptSecretOfThisUserAccount(accountUsedByThisTwoFactorTest.EncryptedTotpSecret!, accountUsedByThisTwoFactorTest.Id));
+        var protector = new AesGcmTotpSecretProtector(api.TotpEncryptionKey);
+        Assert.Equal(secret, protector.Decrypt(account.EncryptedTotpSecret!, account.Id));
 
-        foreach (var backupCodeSavedInTheFakeRepository in apiStartedInMemoryForThisTest.RepositoryThatKeepsTwoFactorDataInMemory.SavedBackupCodes)
+        foreach (var backupCode in api.TwoFactorRepository.SavedBackupCodes)
         {
-            Assert.StartsWith("$argon2id$", backupCodeSavedInTheFakeRepository.CodeHash);
+            Assert.StartsWith(LibsodiumBackupCodeHasher.HashPrefix, backupCode.CodeHash);
         }
     }
 
     [Fact]
     public async Task WrongFirstCodeAnswersWithAFieldErrorAndActivatesNothing()
     {
-        using var apiStartedInMemoryForThisTest = new ApiFactoryWithFakeRepositoryAndEmails();
-        var accountUsedByThisTwoFactorTest = AddAccountToTheFakeRepositoryOfTheApi(apiStartedInMemoryForThisTest);
-        var clientThatKeepsTheCookiesOfTheBrowser = CreateClientThatKeepsCookiesLikeABrowser(apiStartedInMemoryForThisTest);
-        var csrfTokenOfTheLoggedInUser = await LogInWithPasswordThenAskForTheCsrfTokenAsync(clientThatKeepsTheCookiesOfTheBrowser);
-        var secretOfThePhoneGivenByTheApi = await StartActivationThenReadTheSecretAsync(clientThatKeepsTheCookiesOfTheBrowser, csrfTokenOfTheLoggedInUser);
+        using var api = new ApiFactoryWithFakes();
+        var account = await AddAccountAsync(api);
+        var browserClient = CreateBrowserClient(api);
+        var csrfToken = await LogInThenGetCsrfTokenAsync(browserClient);
+        var secret = await StartActivationThenReadSecretAsync(browserClient, csrfToken);
 
-        var answerToTheEndOfTheActivation = await SendSettingsRequestWithThisCsrfTokenAsync(clientThatKeepsTheCookiesOfTheBrowser, AddressOfTheActivationFinishEndpoint, new { code = FindCodeThatIsWrongNow(apiStartedInMemoryForThisTest, secretOfThePhoneGivenByTheApi) }, csrfTokenOfTheLoggedInUser);
+        var response = await SendSettingsRequestAsync(browserClient, ActivationFinishEndpoint, new { code = FindWrongCode(api, secret) }, csrfToken);
 
-        Assert.Equal(HttpStatusCode.BadRequest, answerToTheEndOfTheActivation.StatusCode);
-        Assert.Equal(TwoFactorCodeCheckingService.ErrorMessageForWrongTwoFactorCode, await ReadErrorMessageOfThisRequestFieldAsync(answerToTheEndOfTheActivation, "Code"));
-        Assert.False(accountUsedByThisTwoFactorTest.IsTwoFactorEnabled);
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal(ErrorMessages.WrongTwoFactorCode, await ReadFieldErrorAsync(response, "Code"));
+        Assert.False(account.IsTwoFactorEnabled);
     }
 
     [Fact]
     public async Task FinishingWithoutAnyStartAnswers409()
     {
-        using var apiStartedInMemoryForThisTest = new ApiFactoryWithFakeRepositoryAndEmails();
-        AddAccountToTheFakeRepositoryOfTheApi(apiStartedInMemoryForThisTest);
-        var clientThatKeepsTheCookiesOfTheBrowser = CreateClientThatKeepsCookiesLikeABrowser(apiStartedInMemoryForThisTest);
-        var csrfTokenOfTheLoggedInUser = await LogInWithPasswordThenAskForTheCsrfTokenAsync(clientThatKeepsTheCookiesOfTheBrowser);
+        using var api = new ApiFactoryWithFakes();
+        await AddAccountAsync(api);
+        var browserClient = CreateBrowserClient(api);
+        var csrfToken = await LogInThenGetCsrfTokenAsync(browserClient);
 
-        var answerToTheEndOfTheActivation = await SendSettingsRequestWithThisCsrfTokenAsync(clientThatKeepsTheCookiesOfTheBrowser, AddressOfTheActivationFinishEndpoint, new { code = "123456" }, csrfTokenOfTheLoggedInUser);
+        var response = await SendSettingsRequestAsync(browserClient, ActivationFinishEndpoint, new { code = "123456" }, csrfToken);
 
-        await CheckThatAnswerIsProblemWithThisExactTitleAsync(answerToTheEndOfTheActivation, HttpStatusCode.Conflict, TwoFactorActivationService.ErrorMessageForActivationThatMustRestart);
+        await AssertProblemTitleAsync(response, HttpStatusCode.Conflict, ErrorMessages.ActivationMustRestart);
     }
 
     // SS §4 : l'identifiant vient toujours de la session. Un champ ajouté à la requête ne change rien, et seuls les champs prévus sont lus.
     [Fact]
     public async Task FieldsAddedToTheRequestCannotActivateTheAccountOfSomeoneElse()
     {
-        using var apiStartedInMemoryForThisTest = new ApiFactoryWithFakeRepositoryAndEmails();
-        var accountOwnedByTheAttackerOfThisTest = AddAccountToTheFakeRepositoryOfTheApi(apiStartedInMemoryForThisTest);
-        var accountOwnedByTheVictimOfThisTest = AddAccountToTheFakeRepositoryOfTheApi(apiStartedInMemoryForThisTest, "victime@exemple.test");
-        var clientUsedByTheAttackerOfThisTest = CreateClientThatKeepsCookiesLikeABrowser(apiStartedInMemoryForThisTest);
-        var csrfTokenGivenToTheAttackerSession = await LogInWithPasswordThenAskForTheCsrfTokenAsync(clientUsedByTheAttackerOfThisTest);
+        using var api = new ApiFactoryWithFakes();
+        var attackerAccount = await AddAccountAsync(api);
+        var victimAccount = await AddAccountAsync(api, "victime@exemple.test");
+        var attackerClient = CreateBrowserClient(api);
+        var csrfToken = await LogInThenGetCsrfTokenAsync(attackerClient);
 
-        var answerToTheStartOfTheActivation = await SendSettingsRequestWithThisCsrfTokenAsync(clientUsedByTheAttackerOfThisTest, AddressOfTheActivationStartEndpoint, new { password = ValidPasswordChosenInTheseTests, userId = accountOwnedByTheVictimOfThisTest.Id, id = accountOwnedByTheVictimOfThisTest.Id, email = accountOwnedByTheVictimOfThisTest.Email }, csrfTokenGivenToTheAttackerSession);
-        var jsonDocumentOfTheStartAnswer = JsonDocument.Parse(await answerToTheStartOfTheActivation.Content.ReadAsStringAsync());
-        var secretOfThePhoneGivenByTheApi = jsonDocumentOfTheStartAnswer.RootElement.GetProperty("secret").GetString()!;
-        Assert.Contains("utilisateur%40exemple.test", jsonDocumentOfTheStartAnswer.RootElement.GetProperty("linkForTheAuthenticatorApplication").GetString());
+        var response = await SendSettingsRequestAsync(attackerClient, ActivationStartEndpoint, new { password = ValidPassword, userId = victimAccount.Id, id = victimAccount.Id, email = victimAccount.Email }, csrfToken);
+        var jsonDocument = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        var secret = jsonDocument.RootElement.GetProperty("secret").GetString()!;
+        Assert.Contains("utilisateur%40exemple.test", jsonDocument.RootElement.GetProperty("linkForTheAuthenticatorApplication").GetString());
 
-        await SendSettingsRequestWithThisCsrfTokenAsync(clientUsedByTheAttackerOfThisTest, AddressOfTheActivationFinishEndpoint, new { code = CalculateCodeShownOnThePhoneNow(apiStartedInMemoryForThisTest, secretOfThePhoneGivenByTheApi), userId = accountOwnedByTheVictimOfThisTest.Id }, csrfTokenGivenToTheAttackerSession);
+        await SendSettingsRequestAsync(attackerClient, ActivationFinishEndpoint, new { code = CalculateCurrentCode(api, secret), userId = victimAccount.Id }, csrfToken);
 
-        Assert.True(accountOwnedByTheAttackerOfThisTest.IsTwoFactorEnabled);
-        Assert.False(accountOwnedByTheVictimOfThisTest.IsTwoFactorEnabled);
-        Assert.Null(accountOwnedByTheVictimOfThisTest.EncryptedTotpSecret);
+        Assert.True(attackerAccount.IsTwoFactorEnabled);
+        Assert.False(victimAccount.IsTwoFactorEnabled);
+        Assert.Null(victimAccount.EncryptedTotpSecret);
     }
 
     // GR Auth : seul un changement de mot de passe ferme les autres sessions.
     [Fact]
     public async Task OtherSessionsOfTheAccountStayOpenAtActivation()
     {
-        using var apiStartedInMemoryForThisTest = new ApiFactoryWithFakeRepositoryAndEmails();
-        AddAccountToTheFakeRepositoryOfTheApi(apiStartedInMemoryForThisTest);
-        var clientOfTheOtherBrowserOfTheUser = CreateClientThatKeepsCookiesLikeABrowser(apiStartedInMemoryForThisTest);
-        await SendLoginRequestToTheApiAsync(clientOfTheOtherBrowserOfTheUser);
-        var clientThatKeepsTheCookiesOfTheBrowser = CreateClientThatKeepsCookiesLikeABrowser(apiStartedInMemoryForThisTest);
-        var csrfTokenOfTheLoggedInUser = await LogInWithPasswordThenAskForTheCsrfTokenAsync(clientThatKeepsTheCookiesOfTheBrowser);
-        var secretOfThePhoneGivenByTheApi = await StartActivationThenReadTheSecretAsync(clientThatKeepsTheCookiesOfTheBrowser, csrfTokenOfTheLoggedInUser);
+        using var api = new ApiFactoryWithFakes();
+        await AddAccountAsync(api);
+        var otherClient = CreateBrowserClient(api);
+        await SendLoginRequestAsync(otherClient);
+        var browserClient = CreateBrowserClient(api);
+        var csrfToken = await LogInThenGetCsrfTokenAsync(browserClient);
+        var secret = await StartActivationThenReadSecretAsync(browserClient, csrfToken);
 
-        await SendSettingsRequestWithThisCsrfTokenAsync(clientThatKeepsTheCookiesOfTheBrowser, AddressOfTheActivationFinishEndpoint, CreateBodyWithTheCodeOfThisSecret(apiStartedInMemoryForThisTest, secretOfThePhoneGivenByTheApi), csrfTokenOfTheLoggedInUser);
+        await SendSettingsRequestAsync(browserClient, ActivationFinishEndpoint, CreateCodeBody(api, secret), csrfToken);
 
-        var answerGivenToTheOtherBrowserOfTheUser = await clientOfTheOtherBrowserOfTheUser.GetAsync(AddressOfTheCsrfTokenEndpoint);
-        Assert.Equal(HttpStatusCode.OK, answerGivenToTheOtherBrowserOfTheUser.StatusCode);
+        var otherResponse = await otherClient.GetAsync(CsrfTokenEndpoint);
+        Assert.Equal(HttpStatusCode.OK, otherResponse.StatusCode);
     }
 
     // --- La désactivation
@@ -213,75 +214,75 @@ public class TwoFactorSettingsEndpointTests
     [Fact]
     public async Task RightPasswordAndCodeDeactivateAndTheNextLoginNoLongerAsksForACode()
     {
-        using var apiStartedInMemoryForThisTest = new ApiFactoryWithFakeRepositoryAndEmails();
-        var activatedAccountUsedByThisTest = AddActivatedAccountToTheFakeRepositoryOfTheApi(apiStartedInMemoryForThisTest);
-        var clientThatKeepsTheCookiesOfTheBrowser = CreateClientThatKeepsCookiesLikeABrowser(apiStartedInMemoryForThisTest);
-        var csrfTokenOfTheLoggedInUser = await LogInWithPasswordAndCodeThenAskForTheCsrfTokenAsync(apiStartedInMemoryForThisTest, clientThatKeepsTheCookiesOfTheBrowser, activatedAccountUsedByThisTest.SecretOfTheAuthenticatorApplication);
-        WaitForTheNextCodeOnThePhone(apiStartedInMemoryForThisTest);
+        using var api = new ApiFactoryWithFakes();
+        var activatedAccount = await AddActivatedAccountAsync(api);
+        var browserClient = CreateBrowserClient(api);
+        var csrfToken = await LogInWithCodeThenGetCsrfTokenAsync(api, browserClient, activatedAccount.Secret);
+        WaitForNextCode(api);
 
-        var answerToTheDeactivationOfTheTwoFactor = await SendSettingsRequestWithThisCsrfTokenAsync(clientThatKeepsTheCookiesOfTheBrowser, AddressOfTheTwoFactorDeactivationEndpoint, new { password = ValidPasswordChosenInTheseTests, code = CalculateCodeShownOnThePhoneNow(apiStartedInMemoryForThisTest, activatedAccountUsedByThisTest.SecretOfTheAuthenticatorApplication) }, csrfTokenOfTheLoggedInUser);
+        var deactivationResponse = await SendSettingsRequestAsync(browserClient, DeactivationEndpoint, new { password = ValidPassword, code = CalculateCurrentCode(api, activatedAccount.Secret) }, csrfToken);
 
-        Assert.Equal(HttpStatusCode.OK, answerToTheDeactivationOfTheTwoFactor.StatusCode);
-        var jsonDocumentOfTheApiAnswer = JsonDocument.Parse(await answerToTheDeactivationOfTheTwoFactor.Content.ReadAsStringAsync());
-        Assert.Equal(TwoFactorSettingsController.MessageSentWhenTheTwoFactorIsDeactivated, jsonDocumentOfTheApiAnswer.RootElement.GetProperty("message").GetString());
-        Assert.False(activatedAccountUsedByThisTest.UserAccount.IsTwoFactorEnabled);
-        Assert.Null(activatedAccountUsedByThisTest.UserAccount.EncryptedTotpSecret);
-        Assert.Empty(apiStartedInMemoryForThisTest.RepositoryThatKeepsTwoFactorDataInMemory.SavedBackupCodes);
+        Assert.Equal(HttpStatusCode.OK, deactivationResponse.StatusCode);
+        var jsonDocument = JsonDocument.Parse(await deactivationResponse.Content.ReadAsStringAsync());
+        Assert.Equal(TwoFactorSettingsController.DeactivatedMessage, jsonDocument.RootElement.GetProperty("message").GetString());
+        Assert.False(activatedAccount.UserAccount.IsTwoFactorEnabled);
+        Assert.Null(activatedAccount.UserAccount.EncryptedTotpSecret);
+        Assert.Empty(api.TwoFactorRepository.SavedBackupCodes);
 
-        var answerToTheNextLoginOfTheAccount = await SendLoginRequestToTheApiAsync(clientThatKeepsTheCookiesOfTheBrowser);
-        var jsonDocumentOfTheNextLogin = JsonDocument.Parse(await answerToTheNextLoginOfTheAccount.Content.ReadAsStringAsync());
-        Assert.False(jsonDocumentOfTheNextLogin.RootElement.GetProperty("isTwoFactorCodeRequired").GetBoolean());
+        var loginResponse = await SendLoginRequestAsync(browserClient);
+        var loginDocument = JsonDocument.Parse(await loginResponse.Content.ReadAsStringAsync());
+        Assert.False(loginDocument.RootElement.GetProperty("isTwoFactorCodeRequired").GetBoolean());
     }
 
     // La réponse ne dit pas lequel des deux champs est faux : le message n'est rattaché à aucun champ.
     [Fact]
     public async Task WrongPasswordOrCodeAnswersTheSameThingWithoutNamingTheField()
     {
-        using var apiStartedInMemoryForThisTest = new ApiFactoryWithFakeRepositoryAndEmails();
-        var activatedAccountUsedByThisTest = AddActivatedAccountToTheFakeRepositoryOfTheApi(apiStartedInMemoryForThisTest);
-        var clientThatKeepsTheCookiesOfTheBrowser = CreateClientThatKeepsCookiesLikeABrowser(apiStartedInMemoryForThisTest);
-        var csrfTokenOfTheLoggedInUser = await LogInWithPasswordAndCodeThenAskForTheCsrfTokenAsync(apiStartedInMemoryForThisTest, clientThatKeepsTheCookiesOfTheBrowser, activatedAccountUsedByThisTest.SecretOfTheAuthenticatorApplication);
-        WaitForTheNextCodeOnThePhone(apiStartedInMemoryForThisTest);
+        using var api = new ApiFactoryWithFakes();
+        var activatedAccount = await AddActivatedAccountAsync(api);
+        var browserClient = CreateBrowserClient(api);
+        var csrfToken = await LogInWithCodeThenGetCsrfTokenAsync(api, browserClient, activatedAccount.Secret);
+        WaitForNextCode(api);
 
-        var answerGivenWithTheWrongAccountPassword = await SendSettingsRequestWithThisCsrfTokenAsync(clientThatKeepsTheCookiesOfTheBrowser, AddressOfTheTwoFactorDeactivationEndpoint, new { password = WrongPasswordTypedInTheLoginTests, code = CalculateCodeShownOnThePhoneNow(apiStartedInMemoryForThisTest, activatedAccountUsedByThisTest.SecretOfTheAuthenticatorApplication) }, csrfTokenOfTheLoggedInUser);
-        var answerGivenWithTheWrongTwoFactorCode = await SendSettingsRequestWithThisCsrfTokenAsync(clientThatKeepsTheCookiesOfTheBrowser, AddressOfTheTwoFactorDeactivationEndpoint, new { password = ValidPasswordChosenInTheseTests, code = FindCodeThatIsWrongNow(apiStartedInMemoryForThisTest, activatedAccountUsedByThisTest.SecretOfTheAuthenticatorApplication) }, csrfTokenOfTheLoggedInUser);
+        var wrongPasswordResponse = await SendSettingsRequestAsync(browserClient, DeactivationEndpoint, new { password = WrongPassword, code = CalculateCurrentCode(api, activatedAccount.Secret) }, csrfToken);
+        var wrongCodeResponse = await SendSettingsRequestAsync(browserClient, DeactivationEndpoint, new { password = ValidPassword, code = FindWrongCode(api, activatedAccount.Secret) }, csrfToken);
 
-        Assert.Equal(HttpStatusCode.BadRequest, answerGivenWithTheWrongAccountPassword.StatusCode);
-        Assert.Equal(HttpStatusCode.BadRequest, answerGivenWithTheWrongTwoFactorCode.StatusCode);
-        Assert.Equal(TwoFactorDeactivationService.ErrorMessageForWrongPasswordOrCode, await ReadErrorMessageOfThisRequestFieldAsync(answerGivenWithTheWrongAccountPassword, ApiErrorConfiguration.KeyOfTheErrorsOutsideTheRequestFields));
-        Assert.Equal(TwoFactorDeactivationService.ErrorMessageForWrongPasswordOrCode, await ReadErrorMessageOfThisRequestFieldAsync(answerGivenWithTheWrongTwoFactorCode, ApiErrorConfiguration.KeyOfTheErrorsOutsideTheRequestFields));
-        Assert.True(activatedAccountUsedByThisTest.UserAccount.IsTwoFactorEnabled);
+        Assert.Equal(HttpStatusCode.BadRequest, wrongPasswordResponse.StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, wrongCodeResponse.StatusCode);
+        Assert.Equal(ErrorMessages.WrongPasswordOrCode, await ReadFieldErrorAsync(wrongPasswordResponse, ApiErrorConfiguration.GeneralErrorsKey));
+        Assert.Equal(ErrorMessages.WrongPasswordOrCode, await ReadFieldErrorAsync(wrongCodeResponse, ApiErrorConfiguration.GeneralErrorsKey));
+        Assert.True(activatedAccount.UserAccount.IsTwoFactorEnabled);
     }
 
     [Fact]
     public async Task AccountWithoutTwoFactorAnswers409()
     {
-        using var apiStartedInMemoryForThisTest = new ApiFactoryWithFakeRepositoryAndEmails();
-        AddAccountToTheFakeRepositoryOfTheApi(apiStartedInMemoryForThisTest);
-        var clientThatKeepsTheCookiesOfTheBrowser = CreateClientThatKeepsCookiesLikeABrowser(apiStartedInMemoryForThisTest);
-        var csrfTokenOfTheLoggedInUser = await LogInWithPasswordThenAskForTheCsrfTokenAsync(clientThatKeepsTheCookiesOfTheBrowser);
+        using var api = new ApiFactoryWithFakes();
+        await AddAccountAsync(api);
+        var browserClient = CreateBrowserClient(api);
+        var csrfToken = await LogInThenGetCsrfTokenAsync(browserClient);
 
-        var answerToTheDeactivationOfTheTwoFactor = await SendSettingsRequestWithThisCsrfTokenAsync(clientThatKeepsTheCookiesOfTheBrowser, AddressOfTheTwoFactorDeactivationEndpoint, new { password = ValidPasswordChosenInTheseTests, code = "123456" }, csrfTokenOfTheLoggedInUser);
+        var deactivationResponse = await SendSettingsRequestAsync(browserClient, DeactivationEndpoint, new { password = ValidPassword, code = "123456" }, csrfToken);
 
-        await CheckThatAnswerIsProblemWithThisExactTitleAsync(answerToTheDeactivationOfTheTwoFactor, HttpStatusCode.Conflict, TwoFactorDeactivationService.ErrorMessageForTwoFactorNotEnabled);
+        await AssertProblemTitleAsync(deactivationResponse, HttpStatusCode.Conflict, ErrorMessages.TwoFactorNotEnabled);
     }
 
     [Theory]
-    [InlineData(AddressOfTheActivationStartEndpoint, "Password", "Le mot de passe est obligatoire.")]
-    [InlineData(AddressOfTheActivationFinishEndpoint, "Code", "Le code est obligatoire.")]
-    [InlineData(AddressOfTheTwoFactorDeactivationEndpoint, "Password", "Le mot de passe est obligatoire.")]
-    [InlineData(AddressOfTheTwoFactorDeactivationEndpoint, "Code", "Le code est obligatoire.")]
-    public async Task MissingFieldAnswersWithItsStableFieldError(string addressOfTheSettingsEndpointBeingTested, string nameOfTheFieldLeftOut, string messageExpectedForTheFieldLeftOut)
+    [InlineData(ActivationStartEndpoint, "Password", "Le mot de passe est obligatoire.")]
+    [InlineData(ActivationFinishEndpoint, "Code", "Le code est obligatoire.")]
+    [InlineData(DeactivationEndpoint, "Password", "Le mot de passe est obligatoire.")]
+    [InlineData(DeactivationEndpoint, "Code", "Le code est obligatoire.")]
+    public async Task MissingFieldAnswersWithItsStableFieldError(string address, string fieldName, string message)
     {
-        using var apiStartedInMemoryForThisTest = new ApiFactoryWithFakeRepositoryAndEmails();
-        AddAccountToTheFakeRepositoryOfTheApi(apiStartedInMemoryForThisTest);
-        var clientThatKeepsTheCookiesOfTheBrowser = CreateClientThatKeepsCookiesLikeABrowser(apiStartedInMemoryForThisTest);
-        var csrfTokenOfTheLoggedInUser = await LogInWithPasswordThenAskForTheCsrfTokenAsync(clientThatKeepsTheCookiesOfTheBrowser);
+        using var api = new ApiFactoryWithFakes();
+        await AddAccountAsync(api);
+        var browserClient = CreateBrowserClient(api);
+        var csrfToken = await LogInThenGetCsrfTokenAsync(browserClient);
 
-        var answerToTheRequestOnTheSettingsRoute = await SendSettingsRequestWithThisCsrfTokenAsync(clientThatKeepsTheCookiesOfTheBrowser, addressOfTheSettingsEndpointBeingTested, new { }, csrfTokenOfTheLoggedInUser);
+        var response = await SendSettingsRequestAsync(browserClient, address, new { }, csrfToken);
 
-        Assert.Equal(HttpStatusCode.BadRequest, answerToTheRequestOnTheSettingsRoute.StatusCode);
-        Assert.Equal(messageExpectedForTheFieldLeftOut, await ReadErrorMessageOfThisRequestFieldAsync(answerToTheRequestOnTheSettingsRoute, nameOfTheFieldLeftOut));
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal(message, await ReadFieldErrorAsync(response, fieldName));
     }
 
     // --- La limite de débit
@@ -290,37 +291,37 @@ public class TwoFactorSettingsEndpointTests
     [Fact]
     public async Task TheThreeRoutesShareOneLimitOfTenRequestsPerAddress()
     {
-        using var apiStartedInMemoryForThisTest = new ApiFactoryWithFakeRepositoryAndEmails();
-        AddAccountToTheFakeRepositoryOfTheApi(apiStartedInMemoryForThisTest);
-        var clientThatKeepsTheCookiesOfTheBrowser = CreateClientThatKeepsCookiesLikeABrowser(apiStartedInMemoryForThisTest);
-        var csrfTokenOfTheLoggedInUser = await LogInWithPasswordThenAskForTheCsrfTokenAsync(clientThatKeepsTheCookiesOfTheBrowser);
+        using var api = new ApiFactoryWithFakes();
+        await AddAccountAsync(api);
+        var browserClient = CreateBrowserClient(api);
+        var csrfToken = await LogInThenGetCsrfTokenAsync(browserClient);
 
-        for (var numberOfTheRequestBeingSent = 1; numberOfTheRequestBeingSent <= 4; numberOfTheRequestBeingSent++)
+        for (var requestNumber = 1; requestNumber <= 4; requestNumber++)
         {
-            await SendSettingsRequestWithThisCsrfTokenAsync(clientThatKeepsTheCookiesOfTheBrowser, AddressOfTheActivationStartEndpoint, new { password = WrongPasswordTypedInTheLoginTests }, csrfTokenOfTheLoggedInUser);
-            await SendSettingsRequestWithThisCsrfTokenAsync(clientThatKeepsTheCookiesOfTheBrowser, AddressOfTheTwoFactorDeactivationEndpoint, new { password = WrongPasswordTypedInTheLoginTests, code = "123456" }, csrfTokenOfTheLoggedInUser);
+            await SendSettingsRequestAsync(browserClient, ActivationStartEndpoint, new { password = WrongPassword }, csrfToken);
+            await SendSettingsRequestAsync(browserClient, DeactivationEndpoint, new { password = WrongPassword, code = "123456" }, csrfToken);
         }
 
-        var answerToTheNinthRequestOfTheLimit = await SendSettingsRequestWithThisCsrfTokenAsync(clientThatKeepsTheCookiesOfTheBrowser, AddressOfTheActivationFinishEndpoint, new { code = "123456" }, csrfTokenOfTheLoggedInUser);
-        var answerToTheTenthRequestOfTheLimit = await SendSettingsRequestWithThisCsrfTokenAsync(clientThatKeepsTheCookiesOfTheBrowser, AddressOfTheActivationFinishEndpoint, new { code = "123456" }, csrfTokenOfTheLoggedInUser);
-        Assert.Equal(HttpStatusCode.Conflict, answerToTheNinthRequestOfTheLimit.StatusCode);
-        Assert.Equal(HttpStatusCode.Conflict, answerToTheTenthRequestOfTheLimit.StatusCode);
+        var ninthResponse = await SendSettingsRequestAsync(browserClient, ActivationFinishEndpoint, new { code = "123456" }, csrfToken);
+        var tenthResponse = await SendSettingsRequestAsync(browserClient, ActivationFinishEndpoint, new { code = "123456" }, csrfToken);
+        Assert.Equal(HttpStatusCode.Conflict, ninthResponse.StatusCode);
+        Assert.Equal(HttpStatusCode.Conflict, tenthResponse.StatusCode);
 
-        var answerToTheRequestOverTheLimit = await SendSettingsRequestWithThisCsrfTokenAsync(clientThatKeepsTheCookiesOfTheBrowser, AddressOfTheActivationStartEndpoint, new { password = ValidPasswordChosenInTheseTests }, csrfTokenOfTheLoggedInUser);
-        await CheckThatAnswerIsProblemWithThisExactTitleAsync(answerToTheRequestOverTheLimit, HttpStatusCode.TooManyRequests, "Trop de demandes. Réessaie plus tard.");
+        var overLimitResponse = await SendSettingsRequestAsync(browserClient, ActivationStartEndpoint, new { password = ValidPassword }, csrfToken);
+        await AssertProblemTitleAsync(overLimitResponse, HttpStatusCode.TooManyRequests, "Trop de demandes. Réessaie plus tard.");
 
-        clientThatKeepsTheCookiesOfTheBrowser.DefaultRequestHeaders.Add(StartupFilterThatReadsTheVisitorAddress.NameOfTheHeaderGivingTheVisitorAddress, "203.0.113.20");
-        var answerGivenToRequestFromAnotherAddress = await SendSettingsRequestWithThisCsrfTokenAsync(clientThatKeepsTheCookiesOfTheBrowser, AddressOfTheActivationStartEndpoint, new { password = ValidPasswordChosenInTheseTests }, csrfTokenOfTheLoggedInUser);
-        Assert.Equal(HttpStatusCode.OK, answerGivenToRequestFromAnotherAddress.StatusCode);
+        browserClient.DefaultRequestHeaders.Add(VisitorAddressStartupFilter.VisitorAddressHeader, "203.0.113.20");
+        var otherAddressResponse = await SendSettingsRequestAsync(browserClient, ActivationStartEndpoint, new { password = ValidPassword }, csrfToken);
+        Assert.Equal(HttpStatusCode.OK, otherAddressResponse.StatusCode);
     }
 
     [Fact]
     public void LimitOfTheSettingsRequestsIsWrittenWithItsExactValues()
     {
-        var optionsOfTheSettingsRequestsLimit = RateLimitingConfiguration.CreateOptionsOfTheTwoFactorSettingsRequestsLimit();
+        var settingsLimit = RateLimitingConfiguration.CreateTwoFactorSettingsLimit();
 
-        Assert.Equal(10, optionsOfTheSettingsRequestsLimit.PermitLimit);
-        Assert.Equal(TimeSpan.FromHours(1), optionsOfTheSettingsRequestsLimit.Window);
+        Assert.Equal(10, settingsLimit.PermitLimit);
+        Assert.Equal(TimeSpan.FromHours(1), settingsLimit.Window);
     }
 
     // --- Le parcours complet
@@ -329,77 +330,77 @@ public class TwoFactorSettingsEndpointTests
     [Fact]
     public async Task WholeLifeCycleOfTheTwoFactorWorksThroughTheApi()
     {
-        using var apiStartedInMemoryForThisTest = new ApiFactoryWithFakeRepositoryAndEmails();
-        var accountUsedByThisTwoFactorTest = AddAccountToTheFakeRepositoryOfTheApi(apiStartedInMemoryForThisTest);
-        var clientThatKeepsTheCookiesOfTheBrowser = CreateClientThatKeepsCookiesLikeABrowser(apiStartedInMemoryForThisTest);
+        using var api = new ApiFactoryWithFakes();
+        var account = await AddAccountAsync(api);
+        var browserClient = CreateBrowserClient(api);
 
-        var csrfTokenOfTheFirstSession = await LogInWithPasswordThenAskForTheCsrfTokenAsync(clientThatKeepsTheCookiesOfTheBrowser);
-        var secretOfTheFirstPhoneOfTheUser = await StartActivationThenReadTheSecretAsync(clientThatKeepsTheCookiesOfTheBrowser, csrfTokenOfTheFirstSession);
-        var answerToTheActivationOfTheTwoFactor = await SendSettingsRequestWithThisCsrfTokenAsync(clientThatKeepsTheCookiesOfTheBrowser, AddressOfTheActivationFinishEndpoint, CreateBodyWithTheCodeOfThisSecret(apiStartedInMemoryForThisTest, secretOfTheFirstPhoneOfTheUser), csrfTokenOfTheFirstSession);
-        var backupCodesGivenToTheUserAtActivation = JsonDocument.Parse(await answerToTheActivationOfTheTwoFactor.Content.ReadAsStringAsync()).RootElement.GetProperty("backupCodes");
-        await SendLogoutRequestWithThisCsrfTokenAsync(clientThatKeepsTheCookiesOfTheBrowser, csrfTokenOfTheFirstSession);
+        var firstCsrfToken = await LogInThenGetCsrfTokenAsync(browserClient);
+        var firstPhoneSecret = await StartActivationThenReadSecretAsync(browserClient, firstCsrfToken);
+        var activationResponse = await SendSettingsRequestAsync(browserClient, ActivationFinishEndpoint, CreateCodeBody(api, firstPhoneSecret), firstCsrfToken);
+        var givenCodes = JsonDocument.Parse(await activationResponse.Content.ReadAsStringAsync()).RootElement.GetProperty("backupCodes");
+        await SendLogoutRequestAsync(browserClient, firstCsrfToken);
 
         // Le téléphone est perdu : un code de secours permet d'entrer, puis d'en désactiver l'usage avec un autre.
-        await SendLoginRequestToTheApiAsync(clientThatKeepsTheCookiesOfTheBrowser);
-        var answerToTheBackupCodeOfTheUser = await SendTwoFactorLoginRequestToTheApiAsync(clientThatKeepsTheCookiesOfTheBrowser, backupCodesGivenToTheUserAtActivation[0].GetString()!);
-        Assert.Equal(HttpStatusCode.OK, answerToTheBackupCodeOfTheUser.StatusCode);
+        await SendLoginRequestAsync(browserClient);
+        var backupCodeResponse = await SendTwoFactorLoginRequestAsync(browserClient, givenCodes[0].GetString()!);
+        Assert.Equal(HttpStatusCode.OK, backupCodeResponse.StatusCode);
 
-        var csrfTokenOfTheSecondSession = await AskForTheCsrfTokenOfTheLoggedInUserAsync(clientThatKeepsTheCookiesOfTheBrowser);
-        var answerToTheDeactivationOfTheTwoFactor = await SendSettingsRequestWithThisCsrfTokenAsync(clientThatKeepsTheCookiesOfTheBrowser, AddressOfTheTwoFactorDeactivationEndpoint, new { password = ValidPasswordChosenInTheseTests, code = backupCodesGivenToTheUserAtActivation[1].GetString() }, csrfTokenOfTheSecondSession);
-        Assert.Equal(HttpStatusCode.OK, answerToTheDeactivationOfTheTwoFactor.StatusCode);
+        var secondCsrfToken = await GetCsrfTokenAsync(browserClient);
+        var deactivationResponse = await SendSettingsRequestAsync(browserClient, DeactivationEndpoint, new { password = ValidPassword, code = givenCodes[1].GetString() }, secondCsrfToken);
+        Assert.Equal(HttpStatusCode.OK, deactivationResponse.StatusCode);
 
         // Le nouveau téléphone : un nouveau secret et 10 nouveaux codes.
-        WaitForTheNextCodeOnThePhone(apiStartedInMemoryForThisTest);
-        var secretOfTheSecondPhoneOfTheUser = await StartActivationThenReadTheSecretAsync(clientThatKeepsTheCookiesOfTheBrowser, csrfTokenOfTheSecondSession);
-        var answerToTheSecondActivationOfTheAccount = await SendSettingsRequestWithThisCsrfTokenAsync(clientThatKeepsTheCookiesOfTheBrowser, AddressOfTheActivationFinishEndpoint, CreateBodyWithTheCodeOfThisSecret(apiStartedInMemoryForThisTest, secretOfTheSecondPhoneOfTheUser), csrfTokenOfTheSecondSession);
-        Assert.Equal(HttpStatusCode.OK, answerToTheSecondActivationOfTheAccount.StatusCode);
-        Assert.NotEqual(secretOfTheFirstPhoneOfTheUser, secretOfTheSecondPhoneOfTheUser);
-        Assert.True(accountUsedByThisTwoFactorTest.IsTwoFactorEnabled);
-        Assert.Equal(10, apiStartedInMemoryForThisTest.RepositoryThatKeepsTwoFactorDataInMemory.SavedBackupCodes.Count);
+        WaitForNextCode(api);
+        var secondPhoneSecret = await StartActivationThenReadSecretAsync(browserClient, secondCsrfToken);
+        var reactivationResponse = await SendSettingsRequestAsync(browserClient, ActivationFinishEndpoint, CreateCodeBody(api, secondPhoneSecret), secondCsrfToken);
+        Assert.Equal(HttpStatusCode.OK, reactivationResponse.StatusCode);
+        Assert.NotEqual(firstPhoneSecret, secondPhoneSecret);
+        Assert.True(account.IsTwoFactorEnabled);
+        Assert.Equal(10, api.TwoFactorRepository.SavedBackupCodes.Count);
 
-        Assert.Equal(1, CountEventsOfTheFakeJournal(apiStartedInMemoryForThisTest, SecurityEventType.TwoFactorDeactivation, SecurityEventResult.Success));
-        Assert.Equal(2, CountEventsOfTheFakeJournal(apiStartedInMemoryForThisTest, SecurityEventType.TwoFactorActivation, SecurityEventResult.Success));
+        Assert.Equal(1, CountJournalEvents(api, SecurityEventType.TwoFactorDeactivation, SecurityEventResult.Success));
+        Assert.Equal(2, CountJournalEvents(api, SecurityEventType.TwoFactorActivation, SecurityEventResult.Success));
     }
 
     // SS §11 : le journal note l'adresse IP de chaque requête de réglage, pour un refus comme pour une réussite.
     [Fact]
     public async Task JournalKeepsTheIpAddressOfEverySettingsRequest()
     {
-        using var apiStartedInMemoryForThisTest = new ApiFactoryWithFakeRepositoryAndEmails();
-        AddAccountToTheFakeRepositoryOfTheApi(apiStartedInMemoryForThisTest);
-        var clientThatKeepsTheCookiesOfTheBrowser = CreateClientThatKeepsCookiesLikeABrowser(apiStartedInMemoryForThisTest);
-        clientThatKeepsTheCookiesOfTheBrowser.DefaultRequestHeaders.Add(StartupFilterThatReadsTheVisitorAddress.NameOfTheHeaderGivingTheVisitorAddress, "203.0.113.7");
-        var csrfTokenOfTheLoggedInUser = await LogInWithPasswordThenAskForTheCsrfTokenAsync(clientThatKeepsTheCookiesOfTheBrowser);
-        var numberOfEventsBeforeTheSettingsRequests = apiStartedInMemoryForThisTest.RepositoryThatKeepsSecurityEventsInMemory.SavedSecurityEvents.Count;
+        using var api = new ApiFactoryWithFakes();
+        await AddAccountAsync(api);
+        var browserClient = CreateBrowserClient(api);
+        browserClient.DefaultRequestHeaders.Add(VisitorAddressStartupFilter.VisitorAddressHeader, "203.0.113.7");
+        var csrfToken = await LogInThenGetCsrfTokenAsync(browserClient);
+        var eventCount = api.SecurityEventRepository.SavedSecurityEvents.Count;
 
-        await SendSettingsRequestWithThisCsrfTokenAsync(clientThatKeepsTheCookiesOfTheBrowser, AddressOfTheActivationStartEndpoint, new { password = WrongPasswordTypedInTheLoginTests }, csrfTokenOfTheLoggedInUser);
-        var secretOfThePhoneGivenByTheApi = await StartActivationThenReadTheSecretAsync(clientThatKeepsTheCookiesOfTheBrowser, csrfTokenOfTheLoggedInUser);
-        await SendSettingsRequestWithThisCsrfTokenAsync(clientThatKeepsTheCookiesOfTheBrowser, AddressOfTheActivationFinishEndpoint, new { code = FindCodeThatIsWrongNow(apiStartedInMemoryForThisTest, secretOfThePhoneGivenByTheApi) }, csrfTokenOfTheLoggedInUser);
-        await SendSettingsRequestWithThisCsrfTokenAsync(clientThatKeepsTheCookiesOfTheBrowser, AddressOfTheActivationFinishEndpoint, CreateBodyWithTheCodeOfThisSecret(apiStartedInMemoryForThisTest, secretOfThePhoneGivenByTheApi), csrfTokenOfTheLoggedInUser);
-        await SendSettingsRequestWithThisCsrfTokenAsync(clientThatKeepsTheCookiesOfTheBrowser, AddressOfTheTwoFactorDeactivationEndpoint, new { password = WrongPasswordTypedInTheLoginTests, code = "123456" }, csrfTokenOfTheLoggedInUser);
+        await SendSettingsRequestAsync(browserClient, ActivationStartEndpoint, new { password = WrongPassword }, csrfToken);
+        var secret = await StartActivationThenReadSecretAsync(browserClient, csrfToken);
+        await SendSettingsRequestAsync(browserClient, ActivationFinishEndpoint, new { code = FindWrongCode(api, secret) }, csrfToken);
+        await SendSettingsRequestAsync(browserClient, ActivationFinishEndpoint, CreateCodeBody(api, secret), csrfToken);
+        await SendSettingsRequestAsync(browserClient, DeactivationEndpoint, new { password = WrongPassword, code = "123456" }, csrfToken);
 
-        var securityEventsSavedByTheseRequests = apiStartedInMemoryForThisTest.RepositoryThatKeepsSecurityEventsInMemory.SavedSecurityEvents.Skip(numberOfEventsBeforeTheSettingsRequests).ToList();
-        Assert.Equal(4, securityEventsSavedByTheseRequests.Count);
-        foreach (var securityEventSavedByOneRequest in securityEventsSavedByTheseRequests)
+        var securityEvents = api.SecurityEventRepository.SavedSecurityEvents.Skip(eventCount).ToList();
+        Assert.Equal(4, securityEvents.Count);
+        foreach (var securityEvent in securityEvents)
         {
-            Assert.Equal(IPAddress.Parse("203.0.113.7"), securityEventSavedByOneRequest.IpAddress);
+            Assert.Equal(IPAddress.Parse("203.0.113.7"), securityEvent.IpAddress);
         }
     }
 
     // Compte les événements de ce type et de ce résultat dans le faux journal de l'API.
-    private static int CountEventsOfTheFakeJournal(ApiFactoryWithFakeRepositoryAndEmails apiStartedInMemoryForThisTest, SecurityEventType typeOfTheEventsToCount, SecurityEventResult resultOfTheEventsToCount)
+    private static int CountJournalEvents(ApiFactoryWithFakes api, SecurityEventType type, SecurityEventResult result)
     {
-        var numberOfEventsFoundInTheJournal = 0;
+        var eventCount = 0;
 
-        foreach (var securityEventKeptInTheJournal in apiStartedInMemoryForThisTest.RepositoryThatKeepsSecurityEventsInMemory.SavedSecurityEvents)
+        foreach (var securityEvent in api.SecurityEventRepository.SavedSecurityEvents)
         {
-            if (securityEventKeptInTheJournal.Type == typeOfTheEventsToCount && securityEventKeptInTheJournal.Result == resultOfTheEventsToCount)
+            if (securityEvent.Type == type && securityEvent.Result == result)
             {
-                numberOfEventsFoundInTheJournal = numberOfEventsFoundInTheJournal + 1;
+                eventCount = eventCount + 1;
             }
         }
 
-        return numberOfEventsFoundInTheJournal;
+        return eventCount;
     }
 
     // --- Le journal technique
@@ -408,24 +409,24 @@ public class TwoFactorSettingsEndpointTests
     [Fact]
     public async Task TechnicalLogNeverContainsTheSecretOrTheCodesOfTheActivation()
     {
-        using var apiWithTheMostDetailedLog = new ApiFactoryLoggingEverything();
-        AddAccountToTheFakeRepositoryOfTheApi(apiWithTheMostDetailedLog);
-        var clientThatKeepsTheCookiesOfTheBrowser = CreateClientThatKeepsCookiesLikeABrowser(apiWithTheMostDetailedLog);
-        var csrfTokenOfTheLoggedInUser = await LogInWithPasswordThenAskForTheCsrfTokenAsync(clientThatKeepsTheCookiesOfTheBrowser);
-        var secretOfThePhoneGivenByTheApi = await StartActivationThenReadTheSecretAsync(clientThatKeepsTheCookiesOfTheBrowser, csrfTokenOfTheLoggedInUser);
-        var firstCodeTypedByTheUserAtActivation = CalculateCodeShownOnThePhoneNow(apiWithTheMostDetailedLog, secretOfThePhoneGivenByTheApi);
+        using var api = new ApiFactoryLoggingEverything();
+        await AddAccountAsync(api);
+        var browserClient = CreateBrowserClient(api);
+        var csrfToken = await LogInThenGetCsrfTokenAsync(browserClient);
+        var secret = await StartActivationThenReadSecretAsync(browserClient, csrfToken);
+        var firstCode = CalculateCurrentCode(api, secret);
 
-        var answerToTheActivationOfTheTwoFactor = await SendSettingsRequestWithThisCsrfTokenAsync(clientThatKeepsTheCookiesOfTheBrowser, AddressOfTheActivationFinishEndpoint, new { code = firstCodeTypedByTheUserAtActivation }, csrfTokenOfTheLoggedInUser);
-        var backupCodesGivenToTheUserAtActivation = JsonDocument.Parse(await answerToTheActivationOfTheTwoFactor.Content.ReadAsStringAsync()).RootElement.GetProperty("backupCodes");
+        var activationResponse = await SendSettingsRequestAsync(browserClient, ActivationFinishEndpoint, new { code = firstCode }, csrfToken);
+        var givenCodes = JsonDocument.Parse(await activationResponse.Content.ReadAsStringAsync()).RootElement.GetProperty("backupCodes");
 
-        var textOfTheWholeTechnicalLog = string.Join("\n", apiWithTheMostDetailedLog.LoggerThatKeepsTheMessagesInMemory.MessagesWrittenInTheLog);
-        Assert.NotEmpty(textOfTheWholeTechnicalLog);
-        Assert.DoesNotContain(secretOfThePhoneGivenByTheApi, textOfTheWholeTechnicalLog);
-        Assert.DoesNotContain(firstCodeTypedByTheUserAtActivation, textOfTheWholeTechnicalLog);
-        Assert.DoesNotContain(ValidPasswordChosenInTheseTests, textOfTheWholeTechnicalLog);
-        foreach (var backupCodeGivenToTheUserAtActivation in backupCodesGivenToTheUserAtActivation.EnumerateArray())
+        var logText = string.Join("\n", api.LoggerProvider.Messages);
+        Assert.NotEmpty(logText);
+        Assert.DoesNotContain(secret, logText);
+        Assert.DoesNotContain(firstCode, logText);
+        Assert.DoesNotContain(ValidPassword, logText);
+        foreach (var backupCode in givenCodes.EnumerateArray())
         {
-            Assert.DoesNotContain(backupCodeGivenToTheUserAtActivation.GetString()!, textOfTheWholeTechnicalLog);
+            Assert.DoesNotContain(backupCode.GetString()!, logText);
         }
     }
 
@@ -433,17 +434,17 @@ public class TwoFactorSettingsEndpointTests
     [Fact]
     public async Task DatabaseFailureDuringTheActivationAnswersAGenericErrorInProduction()
     {
-        using var apiStartedLikeInProductionForThisTest = new ApiFactoryRunningLikeInProduction();
-        var accountUsedByThisTwoFactorTest = AddAccountToTheFakeRepositoryOfTheApi(apiStartedLikeInProductionForThisTest);
-        var clientThatKeepsTheCookiesOfTheBrowser = CreateClientThatKeepsCookiesLikeABrowser(apiStartedLikeInProductionForThisTest);
-        var csrfTokenOfTheLoggedInUser = await LogInWithPasswordThenAskForTheCsrfTokenAsync(clientThatKeepsTheCookiesOfTheBrowser);
-        var secretOfThePhoneGivenByTheApi = await StartActivationThenReadTheSecretAsync(clientThatKeepsTheCookiesOfTheBrowser, csrfTokenOfTheLoggedInUser);
-        apiStartedLikeInProductionForThisTest.RepositoryThatKeepsTwoFactorDataInMemory.DatabaseIsDownWhileSavingTheSettings = true;
+        using var productionApi = new ApiFactoryInProduction();
+        var account = await AddAccountAsync(productionApi);
+        var browserClient = CreateBrowserClient(productionApi);
+        var csrfToken = await LogInThenGetCsrfTokenAsync(browserClient);
+        var secret = await StartActivationThenReadSecretAsync(browserClient, csrfToken);
+        productionApi.TwoFactorRepository.FailsWhenSavingSettings = true;
 
-        var answerGivenDuringTheSimulatedFailure = await SendSettingsRequestWithThisCsrfTokenAsync(clientThatKeepsTheCookiesOfTheBrowser, AddressOfTheActivationFinishEndpoint, CreateBodyWithTheCodeOfThisSecret(apiStartedLikeInProductionForThisTest, secretOfThePhoneGivenByTheApi), csrfTokenOfTheLoggedInUser);
+        var response = await SendSettingsRequestAsync(browserClient, ActivationFinishEndpoint, CreateCodeBody(productionApi, secret), csrfToken);
 
-        await CheckThatAnswerIsProblemWithThisExactTitleAsync(answerGivenDuringTheSimulatedFailure, HttpStatusCode.InternalServerError, "Une erreur est survenue. Réessaie plus tard.");
-        Assert.DoesNotContain(FakeTwoFactorAuthenticationRepository.TechnicalDetailOfTheSimulatedTwoFactorFailure, await answerGivenDuringTheSimulatedFailure.Content.ReadAsStringAsync());
-        Assert.False(accountUsedByThisTwoFactorTest.IsTwoFactorEnabled);
+        await AssertProblemTitleAsync(response, HttpStatusCode.InternalServerError, "Une erreur est survenue. Réessaie plus tard.");
+        Assert.DoesNotContain(FakeTwoFactorAuthenticationRepository.FailureDetail, await response.Content.ReadAsStringAsync());
+        Assert.False(account.IsTwoFactorEnabled);
     }
 }

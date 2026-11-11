@@ -9,31 +9,34 @@ namespace WalletFlow.Infrastructure.Persistence.TableConfigurations.UsersAndSecu
 public class EmailTokenTableConfiguration : IEntityTypeConfiguration<EmailToken>
 {
     // Appelée par EF Core au démarrage (nom imposé par le framework).
-    public void Configure(EntityTypeBuilder<EmailToken> builderOfTheEmailTokenTableMapping)
+    public void Configure(EntityTypeBuilder<EmailToken> builder)
     {
-        builderOfTheEmailTokenTableMapping.ToTable("jeton");
+        builder.ToTable("jeton");
 
         // L'identifiant est créé par l'entité elle-même, jamais par EF Core.
-        builderOfTheEmailTokenTableMapping.HasKey(nameof(EmailToken.Id));
-        builderOfTheEmailTokenTableMapping.Property(nameof(EmailToken.Id)).HasColumnName("id_jeton").ValueGeneratedNever();
+        builder.HasKey(nameof(EmailToken.Id));
+        builder.Property(nameof(EmailToken.Id)).HasColumnName("id_jeton").ValueGeneratedNever();
 
-        builderOfTheEmailTokenTableMapping.Property(nameof(EmailToken.Type)).HasColumnName("type_jeton")
-            .HasConversion(EmailTokenTypeDatabaseCodes.ConverterBetweenEmailTokenTypeAndDatabaseCode);
+        builder.Property(nameof(EmailToken.Type)).HasColumnName("type_jeton")
+            .HasConversion(EmailTokenTypeDatabaseCodes.Table.Converter);
 
         // Le type est précisé pour que la recherche d'un jeton utilise l'index unique de la colonne :
         // sans lui, EF Core envoie du texte, et PostgreSQL parcourt toute la table.
-        builderOfTheEmailTokenTableMapping.Property(nameof(EmailToken.TokenHash)).HasColumnName("empreinte_jeton").HasColumnType("char(64)");
+        builder.Property(nameof(EmailToken.TokenHash)).HasColumnName("empreinte_jeton").HasColumnType("char(64)");
 
-        builderOfTheEmailTokenTableMapping.Property(nameof(EmailToken.ExpiresAt)).HasColumnName("date_expiration_jeton");
+        builder.Property(nameof(EmailToken.ExpiresAt)).HasColumnName("date_expiration_jeton");
 
-        // L'usage unique est contrôlé en base : deux clics simultanés sur le même lien ne peuvent pas réussir tous les deux.
-        builderOfTheEmailTokenTableMapping.Property(nameof(EmailToken.UsedAt)).HasColumnName("date_utilisation_jeton").IsConcurrencyToken();
+        builder.Property(nameof(EmailToken.UsedAt)).HasColumnName("date_utilisation_jeton");
 
-        builderOfTheEmailTokenTableMapping.Property(nameof(EmailToken.NewEmail)).HasColumnName("nouvel_email");
-        builderOfTheEmailTokenTableMapping.Property(nameof(EmailToken.UserId)).HasColumnName("id_utilisateur");
+        // L'usage unique est contrôlé en base : deux clics simultanés sur le même lien ne peuvent pas réussir tous les deux,
+        // et un lien utilisé ou remplacé depuis sa lecture n'est ni utilisé ni effacé.
+        RowVersionConfiguration.AddRowVersion(builder);
+
+        builder.Property(nameof(EmailToken.NewEmail)).HasColumnName("nouvel_email");
+        builder.Property(nameof(EmailToken.UserId)).HasColumnName("id_utilisateur");
 
         // Un jeton appartient à un utilisateur et disparaît avec lui (ON DELETE CASCADE).
-        builderOfTheEmailTokenTableMapping.HasOne<User>().WithMany()
+        builder.HasOne<User>().WithMany()
             .HasForeignKey(nameof(EmailToken.UserId))
             .OnDelete(DeleteBehavior.Cascade);
     }

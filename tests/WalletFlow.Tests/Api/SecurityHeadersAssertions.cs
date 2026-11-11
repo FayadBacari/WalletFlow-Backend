@@ -4,25 +4,25 @@ namespace WalletFlow.Tests.Api;
 public static class SecurityHeadersAssertions
 {
     // Vérifie que la réponse porte les quatre en-têtes écrits sur chaque réponse de l'API.
-    public static void CheckThatAnswerCarriesTheExactSecurityHeaders(HttpResponseMessage answerToCheckForSecurityHeaders)
+    public static void AssertExactSecurityHeaders(HttpResponseMessage response)
     {
-        CheckThatHeaderOfTheAnswerHasThisExactValue(
-            answerToCheckForSecurityHeaders,
+        AssertHeaderValue(
+            response,
             "Content-Security-Policy",
             "default-src 'self'; script-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'");
-        CheckThatHeaderOfTheAnswerHasThisExactValue(answerToCheckForSecurityHeaders, "X-Content-Type-Options", "nosniff");
-        CheckThatHeaderOfTheAnswerHasThisExactValue(answerToCheckForSecurityHeaders, "Referrer-Policy", "strict-origin-when-cross-origin");
-        CheckThatHeaderOfTheAnswerHasThisExactValue(answerToCheckForSecurityHeaders, "Permissions-Policy", "camera=(), microphone=(), geolocation=()");
+        AssertHeaderValue(response, "X-Content-Type-Options", "nosniff");
+        AssertHeaderValue(response, "Referrer-Policy", "strict-origin-when-cross-origin");
+        AssertHeaderValue(response, "Permissions-Policy", "camera=(), microphone=(), geolocation=()");
     }
 
     // Vérifie qu'un en-tête est présent une seule fois, avec la valeur attendue.
-    public static void CheckThatHeaderOfTheAnswerHasThisExactValue(
-        HttpResponseMessage answerToCheckForThisHeader,
-        string nameOfTheHeaderToCheckInTheAnswer,
-        string valueExpectedForTheHeaderInTheAnswer)
+    public static void AssertHeaderValue(
+        HttpResponseMessage response,
+        string headerName,
+        string value)
     {
-        var valuesOfTheHeaderFoundInTheAnswer = answerToCheckForThisHeader.Headers.GetValues(nameOfTheHeaderToCheckInTheAnswer);
+        var values = response.Headers.GetValues(headerName);
 
-        Assert.Equal(valueExpectedForTheHeaderInTheAnswer, Assert.Single(valuesOfTheHeaderFoundInTheAnswer));
+        Assert.Equal(value, Assert.Single(values));
     }
 }

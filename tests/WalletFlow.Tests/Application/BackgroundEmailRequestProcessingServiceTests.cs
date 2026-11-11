@@ -1,7 +1,9 @@
 using System.Net;
 using WalletFlow.Application.AccountRecovery;
 using WalletFlow.Application.Configuration;
+using WalletFlow.Application.Security;
 using WalletFlow.Domain.UsersAndSecurity;
+using WalletFlow.Infrastructure.Emails;
 using WalletFlow.Infrastructure.Security;
 using WalletFlow.Tests.Fakes;
 using static WalletFlow.Tests.Api.RegistrationRequestTestValues;
@@ -12,68 +14,71 @@ namespace WalletFlow.Tests.Application;
 // Seuls les jetons sont les vrais : il faut comparer le jeton du lien et son empreinte en base.
 public class BackgroundEmailRequestProcessingServiceTests
 {
-    private const string EmailAddressOfTheAccountInTheseTests = "utilisateur@exemple.test";
+    private const string AccountEmail = "utilisateur@exemple.test";
 
-    private static readonly IPAddress IpAddressOfTheVisitorInTheseTests = IPAddress.Parse("203.0.113.7");
+    private static readonly IPAddress IpAddress = IPAddress.Parse("203.0.113.7");
 
-    private readonly FakeUserAccountRepository repositoryThatKeepsAccountsInMemory = new FakeUserAccountRepository();
-    private readonly FakeSecurityEventRepository repositoryThatKeepsSecurityEventsInMemory = new FakeSecurityEventRepository();
-    private readonly RandomSecureTokenGenerator realGeneratorOfTheTokensInTheseTests = new RandomSecureTokenGenerator();
-    private readonly FakeEmailSender senderThatKeepsTheEmailsInMemory = new FakeEmailSender();
-    private readonly FakeTimeProviderForTests clockThatOnlyMovesWhenTestsAskIt = new FakeTimeProviderForTests();
+    private readonly FakeUserAccountRepository accountRepository = new FakeUserAccountRepository();
+    private readonly FakeSecurityEventRepository securityEventRepository = new FakeSecurityEventRepository();
+    private readonly RandomSecureTokenGenerator tokenGenerator = new RandomSecureTokenGenerator();
+    private readonly FakeEmailSender emailSender = new FakeEmailSender();
+    private readonly FakeTimeProvider clock = new FakeTimeProvider();
 
     // Crée le service à tester, avec ses faux outils.
-    private BackgroundEmailRequestProcessingService CreateProcessingServiceWithFakeTools()
+    private BackgroundEmailRequestProcessingService CreateProcessingService()
     {
         return new BackgroundEmailRequestProcessingService(
-            repositoryThatKeepsAccountsInMemory,
-            repositoryThatKeepsSecurityEventsInMemory,
-            realGeneratorOfTheTokensInTheseTests,
-            senderThatKeepsTheEmailsInMemory,
+            accountRepository,
+            new SecurityJournalService(securityEventRepository, clock),
+            tokenGenerator,
+            emailSender,
+            new FrenchAccountRecoveryEmails(),
             new PublicWebsiteSettings("https://walletflow.test"),
-            clockThatOnlyMovesWhenTestsAskIt);
+            clock);
     }
 
     // Ajoute à la fausse base un compte avec l'adresse de ces tests.
-    private User AddAccountToTheFakeDatabase(bool emailAddressOfTheAccountIsConfirmed = true)
+    private User AddAccount(bool isEmailConfirmed = true)
     {
-        var accountAddedToTheFakeDatabase = new User { Email = EmailAddressOfTheAccountInTheseTests, IsEmailConfirmed = emailAddressOfTheAccountIsConfirmed };
-        repositoryThatKeepsAccountsInMemory.SavedUsers.Add(accountAddedToTheFakeDatabase);
+        var account = new User { Email = AccountEmail, IsEmailConfirmed = isEmailConfirmed };
+        accountRepository.SavedUsers.Add(account);
 
-        return accountAddedToTheFakeDatabase;
+        return account;
     }
 
     // Ajoute à la fausse base un compte qui vient d'être bloqué, avec ce nombre de blocages.
-    private User AddLockedAccountToTheFakeDatabase(short numberOfLockoutsOfTheAccount = 1)
+    private User AddLockedAccount(short lockoutCount = 1)
     {
-        var accountAddedToTheFakeDatabase = AddAccountToTheFakeDatabase();
-        accountAddedToTheFakeDatabase.FailedLoginAttemptCount = 5;
-        accountAddedToTheFakeDatabase.LockoutCount = numberOfLockoutsOfTheAccount;
-        accountAddedToTheFakeDatabase.LockoutEndsAt = clockThatOnlyMovesWhenTestsAskIt.GetUtcNow().UtcDateTime
-            + AccountLockoutRules.CalculateDurationOfTheLockoutWithThisNumber(numberOfLockoutsOfTheAccount);
+        var account = new User
+        {
+            Email = AccountEmail,
+            IsEmailConfirmed = true,
+            FailedLoginAttemptCount = 5,
+            LockoutCount = lockoutCount,
+            LockoutEndsAt = clock.GetUtcNow().UtcDateTime + AccountLockoutRules.CalculateLockoutDuration(lockoutCount)
+        };
+        accountRepository.SavedUsers.Add(account);
 
-        return accountAddedToTheFakeDatabase;
+        return account;
     }
 
     // Traite une demande de récupération pour l'adresse de ces tests.
-    private async Task<BackgroundEmailRequestResult> ProcessPasswordRecoveryRequestOfThisTestAsync()
+    private async Task<BackgroundEmailRequestResult> ProcessRecoveryRequestAsync()
     {
-        return await CreateProcessingServiceWithFakeTools().ProcessOneBackgroundEmailRequestAsync(new BackgroundEmailRequest
+        return await CreateProcessingService().ProcessAsync(new BackgroundEmailRequest.PasswordRecovery
         {
-            TypeOfTheRequestedBackgroundEmail = BackgroundEmailRequestType.PasswordRecovery,
-            EmailAddressOfTheRecoveryRequest = EmailAddressOfTheAccountInTheseTests,
-            IpAddressOfTheRequestingVisitor = IpAddressOfTheVisitorInTheseTests
+            EmailAddress = AccountEmail,
+            IpAddress = IpAddress
         });
     }
 
     // Traite une demande d'e-mail de déblocage pour ce compte.
-    private async Task<BackgroundEmailRequestResult> ProcessAccountUnlockRequestForThisAccountAsync(Guid identifierOfTheAccountJustLocked)
+    private async Task<BackgroundEmailRequestResult> ProcessUnlockRequestAsync(Guid accountId)
     {
-        return await CreateProcessingServiceWithFakeTools().ProcessOneBackgroundEmailRequestAsync(new BackgroundEmailRequest
+        return await CreateProcessingService().ProcessAsync(new BackgroundEmailRequest.AccountUnlock
         {
-            TypeOfTheRequestedBackgroundEmail = BackgroundEmailRequestType.AccountUnlock,
-            IdentifierOfTheAccountJustLocked = identifierOfTheAccountJustLocked,
-            IpAddressOfTheRequestingVisitor = IpAddressOfTheVisitorInTheseTests
+            AccountId = accountId,
+            IpAddress = IpAddress
         });
     }
 
@@ -82,76 +87,76 @@ public class BackgroundEmailRequestProcessingServiceTests
     [Fact]
     public async Task ConfirmedAccountReceivesLinkWhoseTokenIsOnlyStoredAsItsHash()
     {
-        var accountBeingTestedInThisRequest = AddAccountToTheFakeDatabase();
+        var account = AddAccount();
 
-        var resultOfTheBackgroundEmailRequest = await ProcessPasswordRecoveryRequestOfThisTestAsync();
+        var result = await ProcessRecoveryRequestAsync();
 
-        Assert.False(resultOfTheBackgroundEmailRequest.EmailCouldNotBeSent);
-        var emailSentToTheAddressOwner = Assert.Single(senderThatKeepsTheEmailsInMemory.SentEmails);
-        Assert.Equal(EmailAddressOfTheAccountInTheseTests, emailSentToTheAddressOwner.RecipientAddress);
-        Assert.Contains("https://walletflow.test/reset-password#token=", emailSentToTheAddressOwner.Body);
+        Assert.False(result.EmailCouldNotBeSent);
+        var email = Assert.Single(emailSender.SentEmails);
+        Assert.Equal(AccountEmail, email.RecipientAddress);
+        Assert.Contains("https://walletflow.test/reset-password#token=", email.Body);
 
-        var tokenReadInTheLinkOfTheEmail = ReadTokenWrittenInTheConfirmationLink(emailSentToTheAddressOwner.Body);
-        var tokenSavedInTheFakeDatabase = Assert.Single(repositoryThatKeepsAccountsInMemory.SavedEmailTokens);
-        Assert.Equal(EmailTokenType.PasswordRecovery, tokenSavedInTheFakeDatabase.Type);
-        Assert.Equal(accountBeingTestedInThisRequest.Id, tokenSavedInTheFakeDatabase.UserId);
-        Assert.Equal(realGeneratorOfTheTokensInTheseTests.ConvertSecureTokenIntoItsHash(tokenReadInTheLinkOfTheEmail), tokenSavedInTheFakeDatabase.TokenHash);
-        Assert.NotEqual(tokenReadInTheLinkOfTheEmail, tokenSavedInTheFakeDatabase.TokenHash);
+        var linkToken = ReadConfirmationToken(email.Body);
+        var token = Assert.Single(accountRepository.SavedEmailTokens);
+        Assert.Equal(EmailTokenType.PasswordRecovery, token.Type);
+        Assert.Equal(account.Id, token.UserId);
+        Assert.Equal(tokenGenerator.HashToken(linkToken), token.TokenHash);
+        Assert.NotEqual(linkToken, token.TokenHash);
     }
 
     [Fact]
     public async Task RecoveryLinkLastsExactlyThirtyMinutes()
     {
-        AddAccountToTheFakeDatabase();
+        AddAccount();
 
-        await ProcessPasswordRecoveryRequestOfThisTestAsync();
+        await ProcessRecoveryRequestAsync();
 
-        Assert.Equal(clockThatOnlyMovesWhenTestsAskIt.GetUtcNow().UtcDateTime.AddMinutes(30), repositoryThatKeepsAccountsInMemory.SavedEmailTokens[0].ExpiresAt);
+        Assert.Equal(clock.GetUtcNow().UtcDateTime.AddMinutes(30), accountRepository.SavedEmailTokens[0].ExpiresAt);
     }
 
     // SS §9 : l'e-mail dit quoi faire si ce n'est pas l'utilisateur qui a agi, et ne contient jamais de mot de passe.
     [Fact]
     public async Task RecoveryEmailSaysWhatToDoAndNeverContainsThePasswordHash()
     {
-        var accountBeingTestedInThisRequest = AddAccountToTheFakeDatabase();
-        accountBeingTestedInThisRequest.PasswordHash = "empreinte-du-mot-de-passe-du-compte";
+        var account = AddAccount();
+        account.ReplacePasswordHash("empreinte-du-mot-de-passe-du-compte");
 
-        await ProcessPasswordRecoveryRequestOfThisTestAsync();
+        await ProcessRecoveryRequestAsync();
 
-        var bodyOfTheEmailSentToTheOwner = senderThatKeepsTheEmailsInMemory.SentEmails[0].Body;
-        Assert.Contains("ignore ce message", bodyOfTheEmailSentToTheOwner);
-        Assert.Contains("30 minutes", bodyOfTheEmailSentToTheOwner);
-        Assert.DoesNotContain("empreinte-du-mot-de-passe-du-compte", bodyOfTheEmailSentToTheOwner);
+        var body = emailSender.SentEmails[0].Body;
+        Assert.Contains("ignore ce message", body);
+        Assert.Contains("30 minutes", body);
+        Assert.DoesNotContain("empreinte-du-mot-de-passe-du-compte", body);
     }
 
     [Fact]
     public async Task RecoveryRequestIsWrittenInTheJournalAsSuccessWithItsUserAndIpAddress()
     {
-        var accountBeingTestedInThisRequest = AddAccountToTheFakeDatabase();
+        var account = AddAccount();
 
-        await ProcessPasswordRecoveryRequestOfThisTestAsync();
+        await ProcessRecoveryRequestAsync();
 
-        var securityEventOfTheRecoveryRequest = Assert.Single(repositoryThatKeepsSecurityEventsInMemory.SavedSecurityEvents);
-        Assert.Equal(SecurityEventType.PasswordRecovery, securityEventOfTheRecoveryRequest.Type);
-        Assert.Equal(SecurityEventResult.Success, securityEventOfTheRecoveryRequest.Result);
-        Assert.Equal(accountBeingTestedInThisRequest.Id, securityEventOfTheRecoveryRequest.UserId);
-        Assert.Equal(IpAddressOfTheVisitorInTheseTests, securityEventOfTheRecoveryRequest.IpAddress);
-        Assert.Equal(clockThatOnlyMovesWhenTestsAskIt.GetUtcNow().UtcDateTime, securityEventOfTheRecoveryRequest.OccurredAt);
+        var securityEvent = Assert.Single(securityEventRepository.SavedSecurityEvents);
+        Assert.Equal(SecurityEventType.PasswordRecovery, securityEvent.Type);
+        Assert.Equal(SecurityEventResult.Success, securityEvent.Result);
+        Assert.Equal(account.Id, securityEvent.UserId);
+        Assert.Equal(IpAddress, securityEvent.IpAddress);
+        Assert.Equal(clock.GetUtcNow().UtcDateTime, securityEvent.OccurredAt);
     }
 
     // SS §2 : le jeton est invalidé dès qu'un nouveau jeton du même type est demandé. Un lien d'un autre type reste valable.
     [Fact]
     public async Task NewRecoveryLinkReplacesTheOldOneAndKeepsTheLinkOfAnotherType()
     {
-        var accountBeingTestedInThisRequest = AddAccountToTheFakeDatabase();
-        repositoryThatKeepsAccountsInMemory.SavedEmailTokens.Add(new EmailToken { Type = EmailTokenType.PasswordRecovery, TokenHash = "ancienne-empreinte", UserId = accountBeingTestedInThisRequest.Id });
-        repositoryThatKeepsAccountsInMemory.SavedEmailTokens.Add(new EmailToken { Type = EmailTokenType.AccountUnlock, TokenHash = "empreinte-de-deblocage", UserId = accountBeingTestedInThisRequest.Id });
+        var account = AddAccount();
+        accountRepository.SavedEmailTokens.Add(new EmailToken { Type = EmailTokenType.PasswordRecovery, TokenHash = "ancienne-empreinte", UserId = account.Id });
+        accountRepository.SavedEmailTokens.Add(new EmailToken { Type = EmailTokenType.AccountUnlock, TokenHash = "empreinte-de-deblocage", UserId = account.Id });
 
-        await ProcessPasswordRecoveryRequestOfThisTestAsync();
+        await ProcessRecoveryRequestAsync();
 
-        Assert.Equal(2, repositoryThatKeepsAccountsInMemory.SavedEmailTokens.Count);
-        Assert.DoesNotContain(repositoryThatKeepsAccountsInMemory.SavedEmailTokens, tokenKeptInTheFakeDatabase => tokenKeptInTheFakeDatabase.TokenHash == "ancienne-empreinte");
-        Assert.Contains(repositoryThatKeepsAccountsInMemory.SavedEmailTokens, tokenKeptInTheFakeDatabase => tokenKeptInTheFakeDatabase.TokenHash == "empreinte-de-deblocage");
+        Assert.Equal(2, accountRepository.SavedEmailTokens.Count);
+        Assert.DoesNotContain(accountRepository.SavedEmailTokens, token => token.TokenHash == "ancienne-empreinte");
+        Assert.Contains(accountRepository.SavedEmailTokens, token => token.TokenHash == "empreinte-de-deblocage");
     }
 
     // --- Récupération : adresse inconnue ou non confirmée
@@ -160,37 +165,37 @@ public class BackgroundEmailRequestProcessingServiceTests
     [Fact]
     public async Task UnknownAddressReceivesNothingAndIsWrittenInTheJournalWithoutIdentifier()
     {
-        var resultOfTheBackgroundEmailRequest = await ProcessPasswordRecoveryRequestOfThisTestAsync();
+        var result = await ProcessRecoveryRequestAsync();
 
-        Assert.False(resultOfTheBackgroundEmailRequest.EmailCouldNotBeSent);
-        Assert.Empty(senderThatKeepsTheEmailsInMemory.SentEmails);
-        Assert.Empty(repositoryThatKeepsAccountsInMemory.SavedEmailTokens);
+        Assert.False(result.EmailCouldNotBeSent);
+        Assert.Empty(emailSender.SentEmails);
+        Assert.Empty(accountRepository.SavedEmailTokens);
 
-        var securityEventOfTheRecoveryRequest = Assert.Single(repositoryThatKeepsSecurityEventsInMemory.SavedSecurityEvents);
-        Assert.Equal(SecurityEventType.PasswordRecovery, securityEventOfTheRecoveryRequest.Type);
-        Assert.Equal(SecurityEventResult.Failure, securityEventOfTheRecoveryRequest.Result);
-        Assert.Null(securityEventOfTheRecoveryRequest.UserId);
-        Assert.Equal(IpAddressOfTheVisitorInTheseTests, securityEventOfTheRecoveryRequest.IpAddress);
+        var securityEvent = Assert.Single(securityEventRepository.SavedSecurityEvents);
+        Assert.Equal(SecurityEventType.PasswordRecovery, securityEvent.Type);
+        Assert.Equal(SecurityEventResult.Failure, securityEvent.Result);
+        Assert.Null(securityEvent.UserId);
+        Assert.Equal(IpAddress, securityEvent.IpAddress);
     }
 
     // GR Auth : l'e-mail de récupération invite à s'inscrire à nouveau, sans aucun lien.
     [Fact]
     public async Task UnconfirmedAddressIsInvitedToRegisterAgainWithoutAnyLink()
     {
-        var accountBeingTestedInThisRequest = AddAccountToTheFakeDatabase(emailAddressOfTheAccountIsConfirmed: false);
+        var account = AddAccount(isEmailConfirmed: false);
 
-        await ProcessPasswordRecoveryRequestOfThisTestAsync();
+        await ProcessRecoveryRequestAsync();
 
-        var emailSentToTheAddressOwner = Assert.Single(senderThatKeepsTheEmailsInMemory.SentEmails);
-        Assert.Equal(EmailAddressOfTheAccountInTheseTests, emailSentToTheAddressOwner.RecipientAddress);
-        Assert.Contains("inscris-toi à nouveau", emailSentToTheAddressOwner.Body);
-        Assert.Contains("ignore ce message", emailSentToTheAddressOwner.Body);
-        Assert.DoesNotContain("#token=", emailSentToTheAddressOwner.Body);
-        Assert.Empty(repositoryThatKeepsAccountsInMemory.SavedEmailTokens);
+        var email = Assert.Single(emailSender.SentEmails);
+        Assert.Equal(AccountEmail, email.RecipientAddress);
+        Assert.Contains("inscris-toi à nouveau", email.Body);
+        Assert.Contains("ignore ce message", email.Body);
+        Assert.DoesNotContain("#token=", email.Body);
+        Assert.Empty(accountRepository.SavedEmailTokens);
 
-        var securityEventOfTheRecoveryRequest = Assert.Single(repositoryThatKeepsSecurityEventsInMemory.SavedSecurityEvents);
-        Assert.Equal(SecurityEventResult.Failure, securityEventOfTheRecoveryRequest.Result);
-        Assert.Equal(accountBeingTestedInThisRequest.Id, securityEventOfTheRecoveryRequest.UserId);
+        var securityEvent = Assert.Single(securityEventRepository.SavedSecurityEvents);
+        Assert.Equal(SecurityEventResult.Failure, securityEvent.Result);
+        Assert.Equal(account.Id, securityEvent.UserId);
     }
 
     // --- Récupération : pannes
@@ -198,38 +203,38 @@ public class BackgroundEmailRequestProcessingServiceTests
     [Fact]
     public async Task EmailFailureOnConfirmedAccountIsReportedWithItsUserAndWrittenAsFailure()
     {
-        var accountBeingTestedInThisRequest = AddAccountToTheFakeDatabase();
-        senderThatKeepsTheEmailsInMemory.EveryEmailFailsDuringThisTest = true;
+        var account = AddAccount();
+        emailSender.AlwaysFails = true;
 
-        var resultOfTheBackgroundEmailRequest = await ProcessPasswordRecoveryRequestOfThisTestAsync();
+        var result = await ProcessRecoveryRequestAsync();
 
-        Assert.True(resultOfTheBackgroundEmailRequest.EmailCouldNotBeSent);
-        Assert.Equal(accountBeingTestedInThisRequest.Id, resultOfTheBackgroundEmailRequest.UserIdentifierForTheTechnicalLog);
-        Assert.Equal(SecurityEventResult.Failure, Assert.Single(repositoryThatKeepsSecurityEventsInMemory.SavedSecurityEvents).Result);
+        Assert.True(result.EmailCouldNotBeSent);
+        Assert.Equal(account.Id, result.UserId);
+        Assert.Equal(SecurityEventResult.Failure, Assert.Single(securityEventRepository.SavedSecurityEvents).Result);
     }
 
     [Fact]
     public async Task EmailFailureOnUnconfirmedAccountIsReportedWithItsUser()
     {
-        var accountBeingTestedInThisRequest = AddAccountToTheFakeDatabase(emailAddressOfTheAccountIsConfirmed: false);
-        senderThatKeepsTheEmailsInMemory.EveryEmailFailsDuringThisTest = true;
+        var account = AddAccount(isEmailConfirmed: false);
+        emailSender.AlwaysFails = true;
 
-        var resultOfTheBackgroundEmailRequest = await ProcessPasswordRecoveryRequestOfThisTestAsync();
+        var result = await ProcessRecoveryRequestAsync();
 
-        Assert.True(resultOfTheBackgroundEmailRequest.EmailCouldNotBeSent);
-        Assert.Equal(accountBeingTestedInThisRequest.Id, resultOfTheBackgroundEmailRequest.UserIdentifierForTheTechnicalLog);
+        Assert.True(result.EmailCouldNotBeSent);
+        Assert.Equal(account.Id, result.UserId);
     }
 
     // Une panne de la base n'est pas cachée : la tâche de fond la note dans le journal technique.
     [Fact]
     public async Task DatabaseFailureIsNotHiddenAndSendsNoEmail()
     {
-        AddAccountToTheFakeDatabase();
-        repositoryThatKeepsAccountsInMemory.DatabaseIsDownDuringThisTest = true;
+        AddAccount();
+        accountRepository.IsDown = true;
 
-        await Assert.ThrowsAsync<InvalidOperationException>(ProcessPasswordRecoveryRequestOfThisTestAsync);
+        await Assert.ThrowsAsync<InvalidOperationException>(ProcessRecoveryRequestAsync);
 
-        Assert.Empty(senderThatKeepsTheEmailsInMemory.SentEmails);
+        Assert.Empty(emailSender.SentEmails);
     }
 
     // --- Déblocage
@@ -237,30 +242,30 @@ public class BackgroundEmailRequestProcessingServiceTests
     [Fact]
     public async Task LockedAccountReceivesUnlockLinkWhoseTokenIsOnlyStoredAsItsHash()
     {
-        var accountBeingTestedInThisRequest = AddLockedAccountToTheFakeDatabase();
+        var account = AddLockedAccount();
 
-        var resultOfTheBackgroundEmailRequest = await ProcessAccountUnlockRequestForThisAccountAsync(accountBeingTestedInThisRequest.Id);
+        var result = await ProcessUnlockRequestAsync(account.Id);
 
-        Assert.False(resultOfTheBackgroundEmailRequest.EmailCouldNotBeSent);
-        var emailSentToTheAddressOwner = Assert.Single(senderThatKeepsTheEmailsInMemory.SentEmails);
-        Assert.Equal(EmailAddressOfTheAccountInTheseTests, emailSentToTheAddressOwner.RecipientAddress);
-        Assert.Contains("https://walletflow.test/unlock-account#token=", emailSentToTheAddressOwner.Body);
+        Assert.False(result.EmailCouldNotBeSent);
+        var email = Assert.Single(emailSender.SentEmails);
+        Assert.Equal(AccountEmail, email.RecipientAddress);
+        Assert.Contains("https://walletflow.test/unlock-account#token=", email.Body);
 
-        var tokenReadInTheLinkOfTheEmail = ReadTokenWrittenInTheConfirmationLink(emailSentToTheAddressOwner.Body);
-        var tokenSavedInTheFakeDatabase = Assert.Single(repositoryThatKeepsAccountsInMemory.SavedEmailTokens);
-        Assert.Equal(EmailTokenType.AccountUnlock, tokenSavedInTheFakeDatabase.Type);
-        Assert.Equal(accountBeingTestedInThisRequest.Id, tokenSavedInTheFakeDatabase.UserId);
-        Assert.Equal(realGeneratorOfTheTokensInTheseTests.ConvertSecureTokenIntoItsHash(tokenReadInTheLinkOfTheEmail), tokenSavedInTheFakeDatabase.TokenHash);
+        var linkToken = ReadConfirmationToken(email.Body);
+        var token = Assert.Single(accountRepository.SavedEmailTokens);
+        Assert.Equal(EmailTokenType.AccountUnlock, token.Type);
+        Assert.Equal(account.Id, token.UserId);
+        Assert.Equal(tokenGenerator.HashToken(linkToken), token.TokenHash);
     }
 
     [Fact]
     public async Task UnlockLinkLastsExactlyOneHour()
     {
-        var accountBeingTestedInThisRequest = AddLockedAccountToTheFakeDatabase();
+        var account = AddLockedAccount();
 
-        await ProcessAccountUnlockRequestForThisAccountAsync(accountBeingTestedInThisRequest.Id);
+        await ProcessUnlockRequestAsync(account.Id);
 
-        Assert.Equal(clockThatOnlyMovesWhenTestsAskIt.GetUtcNow().UtcDateTime.AddHours(1), repositoryThatKeepsAccountsInMemory.SavedEmailTokens[0].ExpiresAt);
+        Assert.Equal(clock.GetUtcNow().UtcDateTime.AddHours(1), accountRepository.SavedEmailTokens[0].ExpiresAt);
     }
 
     [Theory]
@@ -269,71 +274,71 @@ public class BackgroundEmailRequestProcessingServiceTests
     [InlineData(3, "pendant 1 heure.")]
     [InlineData(4, "pendant 2 heures.")]
     [InlineData(8, "pendant 24 heures.")]
-    public async Task UnlockEmailGivesTheDurationOfTheLockout(short numberOfLockoutsOfTheAccount, string textExpectedInTheUnlockEmail)
+    public async Task UnlockEmailGivesTheDurationOfTheLockout(short lockoutCount, string text)
     {
-        var accountBeingTestedInThisRequest = AddLockedAccountToTheFakeDatabase(numberOfLockoutsOfTheAccount);
+        var account = AddLockedAccount(lockoutCount);
 
-        await ProcessAccountUnlockRequestForThisAccountAsync(accountBeingTestedInThisRequest.Id);
+        await ProcessUnlockRequestAsync(account.Id);
 
-        Assert.Contains(textExpectedInTheUnlockEmail, senderThatKeepsTheEmailsInMemory.SentEmails[0].Body);
+        Assert.Contains(text, emailSender.SentEmails[0].Body);
     }
 
     // SS §9 : l'e-mail dit quoi faire si ce n'est pas l'utilisateur. GR Auth : le lien ne connecte pas.
     [Fact]
     public async Task UnlockEmailSaysWhatToDoIfItWasNotTheUser()
     {
-        var accountBeingTestedInThisRequest = AddLockedAccountToTheFakeDatabase();
+        var account = AddLockedAccount();
 
-        await ProcessAccountUnlockRequestForThisAccountAsync(accountBeingTestedInThisRequest.Id);
+        await ProcessUnlockRequestAsync(account.Id);
 
-        var bodyOfTheEmailSentToTheOwner = senderThatKeepsTheEmailsInMemory.SentEmails[0].Body;
-        Assert.Contains("Si ce n'est pas toi", bodyOfTheEmailSentToTheOwner);
-        Assert.Contains("Il ne te connecte pas", bodyOfTheEmailSentToTheOwner);
-        Assert.Contains("1 heure", bodyOfTheEmailSentToTheOwner);
+        var body = emailSender.SentEmails[0].Body;
+        Assert.Contains("Si ce n'est pas toi", body);
+        Assert.Contains("Il ne te connecte pas", body);
+        Assert.Contains("1 heure", body);
     }
 
     // Le blocage est déjà noté par la connexion : préparer son e-mail n'ajoute rien au journal.
     [Fact]
     public async Task UnlockEmailAddsNothingToTheSecurityJournal()
     {
-        var accountBeingTestedInThisRequest = AddLockedAccountToTheFakeDatabase();
+        var account = AddLockedAccount();
 
-        await ProcessAccountUnlockRequestForThisAccountAsync(accountBeingTestedInThisRequest.Id);
+        await ProcessUnlockRequestAsync(account.Id);
 
-        Assert.Empty(repositoryThatKeepsSecurityEventsInMemory.SavedSecurityEvents);
+        Assert.Empty(securityEventRepository.SavedSecurityEvents);
     }
 
     [Fact]
     public async Task ErasedAccountReceivesNoUnlockEmail()
     {
-        await ProcessAccountUnlockRequestForThisAccountAsync(Guid.NewGuid());
+        await ProcessUnlockRequestAsync(Guid.NewGuid());
 
-        Assert.Empty(senderThatKeepsTheEmailsInMemory.SentEmails);
-        Assert.Empty(repositoryThatKeepsAccountsInMemory.SavedEmailTokens);
+        Assert.Empty(emailSender.SentEmails);
+        Assert.Empty(accountRepository.SavedEmailTokens);
     }
 
     // Le blocage a pu finir entre la demande et son traitement : l'e-mail dirait alors quelque chose de faux.
     [Fact]
     public async Task AccountNoLongerLockedReceivesNoUnlockEmail()
     {
-        var accountBeingTestedInThisRequest = AddLockedAccountToTheFakeDatabase();
-        clockThatOnlyMovesWhenTestsAskIt.MoveFakeClockForwardByThisDuration(TimeSpan.FromMinutes(15));
+        var account = AddLockedAccount();
+        clock.Advance(TimeSpan.FromMinutes(15));
 
-        await ProcessAccountUnlockRequestForThisAccountAsync(accountBeingTestedInThisRequest.Id);
+        await ProcessUnlockRequestAsync(account.Id);
 
-        Assert.Empty(senderThatKeepsTheEmailsInMemory.SentEmails);
-        Assert.Empty(repositoryThatKeepsAccountsInMemory.SavedEmailTokens);
+        Assert.Empty(emailSender.SentEmails);
+        Assert.Empty(accountRepository.SavedEmailTokens);
     }
 
     [Fact]
     public async Task EmailFailureOnLockedAccountIsReportedWithItsUser()
     {
-        var accountBeingTestedInThisRequest = AddLockedAccountToTheFakeDatabase();
-        senderThatKeepsTheEmailsInMemory.EveryEmailFailsDuringThisTest = true;
+        var account = AddLockedAccount();
+        emailSender.AlwaysFails = true;
 
-        var resultOfTheBackgroundEmailRequest = await ProcessAccountUnlockRequestForThisAccountAsync(accountBeingTestedInThisRequest.Id);
+        var result = await ProcessUnlockRequestAsync(account.Id);
 
-        Assert.True(resultOfTheBackgroundEmailRequest.EmailCouldNotBeSent);
-        Assert.Equal(accountBeingTestedInThisRequest.Id, resultOfTheBackgroundEmailRequest.UserIdentifierForTheTechnicalLog);
+        Assert.True(result.EmailCouldNotBeSent);
+        Assert.Equal(account.Id, result.UserId);
     }
 }

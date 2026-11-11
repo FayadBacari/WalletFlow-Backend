@@ -4,12 +4,13 @@ using WalletFlow.Application.AccountRecovery;
 using WalletFlow.Application.Configuration;
 using WalletFlow.Application.UserSessions;
 using WalletFlow.Domain.UsersAndSecurity;
+using WalletFlow.Infrastructure.Emails;
 using WalletFlow.Infrastructure.Persistence;
 using WalletFlow.Infrastructure.Persistence.Repositories;
 using WalletFlow.Infrastructure.Security;
 using WalletFlow.Tests.Fakes;
 using static WalletFlow.Tests.Api.RegistrationRequestTestValues;
-using static WalletFlow.Tests.Infrastructure.LocalDatabaseForTheTests;
+using static WalletFlow.Tests.Infrastructure.LocalTestDatabase;
 
 namespace WalletFlow.Tests.Infrastructure;
 
@@ -17,299 +18,305 @@ namespace WalletFlow.Tests.Infrastructure;
 // Seuls l'envoi des e-mails, la file et l'horloge sont remplacés. Chaque test annule sa transaction à la fin : la base reste vide.
 public class AccountRecoveryRealChainTests
 {
-    private const string NewPasswordChosenInTheseTests = "Nouveau-Mot-De-Passe-2";
+    private const string NewPassword = "Nouveau-Mot-De-Passe-2";
 
-    private static readonly IPAddress IpAddressOfTheVisitorInTheseTests = IPAddress.Parse("203.0.113.7");
+    private static readonly IPAddress IpAddress = IPAddress.Parse("203.0.113.7");
 
-    private readonly LibsodiumPasswordHasher realHasherOfThePasswordsInTheseTests = new LibsodiumPasswordHasher();
-    private readonly RandomSecureTokenGenerator realGeneratorOfTheTokensInTheseTests = new RandomSecureTokenGenerator();
-    private readonly FakeEmailSender senderThatKeepsTheEmailsInMemory = new FakeEmailSender();
-    private readonly FakeBackgroundEmailRequestQueue queueThatKeepsTheEmailRequestsInMemory = new FakeBackgroundEmailRequestQueue();
-    private readonly FakeTimeProviderForTests clockThatOnlyMovesWhenTestsAskIt = new FakeTimeProviderForTests();
+    private readonly LibsodiumPasswordHasher passwordHasher = RealArgonHashers.CreatePasswordHasher();
+    private readonly RandomSecureTokenGenerator tokenGenerator = new RandomSecureTokenGenerator();
+    private readonly FakeEmailSender emailSender = new FakeEmailSender();
+    private readonly FakeBackgroundEmailRequestQueue emailQueue = new FakeBackgroundEmailRequestQueue();
+    private readonly FakeTimeProvider clock = new FakeTimeProvider();
 
     // Enregistre un compte avec ce mot de passe, haché avec le vrai Argon2.
-    private async Task<Guid> SaveAccountWithThisPasswordAsync(WalletFlowDatabaseContext databaseContextOfThisChainTest, string emailAddressOfTheNewAccount, string passwordChosenForTheNewAccount, bool emailAddressOfTheAccountIsConfirmed = true)
+    private async Task<Guid> SaveAccountAsync(WalletFlowDatabaseContext databaseContext, string emailAddress, string password, bool isEmailConfirmed = true)
     {
-        var newAccountToSaveInTheRealDatabase = new User
+        var newAccount = new User
         {
-            Email = emailAddressOfTheNewAccount,
-            PasswordHash = realHasherOfThePasswordsInTheseTests.ConvertPasswordIntoItsSecureHash(passwordChosenForTheNewAccount),
-            IsEmailConfirmed = emailAddressOfTheAccountIsConfirmed
+            Email = emailAddress,
+            PasswordHash = await passwordHasher.HashAsync(password),
+            IsEmailConfirmed = isEmailConfirmed
         };
-        databaseContextOfThisChainTest.Users.Add(newAccountToSaveInTheRealDatabase);
-        await databaseContextOfThisChainTest.SaveChangesAsync();
-        databaseContextOfThisChainTest.ChangeTracker.Clear();
+        databaseContext.Users.Add(newAccount);
+        await databaseContext.SaveChangesAsync();
+        databaseContext.ChangeTracker.Clear();
 
-        return newAccountToSaveInTheRealDatabase.Id;
+        return newAccount.Id;
     }
 
     // Fait une tentative de connexion comme le ferait une requête, avec son propre état en mémoire.
-    private async Task<AccountLoginResult> TryToLogInLikeOneRealRequestAsync(WalletFlowDatabaseContext databaseContextOfThisChainTest, string emailAddressTypedInThisTest, string passwordTypedByTheVisitorInThisTest)
+    private async Task<AccountLoginResult> LogInAsync(WalletFlowDatabaseContext databaseContext, string emailAddress, string password)
     {
-        var serviceThatLogsTheVisitorIn = new AccountLoginService(
-            new UserAccountRepository(databaseContextOfThisChainTest),
-            new SecurityEventRepository(databaseContextOfThisChainTest),
-            queueThatKeepsTheEmailRequestsInMemory,
-            realHasherOfThePasswordsInTheseTests,
-            realGeneratorOfTheTokensInTheseTests,
-            new InMemoryLoginsWaitingForTheirCodeStore(clockThatOnlyMovesWhenTestsAskIt),
+        var loginService = new AccountLoginService(
+            new UserAccountRepository(databaseContext),
+            CreateSavingService(databaseContext),
+            CreateSecurityJournal(databaseContext, clock),
+            emailQueue,
+            passwordHasher,
+            tokenGenerator,
+            new InMemoryWaitingLoginStore(clock),
             new UserSessionOpeningService(
-                new UserAccountRepository(databaseContextOfThisChainTest),
-                new UserSessionRepository(databaseContextOfThisChainTest),
-                new TwoFactorAuthenticationRepository(databaseContextOfThisChainTest),
-                realGeneratorOfTheTokensInTheseTests,
-                clockThatOnlyMovesWhenTestsAskIt),
-            clockThatOnlyMovesWhenTestsAskIt);
+                new UserAccountRepository(databaseContext),
+                new UserSessionRepository(databaseContext),
+                new TwoFactorAuthenticationRepository(databaseContext),
+                CreateSavingService(databaseContext),
+                CreateSecurityJournal(databaseContext, clock),
+                tokenGenerator,
+                clock),
+            clock);
 
-        var resultOfTheLoginAttemptOfTheVisitor = await serviceThatLogsTheVisitorIn.LogVisitorInWithEmailAddressAndPasswordAsync(new LoginAttemptFromVisitor
+        var result = await loginService.LogInAsync(new LoginAttempt
         {
-            EmailAddressTypedByTheVisitor = emailAddressTypedInThisTest,
-            PasswordTextTypedByTheVisitor = passwordTypedByTheVisitorInThisTest,
-            IpAddressOfTheVisitor = IpAddressOfTheVisitorInTheseTests
+            EmailAddress = emailAddress,
+            Password = password,
+            IpAddress = IpAddress
         });
-        databaseContextOfThisChainTest.ChangeTracker.Clear();
+        databaseContext.ChangeTracker.Clear();
 
-        return resultOfTheLoginAttemptOfTheVisitor;
+        return result;
     }
 
     // Traite toutes les demandes de la file, comme le ferait la tâche de fond, et les retire de la file.
-    private async Task ProcessEveryEmailRequestOfTheQueueAsync(WalletFlowDatabaseContext databaseContextOfThisChainTest)
+    private async Task ProcessQueuedRequestsAsync(WalletFlowDatabaseContext databaseContext)
     {
-        foreach (var requestWaitingInTheBackgroundQueue in queueThatKeepsTheEmailRequestsInMemory.RequestsAddedToTheBackgroundQueue)
+        foreach (var request in emailQueue.AddedRequests)
         {
-            var serviceThatProcessesTheEmailRequest = new BackgroundEmailRequestProcessingService(
-                new UserAccountRepository(databaseContextOfThisChainTest),
-                new SecurityEventRepository(databaseContextOfThisChainTest),
-                realGeneratorOfTheTokensInTheseTests,
-                senderThatKeepsTheEmailsInMemory,
+            var processingService = new BackgroundEmailRequestProcessingService(
+                new UserAccountRepository(databaseContext),
+                CreateSecurityJournal(databaseContext, clock),
+                tokenGenerator,
+                emailSender,
+                new FrenchAccountRecoveryEmails(),
                 new PublicWebsiteSettings("https://walletflow.test"),
-                clockThatOnlyMovesWhenTestsAskIt);
+                clock);
 
-            await serviceThatProcessesTheEmailRequest.ProcessOneBackgroundEmailRequestAsync(requestWaitingInTheBackgroundQueue);
-            databaseContextOfThisChainTest.ChangeTracker.Clear();
+            await processingService.ProcessAsync(request);
+            databaseContext.ChangeTracker.Clear();
         }
 
-        queueThatKeepsTheEmailRequestsInMemory.RequestsAddedToTheBackgroundQueue.Clear();
+        emailQueue.AddedRequests.Clear();
     }
 
     // Demande un lien de récupération et renvoie le jeton lu dans l'e-mail, comme le ferait le visiteur.
-    private async Task<string> RequestRecoveryThenReadTheTokenOfTheLinkAsync(WalletFlowDatabaseContext databaseContextOfThisChainTest, string emailAddressTypedInThisTest)
+    private async Task<string> RequestRecoveryThenReadTokenAsync(WalletFlowDatabaseContext databaseContext, string emailAddress)
     {
-        var serviceThatRequestsThePasswordRecovery = new PasswordRecoveryRequestService(new InMemoryPasswordRecoveryRequestLimiter(clockThatOnlyMovesWhenTestsAskIt), queueThatKeepsTheEmailRequestsInMemory);
+        var recoveryRequestService = new PasswordRecoveryRequestService(new InMemoryPasswordRecoveryRequestLimiter(clock), emailQueue);
 
-        Assert.True(serviceThatRequestsThePasswordRecovery.RequestPasswordRecoveryForThisEmailAddress(emailAddressTypedInThisTest, IpAddressOfTheVisitorInTheseTests).IsAccepted);
-        await ProcessEveryEmailRequestOfTheQueueAsync(databaseContextOfThisChainTest);
+        Assert.Equal(PasswordRecoveryRequestResult.RequestAccepted, recoveryRequestService.Request(emailAddress, IpAddress));
+        await ProcessQueuedRequestsAsync(databaseContext);
 
-        return ReadTokenWrittenInTheConfirmationLink(senderThatKeepsTheEmailsInMemory.SentEmails.Last().Body);
+        return ReadConfirmationToken(emailSender.SentEmails.Last().Body);
     }
 
     // Envoie un nouveau mot de passe comme le ferait une requête.
-    private async Task<PasswordResetResult> ResetPasswordLikeOneRealRequestAsync(WalletFlowDatabaseContext databaseContextOfThisChainTest, string tokenReadInTheRecoveryLink, string newPasswordTypedInThisTest)
+    private async Task<PasswordResetResult> ResetPasswordAsync(WalletFlowDatabaseContext databaseContext, string linkToken, string newPassword)
     {
-        var serviceThatChangesThePasswordOfTheAccount = new PasswordResetService(
-            new UserAccountRepository(databaseContextOfThisChainTest),
-            new UserSessionRepository(databaseContextOfThisChainTest),
-            realHasherOfThePasswordsInTheseTests,
-            realGeneratorOfTheTokensInTheseTests,
-            clockThatOnlyMovesWhenTestsAskIt);
+        var passwordResetService = new PasswordResetService(
+            new UserAccountRepository(databaseContext),
+            new UserSessionRepository(databaseContext),
+            CreateSavingService(databaseContext),
+            CreateSecurityJournal(databaseContext, clock),
+            passwordHasher,
+            tokenGenerator,
+            clock);
 
-        var resultOfThePasswordResetRequest = await serviceThatChangesThePasswordOfTheAccount.ResetPasswordWithLinkTokenAsync(tokenReadInTheRecoveryLink, newPasswordTypedInThisTest, IpAddressOfTheVisitorInTheseTests);
-        databaseContextOfThisChainTest.ChangeTracker.Clear();
+        var result = await passwordResetService.ResetAsync(linkToken, newPassword, IpAddress);
+        databaseContext.ChangeTracker.Clear();
 
-        return resultOfThePasswordResetRequest;
+        return result;
     }
 
     // Clique sur le lien de déblocage comme le ferait une requête.
-    private async Task<AccountUnlockResult> UnlockAccountLikeOneRealRequestAsync(WalletFlowDatabaseContext databaseContextOfThisChainTest, string tokenReadInTheUnlockLink)
+    private async Task<AccountUnlockResult> UnlockAccountAsync(WalletFlowDatabaseContext databaseContext, string linkToken)
     {
-        var serviceThatUnlocksTheUserAccount = new AccountUnlockService(new UserAccountRepository(databaseContextOfThisChainTest), realGeneratorOfTheTokensInTheseTests, clockThatOnlyMovesWhenTestsAskIt);
+        var unlockService = new AccountUnlockService(new UserAccountRepository(databaseContext), CreateSavingService(databaseContext), CreateSecurityJournal(databaseContext, clock), tokenGenerator, clock);
 
-        var resultOfTheAccountUnlockRequest = await serviceThatUnlocksTheUserAccount.UnlockAccountWithLinkTokenAsync(tokenReadInTheUnlockLink, IpAddressOfTheVisitorInTheseTests);
-        databaseContextOfThisChainTest.ChangeTracker.Clear();
+        var result = await unlockService.UnlockAsync(linkToken, IpAddress);
+        databaseContext.ChangeTracker.Clear();
 
-        return resultOfTheAccountUnlockRequest;
+        return result;
     }
 
     // Compte les événements de ce type et de ce résultat dans le vrai journal, pour ce compte.
-    private static async Task<int> CountSecurityEventsOfThisAccountAsync(
-        WalletFlowDatabaseContext databaseContextOfThisChainTest,
-        Guid identifierOfTheAccountInTheJournal,
-        SecurityEventType typeOfTheEventsToCount,
-        SecurityEventResult resultOfTheEventsToCount)
+    private static async Task<int> CountSecurityEventsAsync(
+        WalletFlowDatabaseContext databaseContext,
+        Guid accountId,
+        SecurityEventType type,
+        SecurityEventResult result)
     {
-        return await databaseContextOfThisChainTest.SecurityEvents.CountAsync(eventSearchedInTheDatabaseTable =>
-            eventSearchedInTheDatabaseTable.UserId == identifierOfTheAccountInTheJournal
-            && eventSearchedInTheDatabaseTable.Type == typeOfTheEventsToCount
-            && eventSearchedInTheDatabaseTable.Result == resultOfTheEventsToCount);
+        return await databaseContext.SecurityEvents.CountAsync(row =>
+            row.UserId == accountId
+            && row.Type == type
+            && row.Result == result);
     }
 
     // Tout le parcours : session ouverte, lien reçu, nouveau mot de passe, session fermée, seul le nouveau mot de passe marche.
     [Fact]
     public async Task RecoveryChangesThePasswordClosesTheSessionsAndOnlyTheNewPasswordWorks()
     {
-        await using var databaseContextOfThisChainTest = CreateDatabaseContextConnectedToLocalDatabase();
-        await using var transactionCancelledAtTheEndOfThisTest = await databaseContextOfThisChainTest.Database.BeginTransactionAsync();
-        var identifierOfTheAccountOfThisTest = await SaveAccountWithThisPasswordAsync(databaseContextOfThisChainTest, "chaine-recuperation@exemple.test", ValidPasswordChosenInTheseTests);
-        var resultOfTheLoginBeforeTheRecovery = await TryToLogInLikeOneRealRequestAsync(databaseContextOfThisChainTest, "chaine-recuperation@exemple.test", ValidPasswordChosenInTheseTests);
-        Assert.True(resultOfTheLoginBeforeTheRecovery.IsLoggedIn);
+        await using var databaseContext = CreateDatabaseContext();
+        await using var transaction = await databaseContext.Database.BeginTransactionAsync();
+        var accountId = await SaveAccountAsync(databaseContext, "chaine-recuperation@exemple.test", ValidPassword);
+        var initialLoginResult = await LogInAsync(databaseContext, "chaine-recuperation@exemple.test", ValidPassword);
+        Assert.IsType<AccountLoginResult.LoggedIn>(initialLoginResult);
 
-        var tokenReadInTheRecoveryLink = await RequestRecoveryThenReadTheTokenOfTheLinkAsync(databaseContextOfThisChainTest, "chaine-recuperation@exemple.test");
-        var resultOfThePasswordResetRequest = await ResetPasswordLikeOneRealRequestAsync(databaseContextOfThisChainTest, tokenReadInTheRecoveryLink, NewPasswordChosenInTheseTests);
+        var linkToken = await RequestRecoveryThenReadTokenAsync(databaseContext, "chaine-recuperation@exemple.test");
+        var resetResult = await ResetPasswordAsync(databaseContext, linkToken, NewPassword);
 
-        Assert.True(resultOfThePasswordResetRequest.IsPasswordChanged);
-        Assert.Equal(0, await databaseContextOfThisChainTest.UserSessions.CountAsync(sessionSearchedInTheDatabaseTable => sessionSearchedInTheDatabaseTable.UserId == identifierOfTheAccountOfThisTest));
-        Assert.Equal(1, await CountSecurityEventsOfThisAccountAsync(databaseContextOfThisChainTest, identifierOfTheAccountOfThisTest, SecurityEventType.PasswordRecovery, SecurityEventResult.Success));
-        Assert.Equal(1, await CountSecurityEventsOfThisAccountAsync(databaseContextOfThisChainTest, identifierOfTheAccountOfThisTest, SecurityEventType.PasswordChange, SecurityEventResult.Success));
+        Assert.Equal(PasswordResetResult.PasswordChanged, resetResult);
+        Assert.Equal(0, await databaseContext.UserSessions.CountAsync(row => row.UserId == accountId));
+        Assert.Equal(1, await CountSecurityEventsAsync(databaseContext, accountId, SecurityEventType.PasswordRecovery, SecurityEventResult.Success));
+        Assert.Equal(1, await CountSecurityEventsAsync(databaseContext, accountId, SecurityEventType.PasswordChange, SecurityEventResult.Success));
 
-        var resultOfTheLoginWithTheOldPassword = await TryToLogInLikeOneRealRequestAsync(databaseContextOfThisChainTest, "chaine-recuperation@exemple.test", ValidPasswordChosenInTheseTests);
-        var resultOfTheLoginWithTheNewPassword = await TryToLogInLikeOneRealRequestAsync(databaseContextOfThisChainTest, "chaine-recuperation@exemple.test", NewPasswordChosenInTheseTests);
-        Assert.False(resultOfTheLoginWithTheOldPassword.IsLoggedIn);
-        Assert.True(resultOfTheLoginWithTheNewPassword.IsLoggedIn);
+        var oldPasswordResult = await LogInAsync(databaseContext, "chaine-recuperation@exemple.test", ValidPassword);
+        var newPasswordResult = await LogInAsync(databaseContext, "chaine-recuperation@exemple.test", NewPassword);
+        Assert.IsNotType<AccountLoginResult.LoggedIn>(oldPasswordResult);
+        Assert.IsType<AccountLoginResult.LoggedIn>(newPasswordResult);
 
-        var resultWithTheSameLinkAgain = await ResetPasswordLikeOneRealRequestAsync(databaseContextOfThisChainTest, tokenReadInTheRecoveryLink, "Encore-Un-Mot-De-Passe-3");
-        Assert.Equal(PasswordResetService.ErrorMessageForRecoveryLinkNoLongerValid, resultWithTheSameLinkAgain.LinkErrorMessage);
+        var reusedLinkResult = await ResetPasswordAsync(databaseContext, linkToken, "Encore-Un-Mot-De-Passe-3");
+        Assert.Equal(PasswordResetResult.LinkNoLongerValid, reusedLinkResult);
     }
 
     // Le vrai Argon2 voit deux mots différents sans la normalisation : c'est le seul test qui le prouve de bout en bout.
     [Fact]
     public async Task NewPasswordTypedWithComposedAccentLogsInWithDecomposedAccent()
     {
-        await using var databaseContextOfThisChainTest = CreateDatabaseContextConnectedToLocalDatabase();
-        await using var transactionCancelledAtTheEndOfThisTest = await databaseContextOfThisChainTest.Database.BeginTransactionAsync();
-        await SaveAccountWithThisPasswordAsync(databaseContextOfThisChainTest, "chaine-recuperation-accent@exemple.test", ValidPasswordChosenInTheseTests);
-        var tokenReadInTheRecoveryLink = await RequestRecoveryThenReadTheTokenOfTheLinkAsync(databaseContextOfThisChainTest, "chaine-recuperation-accent@exemple.test");
+        await using var databaseContext = CreateDatabaseContext();
+        await using var transaction = await databaseContext.Database.BeginTransactionAsync();
+        await SaveAccountAsync(databaseContext, "chaine-recuperation-accent@exemple.test", ValidPassword);
+        var linkToken = await RequestRecoveryThenReadTokenAsync(databaseContext, "chaine-recuperation-accent@exemple.test");
 
-        await ResetPasswordLikeOneRealRequestAsync(databaseContextOfThisChainTest, tokenReadInTheRecoveryLink, "Mot-De-Passé-1");
-        var resultOfTheLoginOnAnotherDevice = await TryToLogInLikeOneRealRequestAsync(databaseContextOfThisChainTest, "chaine-recuperation-accent@exemple.test", "Mot-De-Passé-1");
+        await ResetPasswordAsync(databaseContext, linkToken, "Mot-De-Passé-1");
+        var result = await LogInAsync(databaseContext, "chaine-recuperation-accent@exemple.test", "Mot-De-Passé-1");
 
-        Assert.True(resultOfTheLoginOnAnotherDevice.IsLoggedIn);
+        Assert.IsType<AccountLoginResult.LoggedIn>(result);
     }
 
     // GR Auth : une récupération réussie débloque aussi le compte.
     [Fact]
     public async Task RecoveryUnlocksTheAccountOnTheRealDatabase()
     {
-        await using var databaseContextOfThisChainTest = CreateDatabaseContextConnectedToLocalDatabase();
-        await using var transactionCancelledAtTheEndOfThisTest = await databaseContextOfThisChainTest.Database.BeginTransactionAsync();
-        var identifierOfTheAccountOfThisTest = await SaveAccountWithThisPasswordAsync(databaseContextOfThisChainTest, "chaine-recuperation-blocage@exemple.test", ValidPasswordChosenInTheseTests);
+        await using var databaseContext = CreateDatabaseContext();
+        await using var transaction = await databaseContext.Database.BeginTransactionAsync();
+        var accountId = await SaveAccountAsync(databaseContext, "chaine-recuperation-blocage@exemple.test", ValidPassword);
 
-        for (var numberOfTheWrongPasswordBeingTried = 1; numberOfTheWrongPasswordBeingTried <= 5; numberOfTheWrongPasswordBeingTried++)
+        for (var attemptNumber = 1; attemptNumber <= 5; attemptNumber++)
         {
-            await TryToLogInLikeOneRealRequestAsync(databaseContextOfThisChainTest, "chaine-recuperation-blocage@exemple.test", "Mauvais-Mot-De-Passe-2");
+            await LogInAsync(databaseContext, "chaine-recuperation-blocage@exemple.test", "Mauvais-Mot-De-Passe-2");
         }
 
-        var tokenReadInTheRecoveryLink = await RequestRecoveryThenReadTheTokenOfTheLinkAsync(databaseContextOfThisChainTest, "chaine-recuperation-blocage@exemple.test");
-        await ResetPasswordLikeOneRealRequestAsync(databaseContextOfThisChainTest, tokenReadInTheRecoveryLink, NewPasswordChosenInTheseTests);
+        var linkToken = await RequestRecoveryThenReadTokenAsync(databaseContext, "chaine-recuperation-blocage@exemple.test");
+        await ResetPasswordAsync(databaseContext, linkToken, NewPassword);
 
-        var accountReadAgainAfterTheRecovery = await databaseContextOfThisChainTest.Users.AsNoTracking().SingleAsync(userSearchedInTheDatabaseTable => userSearchedInTheDatabaseTable.Id == identifierOfTheAccountOfThisTest);
-        Assert.Equal(0, accountReadAgainAfterTheRecovery.FailedLoginAttemptCount);
-        Assert.Null(accountReadAgainAfterTheRecovery.LockoutEndsAt);
-        Assert.Equal(1, accountReadAgainAfterTheRecovery.LockoutCount);
+        var reloadedAccount = await databaseContext.Users.AsNoTracking().SingleAsync(row => row.Id == accountId);
+        Assert.Equal(0, reloadedAccount.FailedLoginAttemptCount);
+        Assert.Null(reloadedAccount.LockoutEndsAt);
+        Assert.Equal(1, reloadedAccount.LockoutCount);
 
-        var resultOfTheLoginAfterTheRecovery = await TryToLogInLikeOneRealRequestAsync(databaseContextOfThisChainTest, "chaine-recuperation-blocage@exemple.test", NewPasswordChosenInTheseTests);
-        Assert.True(resultOfTheLoginAfterTheRecovery.IsLoggedIn);
+        var result = await LogInAsync(databaseContext, "chaine-recuperation-blocage@exemple.test", NewPassword);
+        Assert.IsType<AccountLoginResult.LoggedIn>(result);
     }
 
     // Tout le parcours du déblocage : 5 essais, un seul e-mail, lien qui débloque sans connecter.
     [Fact]
     public async Task UnlockLinkReceivedAfterTheFifthAttemptOpensTheAccountWithoutLoggingIn()
     {
-        await using var databaseContextOfThisChainTest = CreateDatabaseContextConnectedToLocalDatabase();
-        await using var transactionCancelledAtTheEndOfThisTest = await databaseContextOfThisChainTest.Database.BeginTransactionAsync();
-        var identifierOfTheAccountOfThisTest = await SaveAccountWithThisPasswordAsync(databaseContextOfThisChainTest, "chaine-deblocage@exemple.test", ValidPasswordChosenInTheseTests);
+        await using var databaseContext = CreateDatabaseContext();
+        await using var transaction = await databaseContext.Database.BeginTransactionAsync();
+        var accountId = await SaveAccountAsync(databaseContext, "chaine-deblocage@exemple.test", ValidPassword);
 
-        for (var numberOfTheWrongPasswordBeingTried = 1; numberOfTheWrongPasswordBeingTried <= 7; numberOfTheWrongPasswordBeingTried++)
+        for (var attemptNumber = 1; attemptNumber <= 7; attemptNumber++)
         {
-            await TryToLogInLikeOneRealRequestAsync(databaseContextOfThisChainTest, "chaine-deblocage@exemple.test", "Mauvais-Mot-De-Passe-2");
+            await LogInAsync(databaseContext, "chaine-deblocage@exemple.test", "Mauvais-Mot-De-Passe-2");
         }
 
-        await ProcessEveryEmailRequestOfTheQueueAsync(databaseContextOfThisChainTest);
+        await ProcessQueuedRequestsAsync(databaseContext);
 
-        var emailReceivedByTheAddressOwner = Assert.Single(senderThatKeepsTheEmailsInMemory.SentEmails);
-        Assert.Contains("https://walletflow.test/unlock-account#token=", emailReceivedByTheAddressOwner.Body);
-        var tokenReadInTheUnlockLink = ReadTokenWrittenInTheConfirmationLink(emailReceivedByTheAddressOwner.Body);
+        var email = Assert.Single(emailSender.SentEmails);
+        Assert.Contains("https://walletflow.test/unlock-account#token=", email.Body);
+        var linkToken = ReadConfirmationToken(email.Body);
 
-        var resultOfTheAccountUnlockRequest = await UnlockAccountLikeOneRealRequestAsync(databaseContextOfThisChainTest, tokenReadInTheUnlockLink);
+        var unlockResult = await UnlockAccountAsync(databaseContext, linkToken);
 
-        Assert.True(resultOfTheAccountUnlockRequest.IsUnlocked);
-        Assert.Equal(0, await databaseContextOfThisChainTest.UserSessions.CountAsync(sessionSearchedInTheDatabaseTable => sessionSearchedInTheDatabaseTable.UserId == identifierOfTheAccountOfThisTest));
-        Assert.Equal(1, await CountSecurityEventsOfThisAccountAsync(databaseContextOfThisChainTest, identifierOfTheAccountOfThisTest, SecurityEventType.Unlock, SecurityEventResult.Success));
+        Assert.Equal(AccountUnlockResult.AccountUnlocked, unlockResult);
+        Assert.Equal(0, await databaseContext.UserSessions.CountAsync(row => row.UserId == accountId));
+        Assert.Equal(1, await CountSecurityEventsAsync(databaseContext, accountId, SecurityEventType.Unlock, SecurityEventResult.Success));
 
-        var accountReadAgainAfterTheUnlock = await databaseContextOfThisChainTest.Users.AsNoTracking().SingleAsync(userSearchedInTheDatabaseTable => userSearchedInTheDatabaseTable.Id == identifierOfTheAccountOfThisTest);
-        Assert.Equal(0, accountReadAgainAfterTheUnlock.FailedLoginAttemptCount);
-        Assert.Null(accountReadAgainAfterTheUnlock.LockoutEndsAt);
-        Assert.Equal(1, accountReadAgainAfterTheUnlock.LockoutCount);
+        var reloadedAccount = await databaseContext.Users.AsNoTracking().SingleAsync(row => row.Id == accountId);
+        Assert.Equal(0, reloadedAccount.FailedLoginAttemptCount);
+        Assert.Null(reloadedAccount.LockoutEndsAt);
+        Assert.Equal(1, reloadedAccount.LockoutCount);
 
-        var resultOfTheLoginAfterTheUnlock = await TryToLogInLikeOneRealRequestAsync(databaseContextOfThisChainTest, "chaine-deblocage@exemple.test", ValidPasswordChosenInTheseTests);
-        Assert.True(resultOfTheLoginAfterTheUnlock.IsLoggedIn);
+        var loginResult = await LogInAsync(databaseContext, "chaine-deblocage@exemple.test", ValidPassword);
+        Assert.IsType<AccountLoginResult.LoggedIn>(loginResult);
 
-        var resultWithTheSameLinkAgain = await UnlockAccountLikeOneRealRequestAsync(databaseContextOfThisChainTest, tokenReadInTheUnlockLink);
-        Assert.Equal(AccountUnlockService.ErrorMessageForUnlockLinkNoLongerValid, resultWithTheSameLinkAgain.LinkErrorMessage);
+        var reusedLinkResult = await UnlockAccountAsync(databaseContext, linkToken);
+        Assert.Equal(AccountUnlockResult.LinkNoLongerValid, reusedLinkResult);
     }
 
     [Fact]
     public async Task SecondRecoveryLinkReplacesTheFirstOneOnTheRealDatabase()
     {
-        await using var databaseContextOfThisChainTest = CreateDatabaseContextConnectedToLocalDatabase();
-        await using var transactionCancelledAtTheEndOfThisTest = await databaseContextOfThisChainTest.Database.BeginTransactionAsync();
-        await SaveAccountWithThisPasswordAsync(databaseContextOfThisChainTest, "chaine-deux-liens@exemple.test", ValidPasswordChosenInTheseTests);
+        await using var databaseContext = CreateDatabaseContext();
+        await using var transaction = await databaseContext.Database.BeginTransactionAsync();
+        await SaveAccountAsync(databaseContext, "chaine-deux-liens@exemple.test", ValidPassword);
 
-        var tokenOfTheFirstRecoveryLink = await RequestRecoveryThenReadTheTokenOfTheLinkAsync(databaseContextOfThisChainTest, "chaine-deux-liens@exemple.test");
-        var tokenOfTheSecondRecoveryLink = await RequestRecoveryThenReadTheTokenOfTheLinkAsync(databaseContextOfThisChainTest, "chaine-deux-liens@exemple.test");
+        var firstRecoveryToken = await RequestRecoveryThenReadTokenAsync(databaseContext, "chaine-deux-liens@exemple.test");
+        var secondRecoveryToken = await RequestRecoveryThenReadTokenAsync(databaseContext, "chaine-deux-liens@exemple.test");
 
-        var resultWithTheFirstRecoveryLink = await ResetPasswordLikeOneRealRequestAsync(databaseContextOfThisChainTest, tokenOfTheFirstRecoveryLink, NewPasswordChosenInTheseTests);
-        var resultWithTheSecondRecoveryLink = await ResetPasswordLikeOneRealRequestAsync(databaseContextOfThisChainTest, tokenOfTheSecondRecoveryLink, NewPasswordChosenInTheseTests);
+        var firstResult = await ResetPasswordAsync(databaseContext, firstRecoveryToken, NewPassword);
+        var secondResult = await ResetPasswordAsync(databaseContext, secondRecoveryToken, NewPassword);
 
-        Assert.Equal(PasswordResetService.ErrorMessageForRecoveryLinkNoLongerValid, resultWithTheFirstRecoveryLink.LinkErrorMessage);
-        Assert.True(resultWithTheSecondRecoveryLink.IsPasswordChanged);
+        Assert.Equal(PasswordResetResult.LinkNoLongerValid, firstResult);
+        Assert.Equal(PasswordResetResult.PasswordChanged, secondResult);
     }
 
     // Un lien de récupération arrivé à 30 minutes est refusé sur la vraie base, à la seconde près.
     [Fact]
     public async Task RecoveryLinkExpiresAfterThirtyMinutesOnTheRealDatabase()
     {
-        await using var databaseContextOfThisChainTest = CreateDatabaseContextConnectedToLocalDatabase();
-        await using var transactionCancelledAtTheEndOfThisTest = await databaseContextOfThisChainTest.Database.BeginTransactionAsync();
-        await SaveAccountWithThisPasswordAsync(databaseContextOfThisChainTest, "chaine-lien-expire@exemple.test", ValidPasswordChosenInTheseTests);
-        var tokenReadInTheRecoveryLink = await RequestRecoveryThenReadTheTokenOfTheLinkAsync(databaseContextOfThisChainTest, "chaine-lien-expire@exemple.test");
+        await using var databaseContext = CreateDatabaseContext();
+        await using var transaction = await databaseContext.Database.BeginTransactionAsync();
+        await SaveAccountAsync(databaseContext, "chaine-lien-expire@exemple.test", ValidPassword);
+        var linkToken = await RequestRecoveryThenReadTokenAsync(databaseContext, "chaine-lien-expire@exemple.test");
 
-        clockThatOnlyMovesWhenTestsAskIt.MoveFakeClockForwardByThisDuration(TimeSpan.FromMinutes(30));
-        var resultOfTheLatePasswordReset = await ResetPasswordLikeOneRealRequestAsync(databaseContextOfThisChainTest, tokenReadInTheRecoveryLink, NewPasswordChosenInTheseTests);
+        clock.Advance(TimeSpan.FromMinutes(30));
+        var result = await ResetPasswordAsync(databaseContext, linkToken, NewPassword);
 
-        Assert.Equal(PasswordResetService.ErrorMessageForRecoveryLinkNoLongerValid, resultOfTheLatePasswordReset.LinkErrorMessage);
+        Assert.Equal(PasswordResetResult.LinkNoLongerValid, result);
     }
 
     [Fact]
     public async Task UnconfirmedAddressGetsNoLinkOnTheRealDatabase()
     {
-        await using var databaseContextOfThisChainTest = CreateDatabaseContextConnectedToLocalDatabase();
-        await using var transactionCancelledAtTheEndOfThisTest = await databaseContextOfThisChainTest.Database.BeginTransactionAsync();
-        var identifierOfTheAccountOfThisTest = await SaveAccountWithThisPasswordAsync(databaseContextOfThisChainTest, "chaine-non-confirmee@exemple.test", ValidPasswordChosenInTheseTests, emailAddressOfTheAccountIsConfirmed: false);
-        var serviceThatRequestsThePasswordRecovery = new PasswordRecoveryRequestService(new InMemoryPasswordRecoveryRequestLimiter(clockThatOnlyMovesWhenTestsAskIt), queueThatKeepsTheEmailRequestsInMemory);
+        await using var databaseContext = CreateDatabaseContext();
+        await using var transaction = await databaseContext.Database.BeginTransactionAsync();
+        var accountId = await SaveAccountAsync(databaseContext, "chaine-non-confirmee@exemple.test", ValidPassword, isEmailConfirmed: false);
+        var recoveryRequestService = new PasswordRecoveryRequestService(new InMemoryPasswordRecoveryRequestLimiter(clock), emailQueue);
 
-        serviceThatRequestsThePasswordRecovery.RequestPasswordRecoveryForThisEmailAddress("chaine-non-confirmee@exemple.test", IpAddressOfTheVisitorInTheseTests);
-        await ProcessEveryEmailRequestOfTheQueueAsync(databaseContextOfThisChainTest);
+        recoveryRequestService.Request("chaine-non-confirmee@exemple.test", IpAddress);
+        await ProcessQueuedRequestsAsync(databaseContext);
 
-        Assert.DoesNotContain("#token=", Assert.Single(senderThatKeepsTheEmailsInMemory.SentEmails).Body);
-        Assert.Equal(0, await databaseContextOfThisChainTest.EmailTokens.CountAsync(tokenSearchedInTheDatabaseTable => tokenSearchedInTheDatabaseTable.UserId == identifierOfTheAccountOfThisTest));
-        Assert.Equal(1, await CountSecurityEventsOfThisAccountAsync(databaseContextOfThisChainTest, identifierOfTheAccountOfThisTest, SecurityEventType.PasswordRecovery, SecurityEventResult.Failure));
+        Assert.DoesNotContain("#token=", Assert.Single(emailSender.SentEmails).Body);
+        Assert.Equal(0, await databaseContext.EmailTokens.CountAsync(row => row.UserId == accountId));
+        Assert.Equal(1, await CountSecurityEventsAsync(databaseContext, accountId, SecurityEventType.PasswordRecovery, SecurityEventResult.Failure));
     }
 
     // Une adresse inconnue laisse une trace sans identifiant, avec l'adresse IP, et l'adresse tapée n'est écrite nulle part (SS §7).
     [Fact]
     public async Task UnknownAddressIsWrittenInTheRealJournalWithoutIdentifier()
     {
-        await using var databaseContextOfThisChainTest = CreateDatabaseContextConnectedToLocalDatabase();
-        await using var transactionCancelledAtTheEndOfThisTest = await databaseContextOfThisChainTest.Database.BeginTransactionAsync();
-        var numberOfEventsWithoutIdentifierBeforeTheRequest = await databaseContextOfThisChainTest.SecurityEvents.CountAsync(eventSearchedInTheDatabaseTable =>
-            eventSearchedInTheDatabaseTable.UserId == null && eventSearchedInTheDatabaseTable.Type == SecurityEventType.PasswordRecovery);
-        var serviceThatRequestsThePasswordRecovery = new PasswordRecoveryRequestService(new InMemoryPasswordRecoveryRequestLimiter(clockThatOnlyMovesWhenTestsAskIt), queueThatKeepsTheEmailRequestsInMemory);
+        await using var databaseContext = CreateDatabaseContext();
+        await using var transaction = await databaseContext.Database.BeginTransactionAsync();
+        var anonymousEventCountBefore = await databaseContext.SecurityEvents.CountAsync(row =>
+            row.UserId == null && row.Type == SecurityEventType.PasswordRecovery);
+        var recoveryRequestService = new PasswordRecoveryRequestService(new InMemoryPasswordRecoveryRequestLimiter(clock), emailQueue);
 
-        serviceThatRequestsThePasswordRecovery.RequestPasswordRecoveryForThisEmailAddress("adresse-sans-compte@exemple.test", IpAddressOfTheVisitorInTheseTests);
-        await ProcessEveryEmailRequestOfTheQueueAsync(databaseContextOfThisChainTest);
+        recoveryRequestService.Request("adresse-sans-compte@exemple.test", IpAddress);
+        await ProcessQueuedRequestsAsync(databaseContext);
 
-        Assert.Empty(senderThatKeepsTheEmailsInMemory.SentEmails);
-        Assert.Equal(numberOfEventsWithoutIdentifierBeforeTheRequest + 1, await databaseContextOfThisChainTest.SecurityEvents.CountAsync(eventSearchedInTheDatabaseTable =>
-            eventSearchedInTheDatabaseTable.UserId == null && eventSearchedInTheDatabaseTable.Type == SecurityEventType.PasswordRecovery));
+        Assert.Empty(emailSender.SentEmails);
+        Assert.Equal(anonymousEventCountBefore + 1, await databaseContext.SecurityEvents.CountAsync(row =>
+            row.UserId == null && row.Type == SecurityEventType.PasswordRecovery));
     }
 }

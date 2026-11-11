@@ -1,13 +1,28 @@
 namespace WalletFlow.Application.TwoFactorAuthentication;
 
-// Résultat du début d'une activation : le secret à donner à l'application, ou le refus à afficher.
-// Une classe plutôt qu'un record : un record afficherait le secret si on l'écrivait dans un journal.
-public class TwoFactorActivationStartResult
+// Résultat du début d'une activation : toujours une seule des formes écrites dans ce fichier.
+// Des classes plutôt que des records : un record afficherait le secret si on l'écrivait dans un journal.
+public abstract class TwoFactorActivationStartResult
 {
-    public string? WrongPasswordErrorMessage { get; init; }
-    public string? AlreadyEnabledErrorMessage { get; init; }
-    public string? SecretOfTheAuthenticatorApplication { get; init; }
-    public string? LinkThatAddsTheSecretToTheApplication { get; init; }
+    // Constructeur privé : aucune autre forme ne peut être créée en dehors de ce fichier.
+    private TwoFactorActivationStartResult()
+    {
+    }
 
-    public bool IsActivationStarted => SecretOfTheAuthenticatorApplication != null;
+    // L'activation commence : le secret est à donner à l'application d'authentification.
+    public sealed class Started : TwoFactorActivationStartResult
+    {
+        public required string Secret { get; init; }
+        public required string SetupLink { get; init; }
+    }
+
+    // Le mot de passe donné n'est pas celui du compte.
+    public sealed class WrongPassword : TwoFactorActivationStartResult
+    {
+    }
+
+    // La double authentification est déjà activée sur ce compte.
+    public sealed class AlreadyEnabled : TwoFactorActivationStartResult
+    {
+    }
 }

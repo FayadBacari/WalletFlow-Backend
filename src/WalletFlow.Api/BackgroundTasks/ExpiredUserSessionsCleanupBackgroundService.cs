@@ -5,48 +5,48 @@ namespace WalletFlow.Api.BackgroundTasks;
 // Tâche de fond : efface chaque jour les sessions expirées (MPD §3).
 public class ExpiredUserSessionsCleanupBackgroundService : BackgroundService
 {
-    public static readonly TimeSpan DurationBetweenTwoCleanupsOfTheSessions = TimeSpan.FromDays(1);
+    public static readonly TimeSpan CleanupInterval = TimeSpan.FromDays(1);
 
-    private readonly IServiceScopeFactory factoryOfTheScopesUsedByTheCleanups;
-    private readonly TimeProvider clockThatGivesTheCurrentDateAndTime;
-    private readonly ILogger<ExpiredUserSessionsCleanupBackgroundService> loggerOfTheCleanupsOfTheSessions;
+    private readonly IServiceScopeFactory scopeFactory;
+    private readonly TimeProvider clock;
+    private readonly ILogger<ExpiredUserSessionsCleanupBackgroundService> logger;
 
     // Reçoit de quoi créer un accès à la base pour chaque passage, l'horloge et le journal technique.
     public ExpiredUserSessionsCleanupBackgroundService(
-        IServiceScopeFactory factoryOfTheScopesUsedByTheCleanups,
-        TimeProvider clockThatGivesTheCurrentDateAndTime,
-        ILogger<ExpiredUserSessionsCleanupBackgroundService> loggerOfTheCleanupsOfTheSessions)
+        IServiceScopeFactory scopeFactory,
+        TimeProvider clock,
+        ILogger<ExpiredUserSessionsCleanupBackgroundService> logger)
     {
-        this.factoryOfTheScopesUsedByTheCleanups = factoryOfTheScopesUsedByTheCleanups;
-        this.clockThatGivesTheCurrentDateAndTime = clockThatGivesTheCurrentDateAndTime;
-        this.loggerOfTheCleanupsOfTheSessions = loggerOfTheCleanupsOfTheSessions;
+        this.scopeFactory = scopeFactory;
+        this.clock = clock;
+        this.logger = logger;
     }
 
     // Tourne tant que l'API tourne (nom imposé par le framework).
-    protected override async Task ExecuteAsync(CancellationToken tokenThatStopsTheCleanupTask)
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        while (!tokenThatStopsTheCleanupTask.IsCancellationRequested)
+        while (!stoppingToken.IsCancellationRequested)
         {
-            await RunOneCleanupOfTheExpiredUserSessionsAsync();
-            await Task.Delay(DurationBetweenTwoCleanupsOfTheSessions, clockThatGivesTheCurrentDateAndTime, tokenThatStopsTheCleanupTask);
+            await RunCleanupAsync();
+            await Task.Delay(CleanupInterval, clock, stoppingToken);
         }
     }
 
     // Fait un passage. Une panne ne doit pas arrêter l'API : la tâche réessaiera au prochain passage.
-    public async Task RunOneCleanupOfTheExpiredUserSessionsAsync()
+    public async Task RunCleanupAsync()
     {
         try
         {
-            using var scopeOfThisCleanupOfTheSessions = factoryOfTheScopesUsedByTheCleanups.CreateScope();
-            var serviceThatDeletesTheExpiredSessions = scopeOfThisCleanupOfTheSessions.ServiceProvider.GetRequiredService<ExpiredUserSessionsCleanupService>();
+            using var scope = scopeFactory.CreateScope();
+            var cleanupService = scope.ServiceProvider.GetRequiredService<ExpiredUserSessionsCleanupService>();
 
-            var numberOfSessionsDeletedByThisCleanup = await serviceThatDeletesTheExpiredSessions.DeleteExpiredUserSessionsFromTheDatabaseAsync();
+            var deletedCount = await cleanupService.DeleteExpiredSessionsAsync();
 
-            loggerOfTheCleanupsOfTheSessions.LogInformation("{NombreDeSessions} session(s) expirée(s) effacée(s).", numberOfSessionsDeletedByThisCleanup);
+            logger.LogInformation("{NombreDeSessions} session(s) expirée(s) effacée(s).", deletedCount);
         }
-        catch (Exception technicalErrorRaisedByTheCleanup)
+        catch (Exception exception)
         {
-            loggerOfTheCleanupsOfTheSessions.LogError(technicalErrorRaisedByTheCleanup, "L'effacement des sessions expirées a échoué.");
+            logger.LogError(exception, "L'effacement des sessions expirées a échoué.");
         }
     }
 }

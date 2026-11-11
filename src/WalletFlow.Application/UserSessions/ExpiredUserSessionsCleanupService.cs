@@ -6,23 +6,23 @@ namespace WalletFlow.Application.UserSessions;
 // l'effacement évite seulement que la table ne grossisse quand on ferme son navigateur sans se déconnecter.
 public class ExpiredUserSessionsCleanupService
 {
-    private readonly IUserSessionRepository repositoryOfTheUserSessionsInDatabase;
-    private readonly TimeProvider clockThatGivesTheCurrentDateAndTime;
+    private readonly IUserSessionRepository sessionRepository;
+    private readonly TimeProvider clock;
 
     // Reçoit l'accès à la base et l'horloge.
     public ExpiredUserSessionsCleanupService(
-        IUserSessionRepository repositoryOfTheUserSessionsInDatabase,
-        TimeProvider clockThatGivesTheCurrentDateAndTime)
+        IUserSessionRepository sessionRepository,
+        TimeProvider clock)
     {
-        this.repositoryOfTheUserSessionsInDatabase = repositoryOfTheUserSessionsInDatabase;
-        this.clockThatGivesTheCurrentDateAndTime = clockThatGivesTheCurrentDateAndTime;
+        this.sessionRepository = sessionRepository;
+        this.clock = clock;
     }
 
     // Efface les sessions concernées, et renvoie leur nombre.
-    public async Task<int> DeleteExpiredUserSessionsFromTheDatabaseAsync()
+    public async Task<int> DeleteExpiredSessionsAsync()
     {
-        var oldestDateOfActivityStillAccepted = clockThatGivesTheCurrentDateAndTime.GetUtcNow().UtcDateTime - UserSessionRules.DurationOfInactivityThatClosesTheSession;
+        var activityCutoff = clock.GetUtcNow().UtcDateTime - UserSessionRules.IdleTimeout;
 
-        return await repositoryOfTheUserSessionsInDatabase.DeleteUserSessionsInactiveSinceThisDateAsync(oldestDateOfActivityStillAccepted);
+        return await sessionRepository.DeleteInactiveSinceAsync(activityCutoff);
     }
 }

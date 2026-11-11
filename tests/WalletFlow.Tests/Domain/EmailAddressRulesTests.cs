@@ -8,9 +8,9 @@ public class EmailAddressRulesTests
     [Fact]
     public void StoredFormHasNoSurroundingSpacesAndNoUppercaseLetter()
     {
-        var emailAddressInItsStoredForm = EmailAddressRules.ConvertEmailAddressIntoItsStoredForm("  Prenom.Nom@Exemple.FR ");
+        var email = EmailAddressRules.Normalize("  Prenom.Nom@Exemple.FR ");
 
-        Assert.Equal("prenom.nom@exemple.fr", emailAddressInItsStoredForm);
+        Assert.Equal("prenom.nom@exemple.fr", email);
     }
 
     [Theory]
@@ -21,9 +21,9 @@ public class EmailAddressRulesTests
     [InlineData("prenom@exemple.xn--p1ai")] // domaine international, écrit sans accent
     [InlineData("o'neil@exemple.ie")]
     [InlineData("jean.d'arc@exemple.fr")]
-    public void EmailAddressWithValidFormatIsAccepted(string validlyFormattedEmailAddressForThisTest)
+    public void EmailAddressWithValidFormatIsAccepted(string validEmail)
     {
-        Assert.True(EmailAddressRules.CheckThatEmailAddressHasValidFormat(validlyFormattedEmailAddressForThisTest));
+        Assert.True(EmailAddressRules.IsValid(validEmail));
     }
 
     [Theory]
@@ -58,9 +58,9 @@ public class EmailAddressRulesTests
     [InlineData("prenom@exémple.fr")]
     [InlineData("a@b.c")]
     [InlineData("a@exemple.1a")]
-    public void EmailAddressWithInvalidFormatIsRefused(string badlyFormattedEmailAddressForThisTest)
+    public void EmailAddressWithInvalidFormatIsRefused(string invalidEmail)
     {
-        Assert.False(EmailAddressRules.CheckThatEmailAddressHasValidFormat(badlyFormattedEmailAddressForThisTest));
+        Assert.False(EmailAddressRules.IsValid(invalidEmail));
     }
 
     // Un caractère invisible est refusé, même entre guillemets : PostgreSQL ne sait pas enregistrer le caractère NUL.
@@ -69,53 +69,53 @@ public class EmailAddressRulesTests
     [InlineData(0x01)]
     [InlineData(0x0A)]
     [InlineData(0x7F)]
-    public void EmailAddressContainingInvisibleControlCharacterIsRefused(int codeOfTheInvisibleControlCharacter)
+    public void EmailAddressContainingInvisibleControlCharacterIsRefused(int controlCharacterCode)
     {
-        var invisibleControlCharacterForThisTest = (char)codeOfTheInvisibleControlCharacter;
+        var controlCharacter = (char)controlCharacterCode;
 
-        Assert.False(EmailAddressRules.CheckThatEmailAddressHasValidFormat("a" + invisibleControlCharacterForThisTest + "@exemple.fr"));
-        Assert.False(EmailAddressRules.CheckThatEmailAddressHasValidFormat("\"a\\" + invisibleControlCharacterForThisTest + "\"@exemple.fr"));
+        Assert.False(EmailAddressRules.IsValid("a" + controlCharacter + "@exemple.fr"));
+        Assert.False(EmailAddressRules.IsValid("\"a\\" + controlCharacter + "\"@exemple.fr"));
     }
 
     [Fact]
     public void TextBeforeTheAtSignOfExactlyTheMaximumLengthIsAccepted()
     {
-        Assert.True(EmailAddressRules.CheckThatEmailAddressHasValidFormat(new string('a', 64) + "@exemple.fr"));
+        Assert.True(EmailAddressRules.IsValid(new string('a', 64) + "@exemple.fr"));
     }
 
     [Fact]
     public void TextBeforeTheAtSignLongerThanTheMaximumLengthIsRefused()
     {
-        Assert.False(EmailAddressRules.CheckThatEmailAddressHasValidFormat(new string('a', 65) + "@exemple.fr"));
+        Assert.False(EmailAddressRules.IsValid(new string('a', 65) + "@exemple.fr"));
     }
 
     [Fact]
     public void DomainPartOfExactlyTheMaximumLengthIsAccepted()
     {
-        Assert.True(EmailAddressRules.CheckThatEmailAddressHasValidFormat("a@" + new string('b', 63) + ".fr"));
+        Assert.True(EmailAddressRules.IsValid("a@" + new string('b', 63) + ".fr"));
     }
 
     [Fact]
     public void DomainPartLongerThanTheMaximumLengthIsRefused()
     {
-        Assert.False(EmailAddressRules.CheckThatEmailAddressHasValidFormat("a@" + new string('b', 64) + ".fr"));
+        Assert.False(EmailAddressRules.IsValid("a@" + new string('b', 64) + ".fr"));
     }
 
     [Fact]
     public void EmailAddressOfExactlyTheMaximumLengthIsAccepted()
     {
-        var emailAddressOfExactlyTheMaximumLength = new string('a', 64) + "@" + new string('b', 63) + "." + new string('c', 63) + "." + new string('d', 58) + ".fr";
+        var longestEmail = new string('a', 64) + "@" + new string('b', 63) + "." + new string('c', 63) + "." + new string('d', 58) + ".fr";
 
-        Assert.Equal(254, emailAddressOfExactlyTheMaximumLength.Length);
-        Assert.True(EmailAddressRules.CheckThatEmailAddressHasValidFormat(emailAddressOfExactlyTheMaximumLength));
+        Assert.Equal(254, longestEmail.Length);
+        Assert.True(EmailAddressRules.IsValid(longestEmail));
     }
 
     [Fact]
     public void EmailAddressLongerThanTheMaximumLengthIsRefused()
     {
-        var emailAddressLongerThanTheMaximumLength = new string('a', 64) + "@" + new string('b', 63) + "." + new string('c', 63) + "." + new string('d', 59) + ".fr";
+        var tooLongEmail = new string('a', 64) + "@" + new string('b', 63) + "." + new string('c', 63) + "." + new string('d', 59) + ".fr";
 
-        Assert.Equal(255, emailAddressLongerThanTheMaximumLength.Length);
-        Assert.False(EmailAddressRules.CheckThatEmailAddressHasValidFormat(emailAddressLongerThanTheMaximumLength));
+        Assert.Equal(255, tooLongEmail.Length);
+        Assert.False(EmailAddressRules.IsValid(tooLongEmail));
     }
 }

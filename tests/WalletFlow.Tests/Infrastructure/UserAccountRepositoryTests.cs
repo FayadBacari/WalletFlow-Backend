@@ -3,7 +3,7 @@ using WalletFlow.Domain.AccountsAndCategories;
 using WalletFlow.Domain.UsersAndSecurity;
 using WalletFlow.Infrastructure.Persistence;
 using WalletFlow.Infrastructure.Persistence.Repositories;
-using static WalletFlow.Tests.Infrastructure.LocalDatabaseForTheTests;
+using static WalletFlow.Tests.Infrastructure.LocalTestDatabase;
 
 namespace WalletFlow.Tests.Infrastructure;
 
@@ -11,439 +11,434 @@ namespace WalletFlow.Tests.Infrastructure;
 // Chaque test travaille dans une transaction annulée à la fin : la base reste vide.
 public class UserAccountRepositoryTests
 {
-    private const string OriginalSecureHashOfTheTestAccounts = "empreinte-de-test";
+    private const string OriginalHash = "empreinte-de-test";
 
-    private static readonly DateTime CurrentDateUsedInTheseTests = new DateTime(2026, 11, 4, 12, 0, 0, DateTimeKind.Utc);
+    private static readonly DateTime Now = new DateTime(2026, 11, 4, 12, 0, 0, DateTimeKind.Utc);
 
     // Crée un nouvel utilisateur avec cette adresse, sans l'enregistrer.
-    private static User CreateNewUserWithThisEmailAddress(string emailAddressOfTheNewUserToCreate)
+    private static User CreateUser(string emailAddress)
     {
-        return new User { Email = emailAddressOfTheNewUserToCreate, PasswordHash = OriginalSecureHashOfTheTestAccounts };
+        return new User { Email = emailAddress, PasswordHash = OriginalHash };
     }
 
     // Crée le jeton de confirmation d'un utilisateur, valable encore 24 heures, sans l'enregistrer.
-    private static EmailToken CreateConfirmationTokenForThisNewUser(User newUserThatReceivesTheToken)
+    private static EmailToken CreateConfirmationToken(User newUser)
     {
-        return CreateEmailTokenForThisUserAccount(newUserThatReceivesTheToken, EmailTokenType.SignupConfirmation, CurrentDateUsedInTheseTests.AddHours(24));
+        return CreateEmailToken(newUser, EmailTokenType.SignupConfirmation, Now.AddHours(24));
     }
 
     // Crée un jeton avec une empreinte unique, sans l'enregistrer.
-    private static EmailToken CreateEmailTokenForThisUserAccount(User userThatReceivesTheTokenToCreate, EmailTokenType typeOfTheTokenToCreate, DateTime expirationDateOfTheTokenToCreate)
+    private static EmailToken CreateEmailToken(User user, EmailTokenType tokenType, DateTime expiresAt)
     {
         return new EmailToken
         {
-            Type = typeOfTheTokenToCreate,
+            Type = tokenType,
             TokenHash = Convert.ToHexStringLower(Guid.NewGuid().ToByteArray()) + new string('0', 32),
-            ExpiresAt = expirationDateOfTheTokenToCreate,
-            UserId = userThatReceivesTheTokenToCreate.Id
+            ExpiresAt = expiresAt,
+            UserId = user.Id
         };
     }
 
     // Enregistre un nouveau compte complet avec cette adresse, puis oublie les objets gardés en mémoire.
-    private static async Task<User> SaveNewAccountWithThisEmailAddressAsync(
-        WalletFlowDatabaseContext databaseContextOfThisRepositoryTest,
-        string emailAddressOfTheNewUserToCreate,
-        DateTime expirationDateOfTheConfirmationToken)
+    private static async Task<User> SaveAccountAsync(
+        WalletFlowDatabaseContext databaseContext,
+        string emailAddress,
+        DateTime expiresAt)
     {
-        var repositoryUsedToSaveTheAccount = new UserAccountRepository(databaseContextOfThisRepositoryTest);
-        var newUserToSaveInTheRealDatabase = CreateNewUserWithThisEmailAddress(emailAddressOfTheNewUserToCreate);
+        var repository = new UserAccountRepository(databaseContext);
+        var newUser = CreateUser(emailAddress);
 
-        await repositoryUsedToSaveTheAccount.TryToSaveNewAccountWithCategoriesAndTokenAsync(
-            newUserToSaveInTheRealDatabase,
-            DefaultCategories.CreateTheEightDefaultCategoriesForNewUser(newUserToSaveInTheRealDatabase.Id),
-            CreateEmailTokenForThisUserAccount(newUserToSaveInTheRealDatabase, EmailTokenType.SignupConfirmation, expirationDateOfTheConfirmationToken));
+        await repository.TryAddAccountAsync(
+            newUser,
+            DefaultCategories.CreateForUser(newUser.Id),
+            CreateEmailToken(newUser, EmailTokenType.SignupConfirmation, expiresAt));
 
-        databaseContextOfThisRepositoryTest.ChangeTracker.Clear();
-        return newUserToSaveInTheRealDatabase;
+        databaseContext.ChangeTracker.Clear();
+        return newUser;
     }
 
     [Fact]
     public async Task NewAccountIsReallySavedWithItsCategoriesAndItsConfirmationToken()
     {
-        await using var databaseContextOfThisRepositoryTest = CreateDatabaseContextConnectedToLocalDatabase();
-        await using var transactionCancelledAtTheEndOfThisTest = await databaseContextOfThisRepositoryTest.Database.BeginTransactionAsync();
-        var repositoryBeingTestedOnTheRealDatabase = new UserAccountRepository(databaseContextOfThisRepositoryTest);
-        var newUserToSaveInTheRealDatabase = CreateNewUserWithThisEmailAddress("test-depot-enregistrement@exemple.test");
+        await using var databaseContext = CreateDatabaseContext();
+        await using var transaction = await databaseContext.Database.BeginTransactionAsync();
+        var repository = new UserAccountRepository(databaseContext);
+        var newUser = CreateUser("test-depot-enregistrement@exemple.test");
 
-        var newAccountWasSavedInTheDatabase = await repositoryBeingTestedOnTheRealDatabase.TryToSaveNewAccountWithCategoriesAndTokenAsync(
-            newUserToSaveInTheRealDatabase,
-            DefaultCategories.CreateTheEightDefaultCategoriesForNewUser(newUserToSaveInTheRealDatabase.Id),
-            CreateConfirmationTokenForThisNewUser(newUserToSaveInTheRealDatabase));
+        var saved = await repository.TryAddAccountAsync(
+            newUser,
+            DefaultCategories.CreateForUser(newUser.Id),
+            CreateConfirmationToken(newUser));
 
-        Assert.True(newAccountWasSavedInTheDatabase);
+        Assert.True(saved);
 
         // On oublie les objets en mémoire : tout ce qui suit est vraiment relu dans la base.
-        databaseContextOfThisRepositoryTest.ChangeTracker.Clear();
+        databaseContext.ChangeTracker.Clear();
 
-        var userReadBackFromTheRealDatabase = await databaseContextOfThisRepositoryTest.Users.SingleAsync(userSearchedInTheDatabaseTable =>
-            userSearchedInTheDatabaseTable.Id == newUserToSaveInTheRealDatabase.Id);
-        Assert.Equal("test-depot-enregistrement@exemple.test", userReadBackFromTheRealDatabase.Email);
-        Assert.Equal(UserRole.User, userReadBackFromTheRealDatabase.Role);
-        Assert.Equal(NotificationChannel.Email, userReadBackFromTheRealDatabase.NotificationChannel);
-        Assert.False(userReadBackFromTheRealDatabase.IsEmailConfirmed);
+        var reloadedUser = await databaseContext.Users.SingleAsync(row =>
+            row.Id == newUser.Id);
+        Assert.Equal("test-depot-enregistrement@exemple.test", reloadedUser.Email);
+        Assert.Equal(UserRole.User, reloadedUser.Role);
+        Assert.Equal(NotificationChannel.Email, reloadedUser.NotificationChannel);
+        Assert.False(reloadedUser.IsEmailConfirmed);
 
-        var categoriesReadBackFromTheRealDatabase = await databaseContextOfThisRepositoryTest.Categories
-            .Where(categorySearchedInTheDatabaseTable => categorySearchedInTheDatabaseTable.UserId == newUserToSaveInTheRealDatabase.Id)
+        var reloadedCategories = await databaseContext.Categories
+            .Where(row => row.UserId == newUser.Id)
             .ToListAsync();
-        Assert.Equal(8, categoriesReadBackFromTheRealDatabase.Count);
+        Assert.Equal(8, reloadedCategories.Count);
 
-        var tokenReadBackFromTheRealDatabase = await databaseContextOfThisRepositoryTest.EmailTokens.SingleAsync(tokenSearchedInTheDatabaseTable =>
-            tokenSearchedInTheDatabaseTable.UserId == newUserToSaveInTheRealDatabase.Id);
-        Assert.Equal(EmailTokenType.SignupConfirmation, tokenReadBackFromTheRealDatabase.Type);
-        Assert.Equal(DateTimeKind.Utc, tokenReadBackFromTheRealDatabase.ExpiresAt.Kind);
+        var reloadedToken = await databaseContext.EmailTokens.SingleAsync(row =>
+            row.UserId == newUser.Id);
+        Assert.Equal(EmailTokenType.SignupConfirmation, reloadedToken.Type);
+        Assert.Equal(DateTimeKind.Utc, reloadedToken.ExpiresAt.Kind);
     }
 
     [Fact]
     public async Task ListValuesAreStoredWithTheCodesOfTheDataDictionary()
     {
-        await using var databaseContextOfThisRepositoryTest = CreateDatabaseContextConnectedToLocalDatabase();
-        await using var transactionCancelledAtTheEndOfThisTest = await databaseContextOfThisRepositoryTest.Database.BeginTransactionAsync();
-        var repositoryBeingTestedOnTheRealDatabase = new UserAccountRepository(databaseContextOfThisRepositoryTest);
-        var newUserToSaveInTheRealDatabase = CreateNewUserWithThisEmailAddress("test-depot-codes@exemple.test");
-        var identifierOfTheUserSavedByThisTest = newUserToSaveInTheRealDatabase.Id;
+        await using var databaseContext = CreateDatabaseContext();
+        await using var transaction = await databaseContext.Database.BeginTransactionAsync();
+        var repository = new UserAccountRepository(databaseContext);
+        var newUser = CreateUser("test-depot-codes@exemple.test");
+        var userId = newUser.Id;
 
-        await repositoryBeingTestedOnTheRealDatabase.TryToSaveNewAccountWithCategoriesAndTokenAsync(
-            newUserToSaveInTheRealDatabase,
-            DefaultCategories.CreateTheEightDefaultCategoriesForNewUser(identifierOfTheUserSavedByThisTest),
-            CreateConfirmationTokenForThisNewUser(newUserToSaveInTheRealDatabase));
+        await repository.TryAddAccountAsync(
+            newUser,
+            DefaultCategories.CreateForUser(userId),
+            CreateConfirmationToken(newUser));
 
-        var roleCodeReadDirectlyFromTheTable = await databaseContextOfThisRepositoryTest.Database
-            .SqlQuery<string>($"SELECT role_utilisateur AS \"Value\" FROM utilisateur WHERE id_utilisateur = {identifierOfTheUserSavedByThisTest}")
+        var roleCode = await databaseContext.Database
+            .SqlQuery<string>($"SELECT role_utilisateur AS \"Value\" FROM utilisateur WHERE id_utilisateur = {userId}")
             .SingleAsync();
-        var channelCodeReadDirectlyFromTheTable = await databaseContextOfThisRepositoryTest.Database
-            .SqlQuery<string>($"SELECT canal_notification AS \"Value\" FROM utilisateur WHERE id_utilisateur = {identifierOfTheUserSavedByThisTest}")
+        var channelCode = await databaseContext.Database
+            .SqlQuery<string>($"SELECT canal_notification AS \"Value\" FROM utilisateur WHERE id_utilisateur = {userId}")
             .SingleAsync();
-        var tokenTypeCodeReadDirectlyFromTheTable = await databaseContextOfThisRepositoryTest.Database
-            .SqlQuery<string>($"SELECT type_jeton AS \"Value\" FROM jeton WHERE id_utilisateur = {identifierOfTheUserSavedByThisTest}")
+        var tokenTypeCode = await databaseContext.Database
+            .SqlQuery<string>($"SELECT type_jeton AS \"Value\" FROM jeton WHERE id_utilisateur = {userId}")
             .SingleAsync();
 
-        Assert.Equal("utilisateur", roleCodeReadDirectlyFromTheTable);
-        Assert.Equal("email", channelCodeReadDirectlyFromTheTable);
-        Assert.Equal("confirmation_inscription", tokenTypeCodeReadDirectlyFromTheTable);
+        Assert.Equal("utilisateur", roleCode);
+        Assert.Equal("email", channelCode);
+        Assert.Equal("confirmation_inscription", tokenTypeCode);
     }
 
     [Fact]
     public async Task AccountIsFoundByItsAddressOnlyAfterItHasBeenSaved()
     {
-        await using var databaseContextOfThisRepositoryTest = CreateDatabaseContextConnectedToLocalDatabase();
-        await using var transactionCancelledAtTheEndOfThisTest = await databaseContextOfThisRepositoryTest.Database.BeginTransactionAsync();
-        var repositoryBeingTestedOnTheRealDatabase = new UserAccountRepository(databaseContextOfThisRepositoryTest);
+        await using var databaseContext = CreateDatabaseContext();
+        await using var transaction = await databaseContext.Database.BeginTransactionAsync();
+        var repository = new UserAccountRepository(databaseContext);
 
-        Assert.Null(await repositoryBeingTestedOnTheRealDatabase.FindUserAccountByEmailAddressAsync("test-depot-recherche@exemple.test"));
+        Assert.Null(await repository.FindByEmailAsync("test-depot-recherche@exemple.test"));
 
-        var accountSavedInDatabaseByThisTest = await SaveNewAccountWithThisEmailAddressAsync(databaseContextOfThisRepositoryTest, "test-depot-recherche@exemple.test", CurrentDateUsedInTheseTests.AddHours(24));
+        var savedAccount = await SaveAccountAsync(databaseContext, "test-depot-recherche@exemple.test", Now.AddHours(24));
 
-        var accountFoundWithItsEmailAddress = await repositoryBeingTestedOnTheRealDatabase.FindUserAccountByEmailAddressAsync("test-depot-recherche@exemple.test");
-        var accountFoundWithItsUniqueIdentifier = await repositoryBeingTestedOnTheRealDatabase.FindUserAccountByIdentifierAsync(accountSavedInDatabaseByThisTest.Id);
-        Assert.Equal(accountSavedInDatabaseByThisTest.Id, accountFoundWithItsEmailAddress!.Id);
-        Assert.Equal("test-depot-recherche@exemple.test", accountFoundWithItsUniqueIdentifier!.Email);
-        Assert.Null(await repositoryBeingTestedOnTheRealDatabase.FindUserAccountByIdentifierAsync(Guid.NewGuid()));
+        var foundByEmail = await repository.FindByEmailAsync("test-depot-recherche@exemple.test");
+        var foundById = await repository.FindByIdAsync(savedAccount.Id);
+        Assert.Equal(savedAccount.Id, foundByEmail!.Id);
+        Assert.Equal("test-depot-recherche@exemple.test", foundById!.Email);
+        Assert.Null(await repository.FindByIdAsync(Guid.NewGuid()));
     }
 
     [Fact]
     public async Task SecondAccountWithTheSameAddressIsRefusedWithoutAnyError()
     {
-        await using var databaseContextOfThisRepositoryTest = CreateDatabaseContextConnectedToLocalDatabase();
-        await using var transactionCancelledAtTheEndOfThisTest = await databaseContextOfThisRepositoryTest.Database.BeginTransactionAsync();
-        var repositoryBeingTestedOnTheRealDatabase = new UserAccountRepository(databaseContextOfThisRepositoryTest);
-        var firstUserSavedWithThisAddress = CreateNewUserWithThisEmailAddress("test-depot-doublon@exemple.test");
-        var secondUserTryingTheSameAddress = CreateNewUserWithThisEmailAddress("test-depot-doublon@exemple.test");
+        await using var databaseContext = CreateDatabaseContext();
+        await using var transaction = await databaseContext.Database.BeginTransactionAsync();
+        var repository = new UserAccountRepository(databaseContext);
+        var firstUser = CreateUser("test-depot-doublon@exemple.test");
+        var secondUser = CreateUser("test-depot-doublon@exemple.test");
 
-        var firstAccountWasSavedInTheDatabase = await repositoryBeingTestedOnTheRealDatabase.TryToSaveNewAccountWithCategoriesAndTokenAsync(
-            firstUserSavedWithThisAddress,
-            DefaultCategories.CreateTheEightDefaultCategoriesForNewUser(firstUserSavedWithThisAddress.Id),
-            CreateConfirmationTokenForThisNewUser(firstUserSavedWithThisAddress));
-        var secondAccountWasSavedInTheDatabase = await repositoryBeingTestedOnTheRealDatabase.TryToSaveNewAccountWithCategoriesAndTokenAsync(
-            secondUserTryingTheSameAddress,
-            DefaultCategories.CreateTheEightDefaultCategoriesForNewUser(secondUserTryingTheSameAddress.Id),
-            CreateConfirmationTokenForThisNewUser(secondUserTryingTheSameAddress));
+        var firstSaved = await repository.TryAddAccountAsync(
+            firstUser,
+            DefaultCategories.CreateForUser(firstUser.Id),
+            CreateConfirmationToken(firstUser));
+        var secondSaved = await repository.TryAddAccountAsync(
+            secondUser,
+            DefaultCategories.CreateForUser(secondUser.Id),
+            CreateConfirmationToken(secondUser));
 
-        Assert.True(firstAccountWasSavedInTheDatabase);
-        Assert.False(secondAccountWasSavedInTheDatabase);
+        Assert.True(firstSaved);
+        Assert.False(secondSaved);
 
         // Le refus ne laisse rien en attente dans l'accès à la base : le prochain enregistrement repart de zéro.
-        Assert.Empty(databaseContextOfThisRepositoryTest.ChangeTracker.Entries());
+        Assert.Empty(databaseContext.ChangeTracker.Entries());
 
         // Le refus n'a rien laissé du second compte : ni utilisateur, ni catégories.
-        var usersFoundWithThisEmailAddress = await databaseContextOfThisRepositoryTest.Users.CountAsync(userSearchedInTheDatabaseTable =>
-            userSearchedInTheDatabaseTable.Email == "test-depot-doublon@exemple.test");
-        var categoriesOfTheRefusedSecondAccount = await databaseContextOfThisRepositoryTest.Categories.CountAsync(categorySearchedInTheDatabaseTable =>
-            categorySearchedInTheDatabaseTable.UserId == secondUserTryingTheSameAddress.Id);
-        Assert.Equal(1, usersFoundWithThisEmailAddress);
-        Assert.Equal(0, categoriesOfTheRefusedSecondAccount);
+        var users = await databaseContext.Users.CountAsync(row =>
+            row.Email == "test-depot-doublon@exemple.test");
+        var categories = await databaseContext.Categories.CountAsync(row =>
+            row.UserId == secondUser.Id);
+        Assert.Equal(1, users);
+        Assert.Equal(0, categories);
     }
 
     // Seule la contrainte d'unicité de l'adresse veut dire « déjà utilisée » : toute autre erreur de la base remonte.
     [Fact]
     public async Task OtherDatabaseErrorIsNotMistakenForAnAddressAlreadyUsed()
     {
-        await using var databaseContextOfThisRepositoryTest = CreateDatabaseContextConnectedToLocalDatabase();
-        await using var transactionCancelledAtTheEndOfThisTest = await databaseContextOfThisRepositoryTest.Database.BeginTransactionAsync();
-        var repositoryBeingTestedOnTheRealDatabase = new UserAccountRepository(databaseContextOfThisRepositoryTest);
+        await using var databaseContext = CreateDatabaseContext();
+        await using var transaction = await databaseContext.Database.BeginTransactionAsync();
+        var repository = new UserAccountRepository(databaseContext);
 
         // La base refuse une adresse en majuscules (contrainte ck_utilisateur_email).
-        var userRefusedByAnotherDatabaseConstraint = CreateNewUserWithThisEmailAddress("Test-Depot-Majuscules@Exemple.test");
+        var user = CreateUser("Test-Depot-Majuscules@Exemple.test");
 
-        await Assert.ThrowsAsync<DbUpdateException>(() => repositoryBeingTestedOnTheRealDatabase.TryToSaveNewAccountWithCategoriesAndTokenAsync(
-            userRefusedByAnotherDatabaseConstraint,
-            DefaultCategories.CreateTheEightDefaultCategoriesForNewUser(userRefusedByAnotherDatabaseConstraint.Id),
-            CreateConfirmationTokenForThisNewUser(userRefusedByAnotherDatabaseConstraint)));
+        await Assert.ThrowsAsync<DbUpdateException>(() => repository.TryAddAccountAsync(
+            user,
+            DefaultCategories.CreateForUser(user.Id),
+            CreateConfirmationToken(user)));
     }
 
     // L'ancien lien disparaît et le nouveau le remplace, dans la même transaction (GR Auth, SS §2).
     [Fact]
     public async Task ReplacingPasswordOfUnconfirmedAccountAlsoReplacesItsToken()
     {
-        await using var databaseContextOfThisRepositoryTest = CreateDatabaseContextConnectedToLocalDatabase();
-        await using var transactionCancelledAtTheEndOfThisTest = await databaseContextOfThisRepositoryTest.Database.BeginTransactionAsync();
-        var repositoryBeingTestedOnTheRealDatabase = new UserAccountRepository(databaseContextOfThisRepositoryTest);
-        await SaveNewAccountWithThisEmailAddressAsync(databaseContextOfThisRepositoryTest, "test-depot-remplacement@exemple.test", CurrentDateUsedInTheseTests.AddHours(24));
+        await using var databaseContext = CreateDatabaseContext();
+        await using var transaction = await databaseContext.Database.BeginTransactionAsync();
+        var repository = new UserAccountRepository(databaseContext);
+        await SaveAccountAsync(databaseContext, "test-depot-remplacement@exemple.test", Now.AddHours(24));
 
-        var accountFoundBeforeTheNewRegistration = await repositoryBeingTestedOnTheRealDatabase.FindUserAccountByEmailAddressAsync("test-depot-remplacement@exemple.test");
-        var newTokenOfTheUnconfirmedAccount = CreateConfirmationTokenForThisNewUser(accountFoundBeforeTheNewRegistration!);
+        var account = await repository.FindByEmailAsync("test-depot-remplacement@exemple.test");
+        var newToken = CreateConfirmationToken(account!);
 
-        var accountWasUpdatedInTheDatabase = await repositoryBeingTestedOnTheRealDatabase.TryToReplacePasswordAndTokenOfUnconfirmedAccountAsync(
-            accountFoundBeforeTheNewRegistration!,
-            "nouvelle-empreinte",
-            newTokenOfTheUnconfirmedAccount);
+        account!.ReplacePasswordHash("nouvelle-empreinte");
+        await repository.PrepareConfirmationTokenReplacementAsync(newToken);
+        var saved = await TrySaveChangesAsync(databaseContext);
 
-        Assert.True(accountWasUpdatedInTheDatabase);
-        databaseContextOfThisRepositoryTest.ChangeTracker.Clear();
+        Assert.True(saved);
+        databaseContext.ChangeTracker.Clear();
 
-        var userReadBackFromTheRealDatabase = await databaseContextOfThisRepositoryTest.Users.SingleAsync(userSearchedInTheDatabaseTable =>
-            userSearchedInTheDatabaseTable.Email == "test-depot-remplacement@exemple.test");
-        Assert.Equal("nouvelle-empreinte", userReadBackFromTheRealDatabase.PasswordHash);
-        Assert.False(userReadBackFromTheRealDatabase.IsEmailConfirmed);
+        var reloadedUser = await databaseContext.Users.SingleAsync(row =>
+            row.Email == "test-depot-remplacement@exemple.test");
+        Assert.Equal("nouvelle-empreinte", reloadedUser.PasswordHash);
+        Assert.False(reloadedUser.IsEmailConfirmed);
 
-        var tokenReadBackFromTheRealDatabase = await databaseContextOfThisRepositoryTest.EmailTokens.SingleAsync(tokenSearchedInTheDatabaseTable =>
-            tokenSearchedInTheDatabaseTable.UserId == userReadBackFromTheRealDatabase.Id);
-        Assert.Equal(newTokenOfTheUnconfirmedAccount.Id, tokenReadBackFromTheRealDatabase.Id);
+        var reloadedToken = await databaseContext.EmailTokens.SingleAsync(row =>
+            row.UserId == reloadedUser.Id);
+        Assert.Equal(newToken.Id, reloadedToken.Id);
     }
 
     // Le remplacement n'efface que les liens de confirmation : les autres liens du compte restent.
     [Fact]
     public async Task ReplacingPasswordKeepsTheOtherTokensOfTheAccount()
     {
-        await using var databaseContextOfThisRepositoryTest = CreateDatabaseContextConnectedToLocalDatabase();
-        await using var transactionCancelledAtTheEndOfThisTest = await databaseContextOfThisRepositoryTest.Database.BeginTransactionAsync();
-        var repositoryBeingTestedOnTheRealDatabase = new UserAccountRepository(databaseContextOfThisRepositoryTest);
-        var accountSavedInDatabaseByThisTest = await SaveNewAccountWithThisEmailAddressAsync(databaseContextOfThisRepositoryTest, "test-depot-autres-jetons@exemple.test", CurrentDateUsedInTheseTests.AddHours(24));
-        var otherTokenOfTheAccountInThisTest = CreateEmailTokenForThisUserAccount(accountSavedInDatabaseByThisTest, EmailTokenType.PasswordRecovery, CurrentDateUsedInTheseTests.AddHours(1));
-        databaseContextOfThisRepositoryTest.EmailTokens.Add(otherTokenOfTheAccountInThisTest);
-        await databaseContextOfThisRepositoryTest.SaveChangesAsync();
-        databaseContextOfThisRepositoryTest.ChangeTracker.Clear();
+        await using var databaseContext = CreateDatabaseContext();
+        await using var transaction = await databaseContext.Database.BeginTransactionAsync();
+        var repository = new UserAccountRepository(databaseContext);
+        var savedAccount = await SaveAccountAsync(databaseContext, "test-depot-autres-jetons@exemple.test", Now.AddHours(24));
+        var otherToken = CreateEmailToken(savedAccount, EmailTokenType.PasswordRecovery, Now.AddHours(1));
+        databaseContext.EmailTokens.Add(otherToken);
+        await databaseContext.SaveChangesAsync();
+        databaseContext.ChangeTracker.Clear();
 
-        var accountFoundBeforeTheNewRegistration = await repositoryBeingTestedOnTheRealDatabase.FindUserAccountByEmailAddressAsync("test-depot-autres-jetons@exemple.test");
-        await repositoryBeingTestedOnTheRealDatabase.TryToReplacePasswordAndTokenOfUnconfirmedAccountAsync(
-            accountFoundBeforeTheNewRegistration!,
-            "nouvelle-empreinte",
-            CreateConfirmationTokenForThisNewUser(accountFoundBeforeTheNewRegistration!));
-        databaseContextOfThisRepositoryTest.ChangeTracker.Clear();
+        var account = await repository.FindByEmailAsync("test-depot-autres-jetons@exemple.test");
+        account!.ReplacePasswordHash("nouvelle-empreinte");
+        await repository.PrepareConfirmationTokenReplacementAsync(CreateConfirmationToken(account));
+        Assert.True(await TrySaveChangesAsync(databaseContext));
+        databaseContext.ChangeTracker.Clear();
 
-        Assert.True(await databaseContextOfThisRepositoryTest.EmailTokens.AnyAsync(tokenSearchedInTheDatabaseTable => tokenSearchedInTheDatabaseTable.Id == otherTokenOfTheAccountInThisTest.Id));
+        Assert.True(await databaseContext.EmailTokens.AnyAsync(row => row.Id == otherToken.Id));
     }
 
     // Le risque le plus grave : un inconnu remplace le mot de passe d'un compte confirmé au même instant.
     [Fact]
     public async Task PasswordOfAccountConfirmedMeanwhileIsNeverReplaced()
     {
-        await using var databaseContextOfThisRepositoryTest = CreateDatabaseContextConnectedToLocalDatabase();
-        await using var transactionCancelledAtTheEndOfThisTest = await databaseContextOfThisRepositoryTest.Database.BeginTransactionAsync();
-        var repositoryBeingTestedOnTheRealDatabase = new UserAccountRepository(databaseContextOfThisRepositoryTest);
-        var accountSavedInDatabaseByThisTest = await SaveNewAccountWithThisEmailAddressAsync(databaseContextOfThisRepositoryTest, "test-depot-course@exemple.test", CurrentDateUsedInTheseTests.AddHours(24));
+        await using var databaseContext = CreateDatabaseContext();
+        await using var transaction = await databaseContext.Database.BeginTransactionAsync();
+        var repository = new UserAccountRepository(databaseContext);
+        var savedAccount = await SaveAccountAsync(databaseContext, "test-depot-course@exemple.test", Now.AddHours(24));
 
-        var accountReadJustBeforeTheConfirmation = await repositoryBeingTestedOnTheRealDatabase.FindUserAccountByEmailAddressAsync("test-depot-course@exemple.test");
+        var account = await repository.FindByEmailAsync("test-depot-course@exemple.test");
 
         // Une autre requête confirme le compte entre la lecture et l'écriture.
-        await databaseContextOfThisRepositoryTest.Database.ExecuteSqlAsync($"UPDATE utilisateur SET email_confirme = TRUE WHERE id_utilisateur = {accountSavedInDatabaseByThisTest.Id}");
+        await databaseContext.Database.ExecuteSqlAsync($"UPDATE utilisateur SET email_confirme = TRUE WHERE id_utilisateur = {savedAccount.Id}");
 
-        var accountWasUpdatedInTheDatabase = await repositoryBeingTestedOnTheRealDatabase.TryToReplacePasswordAndTokenOfUnconfirmedAccountAsync(
-            accountReadJustBeforeTheConfirmation!,
-            "empreinte-d-un-inconnu",
-            CreateConfirmationTokenForThisNewUser(accountReadJustBeforeTheConfirmation!));
+        account!.ReplacePasswordHash("empreinte-d-un-inconnu");
+        await repository.PrepareConfirmationTokenReplacementAsync(CreateConfirmationToken(account));
+        var saved = await TrySaveChangesAsync(databaseContext);
 
-        Assert.False(accountWasUpdatedInTheDatabase);
-        Assert.Empty(databaseContextOfThisRepositoryTest.ChangeTracker.Entries());
+        Assert.False(saved);
+        Assert.Empty(databaseContext.ChangeTracker.Entries());
 
-        var userReadBackFromTheRealDatabase = await databaseContextOfThisRepositoryTest.Users.SingleAsync(userSearchedInTheDatabaseTable =>
-            userSearchedInTheDatabaseTable.Id == accountSavedInDatabaseByThisTest.Id);
-        Assert.Equal(OriginalSecureHashOfTheTestAccounts, userReadBackFromTheRealDatabase.PasswordHash);
-        Assert.Equal(1, await databaseContextOfThisRepositoryTest.EmailTokens.CountAsync(tokenSearchedInTheDatabaseTable =>
-            tokenSearchedInTheDatabaseTable.UserId == accountSavedInDatabaseByThisTest.Id));
+        var reloadedUser = await databaseContext.Users.SingleAsync(row =>
+            row.Id == savedAccount.Id);
+        Assert.Equal(OriginalHash, reloadedUser.PasswordHash);
+        Assert.Equal(1, await databaseContext.EmailTokens.CountAsync(row =>
+            row.UserId == savedAccount.Id));
     }
 
     [Fact]
     public async Task ConfirmationSavesTheAccountStateAndTheTokenUseTogether()
     {
-        await using var databaseContextOfThisRepositoryTest = CreateDatabaseContextConnectedToLocalDatabase();
-        await using var transactionCancelledAtTheEndOfThisTest = await databaseContextOfThisRepositoryTest.Database.BeginTransactionAsync();
-        var repositoryBeingTestedOnTheRealDatabase = new UserAccountRepository(databaseContextOfThisRepositoryTest);
-        var accountSavedInDatabaseByThisTest = await SaveNewAccountWithThisEmailAddressAsync(databaseContextOfThisRepositoryTest, "test-depot-confirmation@exemple.test", CurrentDateUsedInTheseTests.AddHours(24));
+        await using var databaseContext = CreateDatabaseContext();
+        await using var transaction = await databaseContext.Database.BeginTransactionAsync();
+        var repository = new UserAccountRepository(databaseContext);
+        var savedAccount = await SaveAccountAsync(databaseContext, "test-depot-confirmation@exemple.test", Now.AddHours(24));
 
-        var accountToConfirmInThisTest = await repositoryBeingTestedOnTheRealDatabase.FindUserAccountByIdentifierAsync(accountSavedInDatabaseByThisTest.Id);
-        var tokenOfTheAccountToConfirm = await databaseContextOfThisRepositoryTest.EmailTokens.SingleAsync(tokenSearchedInTheDatabaseTable =>
-            tokenSearchedInTheDatabaseTable.UserId == accountSavedInDatabaseByThisTest.Id);
+        var account = await repository.FindByIdAsync(savedAccount.Id);
+        var token = await databaseContext.EmailTokens.SingleAsync(row =>
+            row.UserId == savedAccount.Id);
 
-        var accountWasConfirmedInTheDatabase = await repositoryBeingTestedOnTheRealDatabase.TryToConfirmAccountAndUseItsTokenAsync(
-            accountToConfirmInThisTest!,
-            tokenOfTheAccountToConfirm,
-            CurrentDateUsedInTheseTests);
+        account!.ConfirmEmail();
+        token.MarkAsUsed(Now);
+        var saved = await TrySaveChangesAsync(databaseContext);
 
-        Assert.True(accountWasConfirmedInTheDatabase);
-        databaseContextOfThisRepositoryTest.ChangeTracker.Clear();
+        Assert.True(saved);
+        databaseContext.ChangeTracker.Clear();
 
-        var userReadBackFromTheRealDatabase = await databaseContextOfThisRepositoryTest.Users.SingleAsync(userSearchedInTheDatabaseTable =>
-            userSearchedInTheDatabaseTable.Id == accountSavedInDatabaseByThisTest.Id);
-        var tokenReadBackFromTheRealDatabase = await databaseContextOfThisRepositoryTest.EmailTokens.SingleAsync(tokenSearchedInTheDatabaseTable =>
-            tokenSearchedInTheDatabaseTable.UserId == accountSavedInDatabaseByThisTest.Id);
-        Assert.True(userReadBackFromTheRealDatabase.IsEmailConfirmed);
-        Assert.Equal(CurrentDateUsedInTheseTests, tokenReadBackFromTheRealDatabase.UsedAt);
+        var reloadedUser = await databaseContext.Users.SingleAsync(row =>
+            row.Id == savedAccount.Id);
+        var reloadedToken = await databaseContext.EmailTokens.SingleAsync(row =>
+            row.UserId == savedAccount.Id);
+        Assert.True(reloadedUser.IsEmailConfirmed);
+        Assert.Equal(Now, reloadedToken.UsedAt);
     }
 
     // Une nouvelle inscription a remplacé le lien pendant la vérification du mot de passe : rien n'est confirmé.
     [Fact]
     public async Task ConfirmationIsRefusedWhenTheTokenHasBeenReplacedMeanwhile()
     {
-        await using var databaseContextOfThisRepositoryTest = CreateDatabaseContextConnectedToLocalDatabase();
-        await using var transactionCancelledAtTheEndOfThisTest = await databaseContextOfThisRepositoryTest.Database.BeginTransactionAsync();
-        var repositoryBeingTestedOnTheRealDatabase = new UserAccountRepository(databaseContextOfThisRepositoryTest);
-        var accountSavedInDatabaseByThisTest = await SaveNewAccountWithThisEmailAddressAsync(databaseContextOfThisRepositoryTest, "test-depot-lien-remplace@exemple.test", CurrentDateUsedInTheseTests.AddHours(24));
+        await using var databaseContext = CreateDatabaseContext();
+        await using var transaction = await databaseContext.Database.BeginTransactionAsync();
+        var repository = new UserAccountRepository(databaseContext);
+        var savedAccount = await SaveAccountAsync(databaseContext, "test-depot-lien-remplace@exemple.test", Now.AddHours(24));
 
-        var accountToConfirmInThisTest = await repositoryBeingTestedOnTheRealDatabase.FindUserAccountByIdentifierAsync(accountSavedInDatabaseByThisTest.Id);
-        var tokenReadJustBeforeTheReplacement = await databaseContextOfThisRepositoryTest.EmailTokens.SingleAsync(tokenSearchedInTheDatabaseTable =>
-            tokenSearchedInTheDatabaseTable.UserId == accountSavedInDatabaseByThisTest.Id);
+        var account = await repository.FindByIdAsync(savedAccount.Id);
+        var token = await databaseContext.EmailTokens.SingleAsync(row =>
+            row.UserId == savedAccount.Id);
 
-        await databaseContextOfThisRepositoryTest.Database.ExecuteSqlAsync($"DELETE FROM jeton WHERE id_jeton = {tokenReadJustBeforeTheReplacement.Id}");
+        await databaseContext.Database.ExecuteSqlAsync($"DELETE FROM jeton WHERE id_jeton = {token.Id}");
 
-        var accountWasConfirmedInTheDatabase = await repositoryBeingTestedOnTheRealDatabase.TryToConfirmAccountAndUseItsTokenAsync(
-            accountToConfirmInThisTest!,
-            tokenReadJustBeforeTheReplacement,
-            CurrentDateUsedInTheseTests);
+        account!.ConfirmEmail();
+        token.MarkAsUsed(Now);
+        var saved = await TrySaveChangesAsync(databaseContext);
 
-        Assert.False(accountWasConfirmedInTheDatabase);
-        var userReadBackFromTheRealDatabase = await databaseContextOfThisRepositoryTest.Users.SingleAsync(userSearchedInTheDatabaseTable =>
-            userSearchedInTheDatabaseTable.Id == accountSavedInDatabaseByThisTest.Id);
-        Assert.False(userReadBackFromTheRealDatabase.IsEmailConfirmed);
+        Assert.False(saved);
+        var reloadedUser = await databaseContext.Users.SingleAsync(row =>
+            row.Id == savedAccount.Id);
+        Assert.False(reloadedUser.IsEmailConfirmed);
     }
 
     // Seuls les liens de confirmation d'inscription servent à confirmer un compte.
     [Fact]
     public async Task TokenSearchFindsOnlySignupConfirmationTokens()
     {
-        await using var databaseContextOfThisRepositoryTest = CreateDatabaseContextConnectedToLocalDatabase();
-        await using var transactionCancelledAtTheEndOfThisTest = await databaseContextOfThisRepositoryTest.Database.BeginTransactionAsync();
-        var repositoryBeingTestedOnTheRealDatabase = new UserAccountRepository(databaseContextOfThisRepositoryTest);
-        var accountSavedInDatabaseByThisTest = await SaveNewAccountWithThisEmailAddressAsync(databaseContextOfThisRepositoryTest, "test-depot-type-jeton@exemple.test", CurrentDateUsedInTheseTests.AddHours(24));
-        var passwordRecoveryTokenOfTheAccount = CreateEmailTokenForThisUserAccount(accountSavedInDatabaseByThisTest, EmailTokenType.PasswordRecovery, CurrentDateUsedInTheseTests.AddHours(1));
-        databaseContextOfThisRepositoryTest.EmailTokens.Add(passwordRecoveryTokenOfTheAccount);
-        await databaseContextOfThisRepositoryTest.SaveChangesAsync();
-        var signupConfirmationTokenOfTheAccount = await databaseContextOfThisRepositoryTest.EmailTokens.SingleAsync(tokenSearchedInTheDatabaseTable =>
-            tokenSearchedInTheDatabaseTable.UserId == accountSavedInDatabaseByThisTest.Id
-            && tokenSearchedInTheDatabaseTable.Type == EmailTokenType.SignupConfirmation);
+        await using var databaseContext = CreateDatabaseContext();
+        await using var transaction = await databaseContext.Database.BeginTransactionAsync();
+        var repository = new UserAccountRepository(databaseContext);
+        var savedAccount = await SaveAccountAsync(databaseContext, "test-depot-type-jeton@exemple.test", Now.AddHours(24));
+        var passwordRecoveryToken = CreateEmailToken(savedAccount, EmailTokenType.PasswordRecovery, Now.AddHours(1));
+        databaseContext.EmailTokens.Add(passwordRecoveryToken);
+        await databaseContext.SaveChangesAsync();
+        var signupConfirmationToken = await databaseContext.EmailTokens.SingleAsync(row =>
+            row.UserId == savedAccount.Id
+            && row.Type == EmailTokenType.SignupConfirmation);
 
-        Assert.Null(await repositoryBeingTestedOnTheRealDatabase.FindEmailTokenOfThisTypeByItsHashAsync(passwordRecoveryTokenOfTheAccount.TokenHash, EmailTokenType.SignupConfirmation));
-        Assert.NotNull(await repositoryBeingTestedOnTheRealDatabase.FindEmailTokenOfThisTypeByItsHashAsync(signupConfirmationTokenOfTheAccount.TokenHash, EmailTokenType.SignupConfirmation));
-        Assert.Null(await repositoryBeingTestedOnTheRealDatabase.FindEmailTokenOfThisTypeByItsHashAsync(new string('f', 64), EmailTokenType.SignupConfirmation));
+        Assert.Null(await repository.FindTokenAsync(passwordRecoveryToken.TokenHash, EmailTokenType.SignupConfirmation));
+        Assert.NotNull(await repository.FindTokenAsync(signupConfirmationToken.TokenHash, EmailTokenType.SignupConfirmation));
+        Assert.Null(await repository.FindTokenAsync(new string('f', 64), EmailTokenType.SignupConfirmation));
     }
 
     // La recherche d'un jeton doit utiliser l'index unique de sa colonne : sinon, chaque clic sur un lien parcourt toute la table.
     [Fact]
     public async Task TokenSearchUsesTheUniqueIndexOfItsColumn()
     {
-        await using var databaseContextOfThisRepositoryTest = CreateDatabaseContextConnectedToLocalDatabase();
-        await using var transactionCancelledAtTheEndOfThisTest = await databaseContextOfThisRepositoryTest.Database.BeginTransactionAsync();
+        await using var databaseContext = CreateDatabaseContext();
+        await using var transaction = await databaseContext.Database.BeginTransactionAsync();
 
         // Sur une table presque vide, PostgreSQL préfère lire toute la table : ce test le lui interdit.
-        await databaseContextOfThisRepositoryTest.Database.ExecuteSqlRawAsync("SET LOCAL enable_seqscan = off");
+        await databaseContext.Database.ExecuteSqlRawAsync("SET LOCAL enable_seqscan = off");
 
-        var tokenHashSearchedByThisTest = new string('a', 64);
-        await using var commandBuiltByEntityFrameworkCore = databaseContextOfThisRepositoryTest.EmailTokens
-            .Where(tokenSearchedInTheDatabaseTable => tokenSearchedInTheDatabaseTable.TokenHash == tokenHashSearchedByThisTest)
+        var tokenHash = new string('a', 64);
+        await using var command = databaseContext.EmailTokens
+            .Where(row => row.TokenHash == tokenHash)
             .CreateDbCommand();
-        commandBuiltByEntityFrameworkCore.CommandText = "EXPLAIN " + commandBuiltByEntityFrameworkCore.CommandText;
+        command.CommandText = "EXPLAIN " + command.CommandText;
 
-        var linesOfTheDatabaseQueryPlan = new List<string>();
-        await using var readerOfTheDatabaseQueryPlan = await commandBuiltByEntityFrameworkCore.ExecuteReaderAsync();
-        while (await readerOfTheDatabaseQueryPlan.ReadAsync())
+        var lines = new List<string>();
+        await using var reader = await command.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
         {
-            linesOfTheDatabaseQueryPlan.Add(readerOfTheDatabaseQueryPlan.GetString(0));
+            lines.Add(reader.GetString(0));
         }
 
-        Assert.Contains("jeton_empreinte_jeton_key", string.Join("\n", linesOfTheDatabaseQueryPlan));
+        Assert.Contains("jeton_empreinte_jeton_key", string.Join("\n", lines));
     }
 
     // Le compte, ses catégories et son jeton partent ensemble une fois le lien expiré (GR Auth).
     [Fact]
     public async Task CleanupDeletesUnconfirmedAccountWhoseLinkHasExpired()
     {
-        await using var databaseContextOfThisRepositoryTest = CreateDatabaseContextConnectedToLocalDatabase();
-        await using var transactionCancelledAtTheEndOfThisTest = await databaseContextOfThisRepositoryTest.Database.BeginTransactionAsync();
-        var repositoryBeingTestedOnTheRealDatabase = new UserAccountRepository(databaseContextOfThisRepositoryTest);
-        var accountWithConfirmationLinkAlreadyExpired = await SaveNewAccountWithThisEmailAddressAsync(databaseContextOfThisRepositoryTest, "test-depot-expire@exemple.test", CurrentDateUsedInTheseTests.AddSeconds(-1));
+        await using var databaseContext = CreateDatabaseContext();
+        await using var transaction = await databaseContext.Database.BeginTransactionAsync();
+        var repository = new UserAccountRepository(databaseContext);
+        var expiredAccount = await SaveAccountAsync(databaseContext, "test-depot-expire@exemple.test", Now.AddSeconds(-1));
 
-        var numberOfAccountsDeletedByTheCleanup = await repositoryBeingTestedOnTheRealDatabase.DeleteUnconfirmedAccountsWithExpiredLinkAsync(CurrentDateUsedInTheseTests);
+        var deletedCount = await repository.DeleteExpiredUnconfirmedAccountsAsync(Now);
 
-        Assert.True(numberOfAccountsDeletedByTheCleanup >= 1);
-        Assert.False(await databaseContextOfThisRepositoryTest.Users.AnyAsync(userSearchedInTheDatabaseTable => userSearchedInTheDatabaseTable.Id == accountWithConfirmationLinkAlreadyExpired.Id));
-        Assert.False(await databaseContextOfThisRepositoryTest.Categories.AnyAsync(categorySearchedInTheDatabaseTable => categorySearchedInTheDatabaseTable.UserId == accountWithConfirmationLinkAlreadyExpired.Id));
-        Assert.False(await databaseContextOfThisRepositoryTest.EmailTokens.AnyAsync(tokenSearchedInTheDatabaseTable => tokenSearchedInTheDatabaseTable.UserId == accountWithConfirmationLinkAlreadyExpired.Id));
+        Assert.True(deletedCount >= 1);
+        Assert.False(await databaseContext.Users.AnyAsync(row => row.Id == expiredAccount.Id));
+        Assert.False(await databaseContext.Categories.AnyAsync(row => row.UserId == expiredAccount.Id));
+        Assert.False(await databaseContext.EmailTokens.AnyAsync(row => row.UserId == expiredAccount.Id));
     }
 
     // La même frontière que la confirmation : à l'heure exacte d'expiration, le lien ne vaut plus.
     [Fact]
     public async Task CleanupDeletesAccountExactlyAtTheExpirationOfItsLink()
     {
-        await using var databaseContextOfThisRepositoryTest = CreateDatabaseContextConnectedToLocalDatabase();
-        await using var transactionCancelledAtTheEndOfThisTest = await databaseContextOfThisRepositoryTest.Database.BeginTransactionAsync();
-        var repositoryBeingTestedOnTheRealDatabase = new UserAccountRepository(databaseContextOfThisRepositoryTest);
-        var accountWithConfirmationLinkExpiringNow = await SaveNewAccountWithThisEmailAddressAsync(databaseContextOfThisRepositoryTest, "test-depot-expire-maintenant@exemple.test", CurrentDateUsedInTheseTests);
+        await using var databaseContext = CreateDatabaseContext();
+        await using var transaction = await databaseContext.Database.BeginTransactionAsync();
+        var repository = new UserAccountRepository(databaseContext);
+        var expiringAccount = await SaveAccountAsync(databaseContext, "test-depot-expire-maintenant@exemple.test", Now);
 
-        await repositoryBeingTestedOnTheRealDatabase.DeleteUnconfirmedAccountsWithExpiredLinkAsync(CurrentDateUsedInTheseTests);
+        await repository.DeleteExpiredUnconfirmedAccountsAsync(Now);
 
-        Assert.False(await databaseContextOfThisRepositoryTest.Users.AnyAsync(userSearchedInTheDatabaseTable => userSearchedInTheDatabaseTable.Id == accountWithConfirmationLinkExpiringNow.Id));
+        Assert.False(await databaseContext.Users.AnyAsync(row => row.Id == expiringAccount.Id));
     }
 
     [Fact]
     public async Task CleanupKeepsUnconfirmedAccountWhoseLinkIsStillValid()
     {
-        await using var databaseContextOfThisRepositoryTest = CreateDatabaseContextConnectedToLocalDatabase();
-        await using var transactionCancelledAtTheEndOfThisTest = await databaseContextOfThisRepositoryTest.Database.BeginTransactionAsync();
-        var repositoryBeingTestedOnTheRealDatabase = new UserAccountRepository(databaseContextOfThisRepositoryTest);
-        var accountWithConfirmationLinkStillValid = await SaveNewAccountWithThisEmailAddressAsync(databaseContextOfThisRepositoryTest, "test-depot-valide@exemple.test", CurrentDateUsedInTheseTests.AddSeconds(1));
+        await using var databaseContext = CreateDatabaseContext();
+        await using var transaction = await databaseContext.Database.BeginTransactionAsync();
+        var repository = new UserAccountRepository(databaseContext);
+        var validAccount = await SaveAccountAsync(databaseContext, "test-depot-valide@exemple.test", Now.AddSeconds(1));
 
-        await repositoryBeingTestedOnTheRealDatabase.DeleteUnconfirmedAccountsWithExpiredLinkAsync(CurrentDateUsedInTheseTests);
+        await repository.DeleteExpiredUnconfirmedAccountsAsync(Now);
 
-        Assert.True(await databaseContextOfThisRepositoryTest.Users.AnyAsync(userSearchedInTheDatabaseTable => userSearchedInTheDatabaseTable.Id == accountWithConfirmationLinkStillValid.Id));
+        Assert.True(await databaseContext.Users.AnyAsync(row => row.Id == validAccount.Id));
     }
 
     // Un compte confirmé n'est jamais effacé par cette tâche, même si son ancien lien a expiré.
     [Fact]
     public async Task CleanupKeepsConfirmedAccountWhoseOldLinkHasExpired()
     {
-        await using var databaseContextOfThisRepositoryTest = CreateDatabaseContextConnectedToLocalDatabase();
-        await using var transactionCancelledAtTheEndOfThisTest = await databaseContextOfThisRepositoryTest.Database.BeginTransactionAsync();
-        var repositoryBeingTestedOnTheRealDatabase = new UserAccountRepository(databaseContextOfThisRepositoryTest);
-        var accountAlreadyConfirmedInThisTest = await SaveNewAccountWithThisEmailAddressAsync(databaseContextOfThisRepositoryTest, "test-depot-confirme@exemple.test", CurrentDateUsedInTheseTests.AddDays(-1));
-        await databaseContextOfThisRepositoryTest.Database.ExecuteSqlAsync($"UPDATE utilisateur SET email_confirme = TRUE WHERE id_utilisateur = {accountAlreadyConfirmedInThisTest.Id}");
+        await using var databaseContext = CreateDatabaseContext();
+        await using var transaction = await databaseContext.Database.BeginTransactionAsync();
+        var repository = new UserAccountRepository(databaseContext);
+        var confirmedAccount = await SaveAccountAsync(databaseContext, "test-depot-confirme@exemple.test", Now.AddDays(-1));
+        await databaseContext.Database.ExecuteSqlAsync($"UPDATE utilisateur SET email_confirme = TRUE WHERE id_utilisateur = {confirmedAccount.Id}");
 
-        await repositoryBeingTestedOnTheRealDatabase.DeleteUnconfirmedAccountsWithExpiredLinkAsync(CurrentDateUsedInTheseTests);
+        await repository.DeleteExpiredUnconfirmedAccountsAsync(Now);
 
-        Assert.True(await databaseContextOfThisRepositoryTest.Users.AnyAsync(userSearchedInTheDatabaseTable => userSearchedInTheDatabaseTable.Id == accountAlreadyConfirmedInThisTest.Id));
+        Assert.True(await databaseContext.Users.AnyAsync(row => row.Id == confirmedAccount.Id));
     }
 
     // Seul le lien de confirmation compte : un autre lien encore valable ne protège pas le compte.
     [Fact]
     public async Task CleanupIgnoresTheOtherTokensOfTheAccount()
     {
-        await using var databaseContextOfThisRepositoryTest = CreateDatabaseContextConnectedToLocalDatabase();
-        await using var transactionCancelledAtTheEndOfThisTest = await databaseContextOfThisRepositoryTest.Database.BeginTransactionAsync();
-        var repositoryBeingTestedOnTheRealDatabase = new UserAccountRepository(databaseContextOfThisRepositoryTest);
-        var accountWithConfirmationLinkAlreadyExpired = await SaveNewAccountWithThisEmailAddressAsync(databaseContextOfThisRepositoryTest, "test-depot-autre-jeton-valide@exemple.test", CurrentDateUsedInTheseTests.AddDays(-1));
-        databaseContextOfThisRepositoryTest.EmailTokens.Add(CreateEmailTokenForThisUserAccount(accountWithConfirmationLinkAlreadyExpired, EmailTokenType.PasswordRecovery, CurrentDateUsedInTheseTests.AddHours(1)));
-        await databaseContextOfThisRepositoryTest.SaveChangesAsync();
+        await using var databaseContext = CreateDatabaseContext();
+        await using var transaction = await databaseContext.Database.BeginTransactionAsync();
+        var repository = new UserAccountRepository(databaseContext);
+        var expiredAccount = await SaveAccountAsync(databaseContext, "test-depot-autre-jeton-valide@exemple.test", Now.AddDays(-1));
+        databaseContext.EmailTokens.Add(CreateEmailToken(expiredAccount, EmailTokenType.PasswordRecovery, Now.AddHours(1)));
+        await databaseContext.SaveChangesAsync();
 
-        await repositoryBeingTestedOnTheRealDatabase.DeleteUnconfirmedAccountsWithExpiredLinkAsync(CurrentDateUsedInTheseTests);
+        await repository.DeleteExpiredUnconfirmedAccountsAsync(Now);
 
-        Assert.False(await databaseContextOfThisRepositoryTest.Users.AnyAsync(userSearchedInTheDatabaseTable => userSearchedInTheDatabaseTable.Id == accountWithConfirmationLinkAlreadyExpired.Id));
+        Assert.False(await databaseContext.Users.AnyAsync(row => row.Id == expiredAccount.Id));
     }
 }

@@ -5,8 +5,8 @@ namespace WalletFlow.Application.AccountRecovery;
 public interface IBackgroundEmailRequestQueue
 {
     // Ajoute une demande à la file. Si la file est pleine, la demande est perdue et la panne va au journal technique.
-    void AddEmailRequestToTheBackgroundQueue(BackgroundEmailRequest requestToAddToTheBackgroundQueue);
+    void Add(BackgroundEmailRequest request);
 
     // Attend la prochaine demande de la file.
-    ValueTask<BackgroundEmailRequest> WaitForNextEmailRequestOfTheQueueAsync(CancellationToken tokenThatStopsTheWaitForRequests);
+    ValueTask<BackgroundEmailRequest> WaitForNextAsync(CancellationToken cancellationToken);
 }

@@ -6,6 +6,7 @@ using Microsoft.Net.Http.Headers;
 using WalletFlow.Api.Configuration;
 using WalletFlow.Domain.UsersAndSecurity;
 using WalletFlow.Infrastructure.Security;
+using WalletFlow.Tests.Infrastructure;
 using static WalletFlow.Tests.Api.RegistrationRequestTestValues;
 
 namespace WalletFlow.Tests.Api;
@@ -13,16 +14,16 @@ namespace WalletFlow.Tests.Api;
 // Valeurs et outils communs aux tests de la connexion et des sessions.
 public static class LoginRequestTestValues
 {
-    public const string AddressOfTheAccountLoginEndpoint = "/api/account/login";
-    public const string AddressOfTheCsrfTokenEndpoint = "/api/account/csrf-token";
-    public const string AddressOfTheUserLogoutEndpoint = "/api/account/logout";
-    public const string EmailAddressOfTheLoginTests = "utilisateur@exemple.test";
-    public const string WrongPasswordTypedInTheLoginTests = "Mauvais-Mot-De-Passe-2";
+    public const string LoginEndpoint = "/api/account/login";
+    public const string CsrfTokenEndpoint = "/api/account/csrf-token";
+    public const string LogoutEndpoint = "/api/account/logout";
+    public const string Email = "utilisateur@exemple.test";
+    public const string WrongPassword = "Mauvais-Mot-De-Passe-2";
 
     // Crée un client qui garde les cookies comme un navigateur. En HTTPS : un cookie Secure n'est jamais renvoyé en HTTP.
-    public static HttpClient CreateClientThatKeepsCookiesLikeABrowser(ApiFactoryWithFakeRepositoryAndEmails apiStartedInMemoryForThisTest)
+    public static HttpClient CreateBrowserClient(ApiFactoryWithFakes api)
     {
-        return apiStartedInMemoryForThisTest.CreateClient(new WebApplicationFactoryClientOptions
+        return api.CreateClient(new WebApplicationFactoryClientOptions
         {
             BaseAddress = new Uri("https://localhost"),
             HandleCookies = true
@@ -30,85 +31,106 @@ public static class LoginRequestTestValues
     }
 
     // Crée un client qui n'envoie que les cookies écrits à la main par le test, comme un attaquant qui les aurait copiés.
-    public static HttpClient CreateClientThatOnlySendsHandwrittenCookies(ApiFactoryWithFakeRepositoryAndEmails apiStartedInMemoryForThisTest, string cookiesWrittenByHandInTheTest)
+    public static HttpClient CreateClientWithManualCookies(ApiFactoryWithFakes api, string cookies)
     {
-        var clientThatOnlySendsHandwrittenCookies = apiStartedInMemoryForThisTest.CreateClient(new WebApplicationFactoryClientOptions
+        var client = api.CreateClient(new WebApplicationFactoryClientOptions
         {
             BaseAddress = new Uri("https://localhost"),
             HandleCookies = false
         });
-        clientThatOnlySendsHandwrittenCookies.DefaultRequestHeaders.Add("Cookie", cookiesWrittenByHandInTheTest);
+        client.DefaultRequestHeaders.Add("Cookie", cookies);
 
-        return clientThatOnlySendsHandwrittenCookies;
+        return client;
     }
 
     // Ajoute à la fausse base un compte avec cette adresse et le mot de passe des tests, haché avec le vrai Argon2.
-    public static User AddAccountToTheFakeRepositoryOfTheApi(
-        ApiFactoryWithFakeRepositoryAndEmails apiStartedInMemoryForThisTest,
-        string emailAddressOfTheAccountToAdd = EmailAddressOfTheLoginTests,
-        bool emailAddressOfTheAccountIsConfirmed = true)
+    public static async Task<User> AddAccountAsync(
+        ApiFactoryWithFakes api,
+        string emailAddress = Email,
+        bool isEmailConfirmed = true)
     {
-        var accountAddedToTheFakeRepository = new User
+        var account = new User
         {
-            Email = emailAddressOfTheAccountToAdd,
-            PasswordHash = new LibsodiumPasswordHasher().ConvertPasswordIntoItsSecureHash(ValidPasswordChosenInTheseTests),
-            IsEmailConfirmed = emailAddressOfTheAccountIsConfirmed
+            Email = emailAddress,
+            PasswordHash = await RealArgonHashers.CreatePasswordHasher().HashAsync(ValidPassword),
+            IsEmailConfirmed = isEmailConfirmed
         };
-        apiStartedInMemoryForThisTest.RepositoryThatKeepsAccountsInMemory.SavedUsers.Add(accountAddedToTheFakeRepository);
+        api.AccountRepository.SavedUsers.Add(account);
 
-        return accountAddedToTheFakeRepository;
+        return account;
+    }
+
+    // Ajoute à la fausse base un compte bloqué jusqu'à cette date, avec ce nombre de blocages déjà comptés.
+    public static async Task<User> AddLockedAccountAsync(
+        ApiFactoryWithFakes api,
+        string emailAddress,
+        short lockoutCount,
+        DateTime lockoutEndsAt)
+    {
+        var account = new User
+        {
+            Email = emailAddress,
+            PasswordHash = await RealArgonHashers.CreatePasswordHasher().HashAsync(ValidPassword),
+            IsEmailConfirmed = true,
+            FailedLoginAttemptCount = AccountLockoutRules.MaximumFailedAttempts,
+            LockoutCount = lockoutCount,
+            LockoutEndsAt = lockoutEndsAt
+        };
+        api.AccountRepository.SavedUsers.Add(account);
+
+        return account;
     }
 
     // Envoie une demande de connexion.
-    public static async Task<HttpResponseMessage> SendLoginRequestToTheApiAsync(
-        HttpClient clientThatCallsTheApiInMemory,
-        string emailAddressTypedInThisTest = EmailAddressOfTheLoginTests,
-        string passwordTypedByTheVisitorInThisTest = ValidPasswordChosenInTheseTests)
+    public static async Task<HttpResponseMessage> SendLoginRequestAsync(
+        HttpClient client,
+        string emailAddress = Email,
+        string password = ValidPassword)
     {
-        return await clientThatCallsTheApiInMemory.PostAsJsonAsync(
-            AddressOfTheAccountLoginEndpoint,
-            new { email = emailAddressTypedInThisTest, password = passwordTypedByTheVisitorInThisTest });
+        return await client.PostAsJsonAsync(
+            LoginEndpoint,
+            new { email = emailAddress, password = password });
     }
 
     // Demande le jeton anti-CSRF de l'utilisateur connecté.
-    public static async Task<string> AskForTheCsrfTokenOfTheLoggedInUserAsync(HttpClient clientThatCallsTheApiInMemory)
+    public static async Task<string> GetCsrfTokenAsync(HttpClient client)
     {
-        var answerToTheCsrfTokenRequest = await clientThatCallsTheApiInMemory.GetAsync(AddressOfTheCsrfTokenEndpoint);
-        Assert.Equal(HttpStatusCode.OK, answerToTheCsrfTokenRequest.StatusCode);
+        var response = await client.GetAsync(CsrfTokenEndpoint);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
 
-        var jsonDocumentOfTheApiAnswer = JsonDocument.Parse(await answerToTheCsrfTokenRequest.Content.ReadAsStringAsync());
+        var jsonDocument = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
 
-        return jsonDocumentOfTheApiAnswer.RootElement.GetProperty("csrfToken").GetString()!;
+        return jsonDocument.RootElement.GetProperty("csrfToken").GetString()!;
     }
 
     // Envoie une demande de déconnexion, avec ce jeton anti-CSRF si le test en donne un.
-    public static async Task<HttpResponseMessage> SendLogoutRequestWithThisCsrfTokenAsync(HttpClient clientThatCallsTheApiInMemory, string? csrfTokenSentWithTheRequest)
+    public static async Task<HttpResponseMessage> SendLogoutRequestAsync(HttpClient client, string? csrfToken)
     {
-        var logoutRequestToSendToTheApi = new HttpRequestMessage(HttpMethod.Post, AddressOfTheUserLogoutEndpoint);
+        var request = new HttpRequestMessage(HttpMethod.Post, LogoutEndpoint);
 
-        if (csrfTokenSentWithTheRequest != null)
+        if (csrfToken != null)
         {
-            logoutRequestToSendToTheApi.Headers.Add(AntiforgeryConfiguration.NameOfTheHeaderCarryingTheCsrfToken, csrfTokenSentWithTheRequest);
+            request.Headers.Add(AntiforgeryConfiguration.CsrfHeaderName, csrfToken);
         }
 
-        return await clientThatCallsTheApiInMemory.SendAsync(logoutRequestToSendToTheApi);
+        return await client.SendAsync(request);
     }
 
     // Retrouve un cookie parmi ceux que la réponse demande d'écrire. Renvoie null si elle n'en parle pas.
-    public static SetCookieHeaderValue? FindCookieWrittenByTheAnswer(HttpResponseMessage answerOfTheApiToRead, string nameOfTheCookieToFind)
+    public static SetCookieHeaderValue? FindCookie(HttpResponseMessage response, string cookieName)
     {
-        if (!answerOfTheApiToRead.Headers.TryGetValues("Set-Cookie", out var allCookiesWrittenByTheAnswer))
+        if (!response.Headers.TryGetValues("Set-Cookie", out var cookies))
         {
             return null;
         }
 
-        foreach (var oneCookieWrittenByTheAnswer in allCookiesWrittenByTheAnswer)
+        foreach (var header in cookies)
         {
-            var cookieReadFromTheAnswerHeader = SetCookieHeaderValue.Parse(oneCookieWrittenByTheAnswer);
+            var cookie = SetCookieHeaderValue.Parse(header);
 
-            if (cookieReadFromTheAnswerHeader.Name == nameOfTheCookieToFind)
+            if (cookie.Name == cookieName)
             {
-                return cookieReadFromTheAnswerHeader;
+                return cookie;
             }
         }
 
@@ -116,12 +138,12 @@ public static class LoginRequestTestValues
     }
 
     // Vérifie qu'une erreur a le format commun, avec exactement ce titre en français.
-    public static async Task CheckThatAnswerIsProblemWithThisExactTitleAsync(HttpResponseMessage answerOfTheApiToCheck, HttpStatusCode statusCodeExpectedInTheAnswer, string titleExpectedInTheErrorAnswer)
+    public static async Task AssertProblemTitleAsync(HttpResponseMessage response, HttpStatusCode statusCode, string title)
     {
-        Assert.Equal(statusCodeExpectedInTheAnswer, answerOfTheApiToCheck.StatusCode);
-        Assert.Equal("application/problem+json", answerOfTheApiToCheck.Content.Headers.ContentType?.MediaType);
+        Assert.Equal(statusCode, response.StatusCode);
+        Assert.Equal("application/problem+json", response.Content.Headers.ContentType?.MediaType);
 
-        var jsonDocumentOfTheApiAnswer = JsonDocument.Parse(await answerOfTheApiToCheck.Content.ReadAsStringAsync());
-        Assert.Equal(titleExpectedInTheErrorAnswer, jsonDocumentOfTheApiAnswer.RootElement.GetProperty("title").GetString());
+        var jsonDocument = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.Equal(title, jsonDocument.RootElement.GetProperty("title").GetString());
     }
 }

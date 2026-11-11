@@ -9,35 +9,35 @@ public class PublicWebsiteSettingsTests
     [InlineData(null)]
     [InlineData("")]
     [InlineData("   ")]
-    public void MissingWebsiteAddressIsRefusedAtStartup(string? missingWebsiteAddressForThisTest)
+    public void MissingWebsiteAddressIsRefusedAtStartup(string? missingAddress)
     {
-        Assert.Throws<InvalidOperationException>(() => new PublicWebsiteSettings(missingWebsiteAddressForThisTest));
+        Assert.Throws<InvalidOperationException>(() => new PublicWebsiteSettings(missingAddress));
     }
 
     [Theory]
     [InlineData("http://walletflow.test")]
     [InlineData("walletflow.test")]
-    public void WebsiteAddressWithoutHttpsIsRefusedAtStartup(string websiteAddressWithoutHttpsForThisTest)
+    public void WebsiteAddressWithoutHttpsIsRefusedAtStartup(string httpAddress)
     {
-        Assert.Throws<InvalidOperationException>(() => new PublicWebsiteSettings(websiteAddressWithoutHttpsForThisTest));
+        Assert.Throws<InvalidOperationException>(() => new PublicWebsiteSettings(httpAddress));
     }
 
     // Le jeton est après le # : il n'est jamais envoyé au serveur quand la page s'ouvre (SS §7).
     [Fact]
     public void LinkContainsThePageAndTheTokenAfterTheHashSign()
     {
-        var settingsOfThePublicWebsiteBeingTested = new PublicWebsiteSettings("https://walletflow.test/");
+        var settings = new PublicWebsiteSettings("https://walletflow.test/");
 
-        var linkBuiltForThisWebsitePage = settingsOfThePublicWebsiteBeingTested.BuildLinkToThisWebsitePageWithItsToken("/reset-password", "jeton-du-lien");
+        var link = settings.BuildLink("/reset-password", "jeton-du-lien");
 
-        Assert.Equal("https://walletflow.test/reset-password#token=jeton-du-lien", linkBuiltForThisWebsitePage);
+        Assert.Equal("https://walletflow.test/reset-password#token=jeton-du-lien", link);
     }
 
     [Fact]
     public void FinalSlashOfTheWebsiteAddressIsRemoved()
     {
-        var settingsOfThePublicWebsiteBeingTested = new PublicWebsiteSettings("https://walletflow.test/");
+        var settings = new PublicWebsiteSettings("https://walletflow.test/");
 
-        Assert.Equal("https://walletflow.test", settingsOfThePublicWebsiteBeingTested.PublicWebsiteAddress);
+        Assert.Equal("https://walletflow.test", settings.PublicWebsiteAddress);
     }
 }

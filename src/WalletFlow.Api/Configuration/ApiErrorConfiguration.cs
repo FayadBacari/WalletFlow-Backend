@@ -8,28 +8,28 @@ namespace WalletFlow.Api.Configuration;
 // refusée, des clés stables. Aucune réponse ne recopie un nom interne du code ni un texte du visiteur.
 public static class ApiErrorConfiguration
 {
-    public const string TitleOfEveryRefusedRequestAnswer = "La requête n'est pas valide.";
-    public const string KeyOfTheErrorsOutsideTheRequestFields = "Request";
-    public const string MessageForRequestThatCannotBeRead = "La requête n'est pas lisible.";
+    public const string RefusedRequestTitle = "La requête n'est pas valide.";
+    public const string GeneralErrorsKey = "Request";
+    public const string UnreadableRequestMessage = "La requête n'est pas lisible.";
 
     // Met en français le titre des erreurs produites par ASP.NET Core.
-    public static void TranslateTheTitleOfTheProblemIntoFrench(ProblemDetailsContext contextOfTheProblemToTranslate)
+    public static void TranslateTitle(ProblemDetailsContext context)
     {
-        var frenchTitleOfTheProblemToTranslate = FindFrenchTitleForThisStatusCode(contextOfTheProblemToTranslate.ProblemDetails.Status);
+        var frenchTitle = FindFrenchTitle(context.ProblemDetails.Status);
 
-        if (frenchTitleOfTheProblemToTranslate != null)
+        if (frenchTitle != null)
         {
-            contextOfTheProblemToTranslate.ProblemDetails.Title = frenchTitleOfTheProblemToTranslate;
+            context.ProblemDetails.Title = frenchTitle;
         }
     }
 
     // Donne le titre en français d'un code d'erreur. Un code absent de cette liste garde le titre choisi par sa route.
-    private static string? FindFrenchTitleForThisStatusCode(int? statusCodeOfTheProblemToTranslate)
+    private static string? FindFrenchTitle(int? statusCode)
     {
-        switch (statusCodeOfTheProblemToTranslate)
+        switch (statusCode)
         {
             case StatusCodes.Status400BadRequest:
-                return TitleOfEveryRefusedRequestAnswer;
+                return RefusedRequestTitle;
             case StatusCodes.Status404NotFound:
                 return "Cette adresse n'existe pas.";
             case StatusCodes.Status405MethodNotAllowed:
@@ -48,56 +48,56 @@ public static class ApiErrorConfiguration
     }
 
     // Construit la réponse de toute requête refusée : celle des règles de validation, et celle des contrôleurs.
-    public static IActionResult CreateAnswerForTheRefusedRequest(ActionContext contextOfTheRequestBeingRefused)
+    public static IActionResult CreateRefusedRequestAnswer(ActionContext context)
     {
-        var errorsKeptForTheAnswerBeingBuilt = new ModelStateDictionary();
+        var errors = new ModelStateDictionary();
 
-        foreach (var entryOfTheRequestBeingRefused in contextOfTheRequestBeingRefused.ModelState)
+        foreach (var entry in context.ModelState)
         {
-            foreach (var errorOfTheEntryBeingRead in entryOfTheRequestBeingRefused.Value.Errors)
+            foreach (var error in entry.Value.Errors)
             {
-                AddOneErrorToTheAnswerBeingBuilt(errorsKeptForTheAnswerBeingBuilt, entryOfTheRequestBeingRefused.Key, errorOfTheEntryBeingRead.ErrorMessage);
+                AddError(errors, entry.Key, error.ErrorMessage);
             }
         }
 
-        var factoryThatBuildsTheErrorAnswers = contextOfTheRequestBeingRefused.HttpContext.RequestServices.GetRequiredService<ProblemDetailsFactory>();
-        var detailsOfTheRequestBeingRefused = factoryThatBuildsTheErrorAnswers.CreateValidationProblemDetails(
-            contextOfTheRequestBeingRefused.HttpContext,
-            errorsKeptForTheAnswerBeingBuilt,
+        var problemDetailsFactory = context.HttpContext.RequestServices.GetRequiredService<ProblemDetailsFactory>();
+        var problemDetails = problemDetailsFactory.CreateValidationProblemDetails(
+            context.HttpContext,
+            errors,
             StatusCodes.Status400BadRequest,
-            TitleOfEveryRefusedRequestAnswer);
+            RefusedRequestTitle);
 
-        return new BadRequestObjectResult(detailsOfTheRequestBeingRefused);
+        return new BadRequestObjectResult(problemDetails);
     }
 
     // Garde le message d'un champ de la requête. Toute autre erreur devient un seul message générique :
     // sa clé pourrait citer un nom interne du code, ou recopier un texte envoyé par le visiteur.
-    private static void AddOneErrorToTheAnswerBeingBuilt(ModelStateDictionary errorsKeptForTheAnswerBeingBuilt, string keyOfTheErrorBeingRead, string messageOfTheErrorBeingRead)
+    private static void AddError(ModelStateDictionary errors, string key, string message)
     {
-        if (CheckThatKeyIsTheNameOfOneRequestField(keyOfTheErrorBeingRead))
+        if (IsRequestField(key))
         {
-            errorsKeptForTheAnswerBeingBuilt.AddModelError(keyOfTheErrorBeingRead, messageOfTheErrorBeingRead);
+            errors.AddModelError(key, message);
             return;
         }
 
-        if (!errorsKeptForTheAnswerBeingBuilt.ContainsKey(KeyOfTheErrorsOutsideTheRequestFields))
+        if (!errors.ContainsKey(GeneralErrorsKey))
         {
-            errorsKeptForTheAnswerBeingBuilt.AddModelError(KeyOfTheErrorsOutsideTheRequestFields, MessageForRequestThatCannotBeRead);
+            errors.AddModelError(GeneralErrorsKey, UnreadableRequestMessage);
         }
     }
 
     // Les champs des requêtes s'écrivent comme Email ou Password : une majuscule, puis des lettres et des chiffres.
     // Le nom d'un paramètre commence par une minuscule, et un chemin JSON par le signe $.
-    private static bool CheckThatKeyIsTheNameOfOneRequestField(string keyOfTheErrorBeingRead)
+    private static bool IsRequestField(string key)
     {
-        if (keyOfTheErrorBeingRead.Length == 0 || !char.IsAsciiLetterUpper(keyOfTheErrorBeingRead[0]))
+        if (key.Length == 0 || !char.IsAsciiLetterUpper(key[0]))
         {
             return false;
         }
 
-        foreach (var characterOfTheKeyBeingRead in keyOfTheErrorBeingRead)
+        foreach (var character in key)
         {
-            if (!char.IsAsciiLetterOrDigit(characterOfTheKeyBeingRead))
+            if (!char.IsAsciiLetterOrDigit(character))
             {
                 return false;
             }

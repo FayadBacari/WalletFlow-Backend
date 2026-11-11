@@ -6,71 +6,71 @@ namespace WalletFlow.Infrastructure.Security;
 // Les compteurs repartent à zéro si l'API redémarre, comme les limites par adresse IP.
 public class InMemoryEmailAddressRequestLimiter : IEmailAddressRequestLimiter
 {
-    public const int MaximumNumberOfRequestsPerEmailAddress = 3;
-    public static readonly TimeSpan DurationOfTheWindowCountingTheRequests = TimeSpan.FromHours(1);
+    public const int MaximumRequestsPerAddress = 3;
+    public static readonly TimeSpan CountingWindow = TimeSpan.FromHours(1);
 
-    private readonly TimeProvider clockThatGivesTheCurrentDateAndTime;
-    private readonly Dictionary<string, RequestCounterOfOneEmailAddress> requestCountersKeptByEmailAddress = new Dictionary<string, RequestCounterOfOneEmailAddress>();
-    private readonly object lockThatProtectsTheRequestCounters = new object();
+    private readonly TimeProvider clock;
+    private readonly Dictionary<string, RequestCounter> countersByAddress = new Dictionary<string, RequestCounter>();
+    private readonly object countersLock = new object();
 
     // Reçoit l'horloge qui mesure la durée de chaque compteur.
-    public InMemoryEmailAddressRequestLimiter(TimeProvider clockThatGivesTheCurrentDateAndTime)
+    public InMemoryEmailAddressRequestLimiter(TimeProvider clock)
     {
-        this.clockThatGivesTheCurrentDateAndTime = clockThatGivesTheCurrentDateAndTime;
+        this.clock = clock;
     }
 
     // Compte une demande de plus pour cette adresse. Renvoie faux si la limite est déjà atteinte.
-    public bool TryToCountNewRequestForThisEmailAddress(string emailAddressInItsStoredForm)
+    public bool TryCountRequest(string email)
     {
-        var currentDateOfTheRequestBeingCounted = clockThatGivesTheCurrentDateAndTime.GetUtcNow();
+        var now = clock.GetUtcNow();
 
-        lock (lockThatProtectsTheRequestCounters)
+        lock (countersLock)
         {
-            RemoveTheCountersWhoseWindowHasEnded(currentDateOfTheRequestBeingCounted);
+            RemoveExpiredCounters(now);
 
-            if (!requestCountersKeptByEmailAddress.TryGetValue(emailAddressInItsStoredForm, out var requestCounterOfThisEmailAddress))
+            if (!countersByAddress.TryGetValue(email, out var counter))
             {
-                requestCountersKeptByEmailAddress[emailAddressInItsStoredForm] = new RequestCounterOfOneEmailAddress
+                countersByAddress[email] = new RequestCounter
                 {
-                    DateOfTheFirstRequest = currentDateOfTheRequestBeingCounted,
-                    NumberOfRequests = 1
+                    FirstRequestAt = now,
+                    RequestCount = 1
                 };
                 return true;
             }
 
-            if (requestCounterOfThisEmailAddress.NumberOfRequests >= MaximumNumberOfRequestsPerEmailAddress)
+            if (counter.RequestCount >= MaximumRequestsPerAddress)
             {
                 return false;
             }
 
-            requestCounterOfThisEmailAddress.NumberOfRequests = requestCounterOfThisEmailAddress.NumberOfRequests + 1;
+            counter.RequestCount = counter.RequestCount + 1;
             return true;
         }
     }
 
     // Oublie les adresses dont la période de comptage est finie, pour que la mémoire ne grossisse pas.
-    private void RemoveTheCountersWhoseWindowHasEnded(DateTimeOffset currentDateOfTheRequestBeingCounted)
+    private void RemoveExpiredCounters(DateTimeOffset now)
     {
-        var emailAddressesWhoseWindowHasEnded = new List<string>();
+        var expiredAddresses = new List<string>();
 
-        foreach (var requestCounterOfAddressBeingChecked in requestCountersKeptByEmailAddress)
+        foreach (var entry in countersByAddress)
         {
-            if (currentDateOfTheRequestBeingCounted - requestCounterOfAddressBeingChecked.Value.DateOfTheFirstRequest >= DurationOfTheWindowCountingTheRequests)
+            if (now - entry.Value.FirstRequestAt >= CountingWindow)
             {
-                emailAddressesWhoseWindowHasEnded.Add(requestCounterOfAddressBeingChecked.Key);
+                expiredAddresses.Add(entry.Key);
             }
         }
 
-        foreach (var emailAddressToForgetFromTheCounters in emailAddressesWhoseWindowHasEnded)
+        foreach (var email in expiredAddresses)
         {
-            requestCountersKeptByEmailAddress.Remove(emailAddressToForgetFromTheCounters);
+            countersByAddress.Remove(email);
         }
     }
 
     // Compteur d'une adresse e-mail pendant sa période de comptage.
-    private class RequestCounterOfOneEmailAddress
+    private class RequestCounter
     {
-        public DateTimeOffset DateOfTheFirstRequest { get; init; }
-        public int NumberOfRequests { get; set; }
+        public DateTimeOffset FirstRequestAt { get; init; }
+        public int RequestCount { get; set; }
     }
 }

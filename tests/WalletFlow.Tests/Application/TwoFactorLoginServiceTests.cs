@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using WalletFlow.Application.AccountRecovery;
 using WalletFlow.Application.TwoFactorAuthentication;
 using WalletFlow.Application.UserSessions;
 using WalletFlow.Domain.UsersAndSecurity;
@@ -11,65 +12,58 @@ namespace WalletFlow.Tests.Application;
 // Vérifie la connexion d'un compte avec double authentification (GR Auth, SS §2, §3, §6 et §11).
 public class TwoFactorLoginServiceTests
 {
-    private readonly TwoFactorServicesWithFakeTools servicesWithFakeToolsOfTheseTests = new TwoFactorServicesWithFakeTools();
+    private readonly TwoFactorServicesWithFakeTools services = new TwoFactorServicesWithFakeTools();
 
     // --- Le mot de passe ne suffit pas
 
     [Fact]
     public async Task RightPasswordAloneOpensNoSessionAndKeepsTheAttemptCounted()
     {
-        var activatedAccountUsedByThisTest = servicesWithFakeToolsOfTheseTests.AddActivatedAccountToTheFakeDatabase();
+        var activatedAccount = services.AddActivatedAccount();
 
-        var resultOfTheLoginWithThePassword = await servicesWithFakeToolsOfTheseTests.TryToLogInWithThisPasswordAsync(PasswordOfTheAccountInTheseTests);
+        var result = await services.LogInAsync(AccountPassword);
 
-        Assert.True(resultOfTheLoginWithThePassword.IsWaitingForTwoFactorCode);
-        Assert.False(resultOfTheLoginWithThePassword.IsLoggedIn);
-        Assert.Null(resultOfTheLoginWithThePassword.SessionTokenToPutInTheCookie);
-        Assert.Null(resultOfTheLoginWithThePassword.DeviceTokenToPutInTheCookie);
-        Assert.Empty(servicesWithFakeToolsOfTheseTests.RepositoryThatKeepsSessionsInMemory.SavedSessions);
-        Assert.Empty(servicesWithFakeToolsOfTheseTests.RepositoryThatKeepsSessionsInMemory.SavedDevices);
-        Assert.Empty(servicesWithFakeToolsOfTheseTests.RepositoryThatKeepsSecurityEventsInMemory.SavedSecurityEvents);
-        Assert.Equal(1, activatedAccountUsedByThisTest.UserAccount.FailedLoginAttemptCount);
+        Assert.IsType<AccountLoginResult.WaitingForTwoFactorCode>(result);
+        Assert.Empty(services.SessionRepository.SavedSessions);
+        Assert.Empty(services.SessionRepository.SavedDevices);
+        Assert.Empty(services.SecurityEventRepository.SavedSecurityEvents);
+        Assert.Equal(1, activatedAccount.UserAccount.FailedLoginAttemptCount);
     }
 
     [Fact]
     public async Task WrongPasswordOnAnActivatedAccountNeverAsksForTheCode()
     {
-        servicesWithFakeToolsOfTheseTests.AddActivatedAccountToTheFakeDatabase();
+        services.AddActivatedAccount();
 
-        var resultOfTheLoginWithThePassword = await servicesWithFakeToolsOfTheseTests.TryToLogInWithThisPasswordAsync(WrongPasswordTypedInTheseTests);
+        var result = await services.LogInAsync(WrongPassword);
 
-        Assert.False(resultOfTheLoginWithThePassword.IsWaitingForTwoFactorCode);
-        Assert.Equal(AccountLoginService.ErrorMessageForWrongLoginCredentials, resultOfTheLoginWithThePassword.WrongCredentialsErrorMessage);
+        Assert.IsType<AccountLoginResult.WrongCredentials>(result);
     }
 
     [Fact]
     public async Task AccountWithoutTwoFactorStillLogsInWithItsPasswordAlone()
     {
-        servicesWithFakeToolsOfTheseTests.AddAccountWithoutTwoFactorToTheFakeDatabase();
+        services.AddAccountWithoutTwoFactor();
 
-        var resultOfTheLoginWithThePassword = await servicesWithFakeToolsOfTheseTests.TryToLogInWithThisPasswordAsync(PasswordOfTheAccountInTheseTests);
+        var result = await services.LogInAsync(AccountPassword);
 
-        Assert.True(resultOfTheLoginWithThePassword.IsLoggedIn);
-        Assert.False(resultOfTheLoginWithThePassword.IsWaitingForTwoFactorCode);
+        Assert.IsType<AccountLoginResult.LoggedIn>(result);
     }
 
     // Sans le contrôle du secret, une connexion lancée juste avant l'activation s'ouvrirait sans code.
     [Fact]
     public async Task TwoFactorActivatedDuringThePasswordCheckRefusesTheLoginWithoutCode()
     {
-        var accountUsedByThisTwoFactorTest = servicesWithFakeToolsOfTheseTests.AddAccountWithoutTwoFactorToTheFakeDatabase();
-        servicesWithFakeToolsOfTheseTests.HasherThatCountsTheComparedPasswords.ActionRunWhenOnePasswordIsCompared = () =>
+        var account = services.AddAccountWithoutTwoFactor();
+        services.PasswordHasher.OnPasswordVerified = () =>
         {
-            accountUsedByThisTwoFactorTest.IsTwoFactorEnabled = true;
-            accountUsedByThisTwoFactorTest.EncryptedTotpSecret = "secret-chiffre-par-une-autre-requete";
+            account.ActivateTwoFactor("secret-chiffre-par-une-autre-requete");
         };
 
-        var resultOfTheLoginWithThePassword = await servicesWithFakeToolsOfTheseTests.TryToLogInWithThisPasswordAsync(PasswordOfTheAccountInTheseTests);
+        var result = await services.LogInAsync(AccountPassword);
 
-        Assert.False(resultOfTheLoginWithThePassword.IsLoggedIn);
-        Assert.Equal(AccountLoginService.ErrorMessageForWrongLoginCredentials, resultOfTheLoginWithThePassword.WrongCredentialsErrorMessage);
-        Assert.Empty(servicesWithFakeToolsOfTheseTests.RepositoryThatKeepsSessionsInMemory.SavedSessions);
+        Assert.IsType<AccountLoginResult.WrongCredentials>(result);
+        Assert.Empty(services.SessionRepository.SavedSessions);
     }
 
     // --- Le bon code
@@ -78,43 +72,41 @@ public class TwoFactorLoginServiceTests
     [Fact]
     public async Task RightCodeOpensTheSessionAndResetsEveryLoginCounter()
     {
-        var activatedAccountUsedByThisTest = servicesWithFakeToolsOfTheseTests.AddActivatedAccountToTheFakeDatabase();
-        activatedAccountUsedByThisTest.UserAccount.LockoutCount = 3;
-        var waitingLoginTokenOfTheVisitor = await servicesWithFakeToolsOfTheseTests.LogInWithTheRightPasswordThenGetTheWaitingLoginTokenAsync();
+        var activatedAccount = services.AddActivatedAccount(lockoutCount: 3);
+        var waitingLoginToken = await services.LogInThenGetWaitingLoginTokenAsync();
 
-        var resultOfTheCodeAttemptOfTheVisitor = await servicesWithFakeToolsOfTheseTests.FinishLoginWithThisCodeAsync(
-            waitingLoginTokenOfTheVisitor,
-            servicesWithFakeToolsOfTheseTests.CalculateCodeShownOnThePhoneNow(activatedAccountUsedByThisTest.SecretOfTheAuthenticatorApplication));
+        var result = await services.FinishLoginAsync(
+            waitingLoginToken,
+            services.CalculateCurrentCode(activatedAccount.Secret));
 
-        Assert.True(resultOfTheCodeAttemptOfTheVisitor.IsLoggedIn);
-        Assert.NotNull(resultOfTheCodeAttemptOfTheVisitor.DeviceTokenToPutInTheCookie);
-        var sessionSavedInTheFakeDatabase = Assert.Single(servicesWithFakeToolsOfTheseTests.RepositoryThatKeepsSessionsInMemory.SavedSessions);
-        Assert.Equal(activatedAccountUsedByThisTest.UserAccount.Id, sessionSavedInTheFakeDatabase.UserId);
-        Assert.Equal(servicesWithFakeToolsOfTheseTests.RealGeneratorOfTheTokens.ConvertSecureTokenIntoItsHash(resultOfTheCodeAttemptOfTheVisitor.SessionTokenToPutInTheCookie!), sessionSavedInTheFakeDatabase.Id);
-        Assert.Single(servicesWithFakeToolsOfTheseTests.RepositoryThatKeepsSessionsInMemory.SavedDevices);
-        Assert.Equal(0, activatedAccountUsedByThisTest.UserAccount.FailedLoginAttemptCount);
-        Assert.Equal(0, activatedAccountUsedByThisTest.UserAccount.LockoutCount);
-        Assert.Null(activatedAccountUsedByThisTest.UserAccount.LockoutEndsAt);
+        Assert.IsType<TwoFactorLoginResult.LoggedIn>(result);
+        var session = Assert.Single(services.SessionRepository.SavedSessions);
+        Assert.Equal(activatedAccount.UserAccount.Id, session.UserId);
+        Assert.Equal(services.TokenGenerator.HashToken(Assert.IsType<TwoFactorLoginResult.LoggedIn>(result).SessionToken), session.Id);
+        Assert.Single(services.SessionRepository.SavedDevices);
+        Assert.Equal(0, activatedAccount.UserAccount.FailedLoginAttemptCount);
+        Assert.Equal(0, activatedAccount.UserAccount.LockoutCount);
+        Assert.Null(activatedAccount.UserAccount.LockoutEndsAt);
 
-        var securityEventOfTheLoginWithTheCode = Assert.Single(servicesWithFakeToolsOfTheseTests.RepositoryThatKeepsSecurityEventsInMemory.SavedSecurityEvents);
-        Assert.Equal(SecurityEventType.Login, securityEventOfTheLoginWithTheCode.Type);
-        Assert.Equal(SecurityEventResult.Success, securityEventOfTheLoginWithTheCode.Result);
-        Assert.Equal(IpAddressOfTheVisitorInTheseTests, securityEventOfTheLoginWithTheCode.IpAddress);
-        Assert.Equal(activatedAccountUsedByThisTest.UserAccount.Id, securityEventOfTheLoginWithTheCode.UserId);
+        var securityEvent = Assert.Single(services.SecurityEventRepository.SavedSecurityEvents);
+        Assert.Equal(SecurityEventType.Login, securityEvent.Type);
+        Assert.Equal(SecurityEventResult.Success, securityEvent.Result);
+        Assert.Equal(IpAddress, securityEvent.IpAddress);
+        Assert.Equal(activatedAccount.UserAccount.Id, securityEvent.UserId);
     }
 
     [Fact]
     public async Task WaitingLoginCannotServeASecondTimeAfterASuccessfulLogin()
     {
-        var activatedAccountUsedByThisTest = servicesWithFakeToolsOfTheseTests.AddActivatedAccountToTheFakeDatabase();
-        var waitingLoginTokenOfTheVisitor = await servicesWithFakeToolsOfTheseTests.LogInWithTheRightPasswordThenGetTheWaitingLoginTokenAsync();
-        await servicesWithFakeToolsOfTheseTests.FinishLoginWithThisCodeAsync(waitingLoginTokenOfTheVisitor, servicesWithFakeToolsOfTheseTests.CalculateCodeShownOnThePhoneNow(activatedAccountUsedByThisTest.SecretOfTheAuthenticatorApplication));
-        servicesWithFakeToolsOfTheseTests.WaitForTheNextCodeOnThePhone();
+        var activatedAccount = services.AddActivatedAccount();
+        var waitingLoginToken = await services.LogInThenGetWaitingLoginTokenAsync();
+        await services.FinishLoginAsync(waitingLoginToken, services.CalculateCurrentCode(activatedAccount.Secret));
+        services.WaitForNextCode();
 
-        var resultOfTheSecondCodeAttempt = await servicesWithFakeToolsOfTheseTests.FinishLoginWithThisCodeAsync(waitingLoginTokenOfTheVisitor, servicesWithFakeToolsOfTheseTests.CalculateCodeShownOnThePhoneNow(activatedAccountUsedByThisTest.SecretOfTheAuthenticatorApplication));
+        var result = await services.FinishLoginAsync(waitingLoginToken, services.CalculateCurrentCode(activatedAccount.Secret));
 
-        Assert.Equal(TwoFactorLoginService.ErrorMessageForLoginThatMustRestart, resultOfTheSecondCodeAttempt.LoginMustRestartErrorMessage);
-        Assert.Single(servicesWithFakeToolsOfTheseTests.RepositoryThatKeepsSessionsInMemory.SavedSessions);
+        Assert.IsType<TwoFactorLoginResult.LoginMustRestart>(result);
+        Assert.Single(services.SessionRepository.SavedSessions);
     }
 
     // Le téléphone et le serveur n'ont jamais tout à fait la même heure (SS §2).
@@ -122,82 +114,82 @@ public class TwoFactorLoginServiceTests
     [InlineData(-30)]
     [InlineData(0)]
     [InlineData(30)]
-    public async Task CodeOfTheCurrentPreviousOrNextPeriodIsAccepted(int secondsBetweenThePhoneAndTheServer)
+    public async Task CodeOfTheCurrentPreviousOrNextPeriodIsAccepted(int driftSeconds)
     {
-        var activatedAccountUsedByThisTest = servicesWithFakeToolsOfTheseTests.AddActivatedAccountToTheFakeDatabase();
-        var waitingLoginTokenOfTheVisitor = await servicesWithFakeToolsOfTheseTests.LogInWithTheRightPasswordThenGetTheWaitingLoginTokenAsync();
-        var codeShownOnThePhoneInThisTest = TwoFactorTestTools.CalculateAuthenticatorCodeShownAtThisDate(
-            activatedAccountUsedByThisTest.SecretOfTheAuthenticatorApplication,
-            servicesWithFakeToolsOfTheseTests.ClockThatOnlyMovesWhenTestsAskIt.GetUtcNow().AddSeconds(secondsBetweenThePhoneAndTheServer));
+        var activatedAccount = services.AddActivatedAccount();
+        var waitingLoginToken = await services.LogInThenGetWaitingLoginTokenAsync();
+        var code = TwoFactorTestTools.CalculateCodeAt(
+            activatedAccount.Secret,
+            services.Clock.GetUtcNow().AddSeconds(driftSeconds));
 
-        var resultOfTheCodeAttemptOfTheVisitor = await servicesWithFakeToolsOfTheseTests.FinishLoginWithThisCodeAsync(waitingLoginTokenOfTheVisitor, codeShownOnThePhoneInThisTest);
+        var result = await services.FinishLoginAsync(waitingLoginToken, code);
 
-        Assert.True(resultOfTheCodeAttemptOfTheVisitor.IsLoggedIn);
+        Assert.IsType<TwoFactorLoginResult.LoggedIn>(result);
     }
 
     [Theory]
     [InlineData(-60)]
     [InlineData(60)]
-    public async Task CodeOfAPeriodTooFarAwayIsRefused(int secondsBetweenThePhoneAndTheServer)
+    public async Task CodeOfAPeriodTooFarAwayIsRefused(int driftSeconds)
     {
-        var activatedAccountUsedByThisTest = servicesWithFakeToolsOfTheseTests.AddActivatedAccountToTheFakeDatabase();
-        var waitingLoginTokenOfTheVisitor = await servicesWithFakeToolsOfTheseTests.LogInWithTheRightPasswordThenGetTheWaitingLoginTokenAsync();
-        var codeShownOnThePhoneInThisTest = TwoFactorTestTools.CalculateAuthenticatorCodeShownAtThisDate(
-            activatedAccountUsedByThisTest.SecretOfTheAuthenticatorApplication,
-            servicesWithFakeToolsOfTheseTests.ClockThatOnlyMovesWhenTestsAskIt.GetUtcNow().AddSeconds(secondsBetweenThePhoneAndTheServer));
+        var activatedAccount = services.AddActivatedAccount();
+        var waitingLoginToken = await services.LogInThenGetWaitingLoginTokenAsync();
+        var code = TwoFactorTestTools.CalculateCodeAt(
+            activatedAccount.Secret,
+            services.Clock.GetUtcNow().AddSeconds(driftSeconds));
 
-        var resultOfTheCodeAttemptOfTheVisitor = await servicesWithFakeToolsOfTheseTests.FinishLoginWithThisCodeAsync(waitingLoginTokenOfTheVisitor, codeShownOnThePhoneInThisTest);
+        var result = await services.FinishLoginAsync(waitingLoginToken, code);
 
-        Assert.Equal(TwoFactorCodeCheckingService.ErrorMessageForWrongTwoFactorCode, resultOfTheCodeAttemptOfTheVisitor.WrongCodeErrorMessage);
+        Assert.IsType<TwoFactorLoginResult.WrongCode>(result);
     }
 
     // Les applications affichent souvent le code avec un espace au milieu.
     [Fact]
     public async Task CodeTypedWithASpaceInTheMiddleIsAccepted()
     {
-        var activatedAccountUsedByThisTest = servicesWithFakeToolsOfTheseTests.AddActivatedAccountToTheFakeDatabase();
-        var waitingLoginTokenOfTheVisitor = await servicesWithFakeToolsOfTheseTests.LogInWithTheRightPasswordThenGetTheWaitingLoginTokenAsync();
-        var codeShownOnThePhoneInThisTest = servicesWithFakeToolsOfTheseTests.CalculateCodeShownOnThePhoneNow(activatedAccountUsedByThisTest.SecretOfTheAuthenticatorApplication);
+        var activatedAccount = services.AddActivatedAccount();
+        var waitingLoginToken = await services.LogInThenGetWaitingLoginTokenAsync();
+        var code = services.CalculateCurrentCode(activatedAccount.Secret);
 
-        var resultOfTheCodeAttemptOfTheVisitor = await servicesWithFakeToolsOfTheseTests.FinishLoginWithThisCodeAsync(waitingLoginTokenOfTheVisitor, codeShownOnThePhoneInThisTest.Substring(0, 3) + " " + codeShownOnThePhoneInThisTest.Substring(3));
+        var result = await services.FinishLoginAsync(waitingLoginToken, code.Substring(0, 3) + " " + code.Substring(3));
 
-        Assert.True(resultOfTheCodeAttemptOfTheVisitor.IsLoggedIn);
+        Assert.IsType<TwoFactorLoginResult.LoggedIn>(result);
     }
 
     // SS §2 : quelqu'un qui a vu passer un code ne peut pas s'en resservir, même pendant qu'il reste valable.
     [Fact]
     public async Task CodeAlreadyUsedToLogInIsRefusedUntilThePhoneShowsANewOne()
     {
-        var activatedAccountUsedByThisTest = servicesWithFakeToolsOfTheseTests.AddActivatedAccountToTheFakeDatabase();
-        var codeShownOnThePhoneInThisTest = servicesWithFakeToolsOfTheseTests.CalculateCodeShownOnThePhoneNow(activatedAccountUsedByThisTest.SecretOfTheAuthenticatorApplication);
-        var tokenOfTheFirstLoginWaitingItsCode = await servicesWithFakeToolsOfTheseTests.LogInWithTheRightPasswordThenGetTheWaitingLoginTokenAsync();
-        await servicesWithFakeToolsOfTheseTests.FinishLoginWithThisCodeAsync(tokenOfTheFirstLoginWaitingItsCode, codeShownOnThePhoneInThisTest);
+        var activatedAccount = services.AddActivatedAccount();
+        var code = services.CalculateCurrentCode(activatedAccount.Secret);
+        var firstWaitingLoginToken = await services.LogInThenGetWaitingLoginTokenAsync();
+        await services.FinishLoginAsync(firstWaitingLoginToken, code);
 
-        var tokenOfTheSecondLoginWaitingItsCode = await servicesWithFakeToolsOfTheseTests.LogInWithTheRightPasswordThenGetTheWaitingLoginTokenAsync();
-        var resultOfTheLoginWithTheSameCode = await servicesWithFakeToolsOfTheseTests.FinishLoginWithThisCodeAsync(tokenOfTheSecondLoginWaitingItsCode, codeShownOnThePhoneInThisTest);
+        var secondWaitingLoginToken = await services.LogInThenGetWaitingLoginTokenAsync();
+        var sameCodeResult = await services.FinishLoginAsync(secondWaitingLoginToken, code);
 
-        Assert.Equal(TwoFactorCodeCheckingService.ErrorMessageForWrongTwoFactorCode, resultOfTheLoginWithTheSameCode.WrongCodeErrorMessage);
-        Assert.Single(servicesWithFakeToolsOfTheseTests.RepositoryThatKeepsSessionsInMemory.SavedSessions);
+        Assert.IsType<TwoFactorLoginResult.WrongCode>(sameCodeResult);
+        Assert.Single(services.SessionRepository.SavedSessions);
 
-        servicesWithFakeToolsOfTheseTests.WaitForTheNextCodeOnThePhone();
-        var resultOfTheLoginWithTheNextCode = await servicesWithFakeToolsOfTheseTests.FinishLoginWithThisCodeAsync(tokenOfTheSecondLoginWaitingItsCode, servicesWithFakeToolsOfTheseTests.CalculateCodeShownOnThePhoneNow(activatedAccountUsedByThisTest.SecretOfTheAuthenticatorApplication));
+        services.WaitForNextCode();
+        var nextCodeResult = await services.FinishLoginAsync(secondWaitingLoginToken, services.CalculateCurrentCode(activatedAccount.Secret));
 
-        Assert.True(resultOfTheLoginWithTheNextCode.IsLoggedIn);
+        Assert.IsType<TwoFactorLoginResult.LoggedIn>(nextCodeResult);
     }
 
     // Un code plus ancien que le dernier utilisé ne vaut plus rien, même s'il n'a jamais servi.
     [Fact]
     public async Task CodeOlderThanTheLastOneUsedIsRefused()
     {
-        var activatedAccountUsedByThisTest = servicesWithFakeToolsOfTheseTests.AddActivatedAccountToTheFakeDatabase();
-        var currentDateOfTheFakeClock = servicesWithFakeToolsOfTheseTests.ClockThatOnlyMovesWhenTestsAskIt.GetUtcNow();
-        var tokenOfTheFirstLoginWaitingItsCode = await servicesWithFakeToolsOfTheseTests.LogInWithTheRightPasswordThenGetTheWaitingLoginTokenAsync();
-        await servicesWithFakeToolsOfTheseTests.FinishLoginWithThisCodeAsync(tokenOfTheFirstLoginWaitingItsCode, TwoFactorTestTools.CalculateAuthenticatorCodeShownAtThisDate(activatedAccountUsedByThisTest.SecretOfTheAuthenticatorApplication, currentDateOfTheFakeClock.AddSeconds(30)));
+        var activatedAccount = services.AddActivatedAccount();
+        var now = services.Clock.GetUtcNow();
+        var firstWaitingLoginToken = await services.LogInThenGetWaitingLoginTokenAsync();
+        await services.FinishLoginAsync(firstWaitingLoginToken, TwoFactorTestTools.CalculateCodeAt(activatedAccount.Secret, now.AddSeconds(30)));
 
-        var tokenOfTheSecondLoginWaitingItsCode = await servicesWithFakeToolsOfTheseTests.LogInWithTheRightPasswordThenGetTheWaitingLoginTokenAsync();
-        var resultOfTheLoginWithTheOlderCode = await servicesWithFakeToolsOfTheseTests.FinishLoginWithThisCodeAsync(tokenOfTheSecondLoginWaitingItsCode, TwoFactorTestTools.CalculateAuthenticatorCodeShownAtThisDate(activatedAccountUsedByThisTest.SecretOfTheAuthenticatorApplication, currentDateOfTheFakeClock));
+        var secondWaitingLoginToken = await services.LogInThenGetWaitingLoginTokenAsync();
+        var result = await services.FinishLoginAsync(secondWaitingLoginToken, TwoFactorTestTools.CalculateCodeAt(activatedAccount.Secret, now));
 
-        Assert.Equal(TwoFactorCodeCheckingService.ErrorMessageForWrongTwoFactorCode, resultOfTheLoginWithTheOlderCode.WrongCodeErrorMessage);
+        Assert.IsType<TwoFactorLoginResult.WrongCode>(result);
     }
 
     // --- Les mauvais codes
@@ -205,64 +197,62 @@ public class TwoFactorLoginServiceTests
     [Fact]
     public async Task WrongCodeIsRefusedAndWrittenInTheJournalThenTheRightCodeStillWorks()
     {
-        var activatedAccountUsedByThisTest = servicesWithFakeToolsOfTheseTests.AddActivatedAccountToTheFakeDatabase();
-        var waitingLoginTokenOfTheVisitor = await servicesWithFakeToolsOfTheseTests.LogInWithTheRightPasswordThenGetTheWaitingLoginTokenAsync();
+        var activatedAccount = services.AddActivatedAccount();
+        var waitingLoginToken = await services.LogInThenGetWaitingLoginTokenAsync();
 
-        var resultOfTheWrongCodeOfTheVisitor = await servicesWithFakeToolsOfTheseTests.FinishLoginWithThisCodeAsync(waitingLoginTokenOfTheVisitor, servicesWithFakeToolsOfTheseTests.FindCodeThatIsWrongNow(activatedAccountUsedByThisTest.SecretOfTheAuthenticatorApplication));
+        var wrongCodeResult = await services.FinishLoginAsync(waitingLoginToken, services.FindWrongCode(activatedAccount.Secret));
 
-        Assert.False(resultOfTheWrongCodeOfTheVisitor.IsLoggedIn);
-        Assert.Equal(TwoFactorCodeCheckingService.ErrorMessageForWrongTwoFactorCode, resultOfTheWrongCodeOfTheVisitor.WrongCodeErrorMessage);
-        Assert.Empty(servicesWithFakeToolsOfTheseTests.RepositoryThatKeepsSessionsInMemory.SavedSessions);
+        Assert.IsType<TwoFactorLoginResult.WrongCode>(wrongCodeResult);
+        Assert.Empty(services.SessionRepository.SavedSessions);
 
-        var securityEventOfTheWrongCode = Assert.Single(servicesWithFakeToolsOfTheseTests.RepositoryThatKeepsSecurityEventsInMemory.SavedSecurityEvents);
-        Assert.Equal(SecurityEventType.Login, securityEventOfTheWrongCode.Type);
-        Assert.Equal(SecurityEventResult.Failure, securityEventOfTheWrongCode.Result);
-        Assert.Equal(IpAddressOfTheVisitorInTheseTests, securityEventOfTheWrongCode.IpAddress);
-        Assert.Equal(activatedAccountUsedByThisTest.UserAccount.Id, securityEventOfTheWrongCode.UserId);
+        var securityEvent = Assert.Single(services.SecurityEventRepository.SavedSecurityEvents);
+        Assert.Equal(SecurityEventType.Login, securityEvent.Type);
+        Assert.Equal(SecurityEventResult.Failure, securityEvent.Result);
+        Assert.Equal(IpAddress, securityEvent.IpAddress);
+        Assert.Equal(activatedAccount.UserAccount.Id, securityEvent.UserId);
 
-        var resultOfTheRightCodeOfTheVisitor = await servicesWithFakeToolsOfTheseTests.FinishLoginWithThisCodeAsync(waitingLoginTokenOfTheVisitor, servicesWithFakeToolsOfTheseTests.CalculateCodeShownOnThePhoneNow(activatedAccountUsedByThisTest.SecretOfTheAuthenticatorApplication));
-        Assert.True(resultOfTheRightCodeOfTheVisitor.IsLoggedIn);
+        var rightCodeResult = await services.FinishLoginAsync(waitingLoginToken, services.CalculateCurrentCode(activatedAccount.Secret));
+        Assert.IsType<TwoFactorLoginResult.LoggedIn>(rightCodeResult);
     }
 
     // SS §6 : 5 essais, puis il faut recommencer la connexion. Même le bon code ne passe plus.
     [Fact]
     public async Task FifthWrongCodeForcesTheVisitorToRestartEvenWithTheRightCodeAfterwards()
     {
-        var activatedAccountUsedByThisTest = servicesWithFakeToolsOfTheseTests.AddActivatedAccountToTheFakeDatabase();
-        var waitingLoginTokenOfTheVisitor = await servicesWithFakeToolsOfTheseTests.LogInWithTheRightPasswordThenGetTheWaitingLoginTokenAsync();
-        var codeThatIsWrongInThisTest = servicesWithFakeToolsOfTheseTests.FindCodeThatIsWrongNow(activatedAccountUsedByThisTest.SecretOfTheAuthenticatorApplication);
+        var activatedAccount = services.AddActivatedAccount();
+        var waitingLoginToken = await services.LogInThenGetWaitingLoginTokenAsync();
+        var wrongCode = services.FindWrongCode(activatedAccount.Secret);
 
-        for (var numberOfTheWrongCodeBeingTried = 1; numberOfTheWrongCodeBeingTried <= 4; numberOfTheWrongCodeBeingTried++)
+        for (var attemptNumber = 1; attemptNumber <= 4; attemptNumber++)
         {
-            var resultOfOneWrongCodeOfTheVisitor = await servicesWithFakeToolsOfTheseTests.FinishLoginWithThisCodeAsync(waitingLoginTokenOfTheVisitor, codeThatIsWrongInThisTest);
-            Assert.Equal(TwoFactorCodeCheckingService.ErrorMessageForWrongTwoFactorCode, resultOfOneWrongCodeOfTheVisitor.WrongCodeErrorMessage);
+            var wrongCodeResult = await services.FinishLoginAsync(waitingLoginToken, wrongCode);
+            Assert.IsType<TwoFactorLoginResult.WrongCode>(wrongCodeResult);
         }
 
-        var resultOfTheFifthWrongCode = await servicesWithFakeToolsOfTheseTests.FinishLoginWithThisCodeAsync(waitingLoginTokenOfTheVisitor, codeThatIsWrongInThisTest);
-        Assert.Equal(TwoFactorLoginService.ErrorMessageForLoginThatMustRestart, resultOfTheFifthWrongCode.LoginMustRestartErrorMessage);
-        Assert.Null(resultOfTheFifthWrongCode.WrongCodeErrorMessage);
+        var fifthResult = await services.FinishLoginAsync(waitingLoginToken, wrongCode);
+        Assert.IsType<TwoFactorLoginResult.LoginMustRestart>(fifthResult);
 
-        var resultOfTheRightCodeTooLate = await servicesWithFakeToolsOfTheseTests.FinishLoginWithThisCodeAsync(waitingLoginTokenOfTheVisitor, servicesWithFakeToolsOfTheseTests.CalculateCodeShownOnThePhoneNow(activatedAccountUsedByThisTest.SecretOfTheAuthenticatorApplication));
-        Assert.Equal(TwoFactorLoginService.ErrorMessageForLoginThatMustRestart, resultOfTheRightCodeTooLate.LoginMustRestartErrorMessage);
-        Assert.Empty(servicesWithFakeToolsOfTheseTests.RepositoryThatKeepsSessionsInMemory.SavedSessions);
-        Assert.Equal(5, servicesWithFakeToolsOfTheseTests.CountSecurityEventsInTheJournal(SecurityEventType.Login, SecurityEventResult.Failure));
+        var lateResult = await services.FinishLoginAsync(waitingLoginToken, services.CalculateCurrentCode(activatedAccount.Secret));
+        Assert.IsType<TwoFactorLoginResult.LoginMustRestart>(lateResult);
+        Assert.Empty(services.SessionRepository.SavedSessions);
+        Assert.Equal(5, services.CountSecurityEvents(SecurityEventType.Login, SecurityEventResult.Failure));
     }
 
     [Fact]
     public async Task RightCodeOnTheFifthTryStillOpensTheSession()
     {
-        var activatedAccountUsedByThisTest = servicesWithFakeToolsOfTheseTests.AddActivatedAccountToTheFakeDatabase();
-        var waitingLoginTokenOfTheVisitor = await servicesWithFakeToolsOfTheseTests.LogInWithTheRightPasswordThenGetTheWaitingLoginTokenAsync();
-        var codeThatIsWrongInThisTest = servicesWithFakeToolsOfTheseTests.FindCodeThatIsWrongNow(activatedAccountUsedByThisTest.SecretOfTheAuthenticatorApplication);
+        var activatedAccount = services.AddActivatedAccount();
+        var waitingLoginToken = await services.LogInThenGetWaitingLoginTokenAsync();
+        var wrongCode = services.FindWrongCode(activatedAccount.Secret);
 
-        for (var numberOfTheWrongCodeBeingTried = 1; numberOfTheWrongCodeBeingTried <= 4; numberOfTheWrongCodeBeingTried++)
+        for (var attemptNumber = 1; attemptNumber <= 4; attemptNumber++)
         {
-            await servicesWithFakeToolsOfTheseTests.FinishLoginWithThisCodeAsync(waitingLoginTokenOfTheVisitor, codeThatIsWrongInThisTest);
+            await services.FinishLoginAsync(waitingLoginToken, wrongCode);
         }
 
-        var resultOfTheFifthCodeOfTheVisitor = await servicesWithFakeToolsOfTheseTests.FinishLoginWithThisCodeAsync(waitingLoginTokenOfTheVisitor, servicesWithFakeToolsOfTheseTests.CalculateCodeShownOnThePhoneNow(activatedAccountUsedByThisTest.SecretOfTheAuthenticatorApplication));
+        var result = await services.FinishLoginAsync(waitingLoginToken, services.CalculateCurrentCode(activatedAccount.Secret));
 
-        Assert.True(resultOfTheFifthCodeOfTheVisitor.IsLoggedIn);
+        Assert.IsType<TwoFactorLoginResult.LoggedIn>(result);
     }
 
     // Un texte sans la forme d'un code est refusé sans calcul : le secret illisible de ce compte ferait échouer tout déchiffrement,
@@ -280,29 +270,59 @@ public class TwoFactorLoginServiceTests
     [InlineData("ABCDEFGHI0")]
     [InlineData("<script>alert(1)</script>")]
     [InlineData("' OR 1=1 --")]
-    public async Task TextWithoutTheFormatOfACodeIsRefusedWithoutAnyCalculation(string textTypedByTheVisitorInThisTest)
+    public async Task TextWithoutTheFormatOfACodeIsRefusedWithoutAnyCalculation(string text)
     {
-        var activatedAccountUsedByThisTest = servicesWithFakeToolsOfTheseTests.AddActivatedAccountToTheFakeDatabase();
-        var waitingLoginTokenOfTheVisitor = await servicesWithFakeToolsOfTheseTests.LogInWithTheRightPasswordThenGetTheWaitingLoginTokenAsync();
-        activatedAccountUsedByThisTest.UserAccount.EncryptedTotpSecret = "secret-illisible";
-        var numberOfComparisonsBeforeTheCode = servicesWithFakeToolsOfTheseTests.HasherThatCountsTheComparedPasswords.NumberOfPasswordsCompared;
+        var activatedAccount = services.AddActivatedAccount();
+        var waitingLoginToken = await services.LogInThenGetWaitingLoginTokenAsync();
+        activatedAccount.UserAccount.ActivateTwoFactor("secret-illisible");
+        var comparisonCountBefore = services.PasswordHasher.VerifiedPasswordCount;
+        var hashedCountBefore = services.BackupCodeHasher.HashedCodeCount;
 
-        var resultOfTheCodeAttemptOfTheVisitor = await servicesWithFakeToolsOfTheseTests.FinishLoginWithThisCodeAsync(waitingLoginTokenOfTheVisitor, textTypedByTheVisitorInThisTest);
+        var result = await services.FinishLoginAsync(waitingLoginToken, text);
 
-        Assert.Equal(TwoFactorCodeCheckingService.ErrorMessageForWrongTwoFactorCode, resultOfTheCodeAttemptOfTheVisitor.WrongCodeErrorMessage);
-        Assert.Equal(numberOfComparisonsBeforeTheCode, servicesWithFakeToolsOfTheseTests.HasherThatCountsTheComparedPasswords.NumberOfPasswordsCompared);
+        Assert.IsType<TwoFactorLoginResult.WrongCode>(result);
+        Assert.Equal(comparisonCountBefore, services.PasswordHasher.VerifiedPasswordCount);
+        Assert.Equal(hashedCountBefore, services.BackupCodeHasher.HashedCodeCount);
+    }
+
+    // Un mauvais code de secours ne coûte qu'un seul calcul, quel que soit le nombre de codes qui restent (SS §2).
+    [Fact]
+    public async Task WrongBackupCodeCostsOnlyOneHashWhateverTheNumberOfCodesLeft()
+    {
+        services.AddActivatedAccount();
+        var waitingLoginToken = await services.LogInThenGetWaitingLoginTokenAsync();
+        var hashedCountBefore = services.BackupCodeHasher.HashedCodeCount;
+
+        var result = await services.FinishLoginAsync(waitingLoginToken, "ABCDE-FGHJK");
+
+        Assert.IsType<TwoFactorLoginResult.WrongCode>(result);
+        Assert.Equal(hashedCountBefore + 1, services.BackupCodeHasher.HashedCodeCount);
+    }
+
+    // Le dernier des 10 codes est trouvé avec un seul calcul, lui aussi.
+    [Fact]
+    public async Task LastBackupCodeOfTheListIsFoundWithOnlyOneHash()
+    {
+        var activatedAccount = services.AddActivatedAccount();
+        var waitingLoginToken = await services.LogInThenGetWaitingLoginTokenAsync();
+        var hashedCountBefore = services.BackupCodeHasher.HashedCodeCount;
+
+        var result = await services.FinishLoginAsync(waitingLoginToken, activatedAccount.BackupCodes[9]);
+
+        Assert.IsType<TwoFactorLoginResult.LoggedIn>(result);
+        Assert.Equal(hashedCountBefore + 1, services.BackupCodeHasher.HashedCodeCount);
     }
 
     [Fact]
     public async Task EnormousTextIsRefusedLikeAnyWrongCode()
     {
-        var activatedAccountUsedByThisTest = servicesWithFakeToolsOfTheseTests.AddActivatedAccountToTheFakeDatabase();
-        var waitingLoginTokenOfTheVisitor = await servicesWithFakeToolsOfTheseTests.LogInWithTheRightPasswordThenGetTheWaitingLoginTokenAsync();
+        var activatedAccount = services.AddActivatedAccount();
+        var waitingLoginToken = await services.LogInThenGetWaitingLoginTokenAsync();
 
-        var resultOfTheCodeAttemptOfTheVisitor = await servicesWithFakeToolsOfTheseTests.FinishLoginWithThisCodeAsync(waitingLoginTokenOfTheVisitor, new string('1', 100000));
+        var result = await services.FinishLoginAsync(waitingLoginToken, new string('1', 100000));
 
-        Assert.Equal(TwoFactorCodeCheckingService.ErrorMessageForWrongTwoFactorCode, resultOfTheCodeAttemptOfTheVisitor.WrongCodeErrorMessage);
-        Assert.Empty(servicesWithFakeToolsOfTheseTests.RepositoryThatKeepsSessionsInMemory.SavedSessions);
+        Assert.IsType<TwoFactorLoginResult.WrongCode>(result);
+        Assert.Empty(services.SessionRepository.SavedSessions);
     }
 
     // --- Une attente de 5 minutes au plus
@@ -310,26 +330,26 @@ public class TwoFactorLoginServiceTests
     [Fact]
     public async Task WaitingLoginStillWorksJustBeforeTheEndOfTheFiveMinutes()
     {
-        var activatedAccountUsedByThisTest = servicesWithFakeToolsOfTheseTests.AddActivatedAccountToTheFakeDatabase();
-        var waitingLoginTokenOfTheVisitor = await servicesWithFakeToolsOfTheseTests.LogInWithTheRightPasswordThenGetTheWaitingLoginTokenAsync();
+        var activatedAccount = services.AddActivatedAccount();
+        var waitingLoginToken = await services.LogInThenGetWaitingLoginTokenAsync();
 
-        servicesWithFakeToolsOfTheseTests.ClockThatOnlyMovesWhenTestsAskIt.MoveFakeClockForwardByThisDuration(TimeSpan.FromMinutes(5) - TimeSpan.FromSeconds(1));
-        var resultOfTheCodeAttemptOfTheVisitor = await servicesWithFakeToolsOfTheseTests.FinishLoginWithThisCodeAsync(waitingLoginTokenOfTheVisitor, servicesWithFakeToolsOfTheseTests.CalculateCodeShownOnThePhoneNow(activatedAccountUsedByThisTest.SecretOfTheAuthenticatorApplication));
+        services.Clock.Advance(TimeSpan.FromMinutes(5) - TimeSpan.FromSeconds(1));
+        var result = await services.FinishLoginAsync(waitingLoginToken, services.CalculateCurrentCode(activatedAccount.Secret));
 
-        Assert.True(resultOfTheCodeAttemptOfTheVisitor.IsLoggedIn);
+        Assert.IsType<TwoFactorLoginResult.LoggedIn>(result);
     }
 
     [Fact]
     public async Task WaitingLoginEndsExactlyAfterFiveMinutes()
     {
-        var activatedAccountUsedByThisTest = servicesWithFakeToolsOfTheseTests.AddActivatedAccountToTheFakeDatabase();
-        var waitingLoginTokenOfTheVisitor = await servicesWithFakeToolsOfTheseTests.LogInWithTheRightPasswordThenGetTheWaitingLoginTokenAsync();
+        var activatedAccount = services.AddActivatedAccount();
+        var waitingLoginToken = await services.LogInThenGetWaitingLoginTokenAsync();
 
-        servicesWithFakeToolsOfTheseTests.ClockThatOnlyMovesWhenTestsAskIt.MoveFakeClockForwardByThisDuration(TimeSpan.FromMinutes(5));
-        var resultOfTheCodeAttemptOfTheVisitor = await servicesWithFakeToolsOfTheseTests.FinishLoginWithThisCodeAsync(waitingLoginTokenOfTheVisitor, servicesWithFakeToolsOfTheseTests.CalculateCodeShownOnThePhoneNow(activatedAccountUsedByThisTest.SecretOfTheAuthenticatorApplication));
+        services.Clock.Advance(TimeSpan.FromMinutes(5));
+        var result = await services.FinishLoginAsync(waitingLoginToken, services.CalculateCurrentCode(activatedAccount.Secret));
 
-        Assert.Equal(TwoFactorLoginService.ErrorMessageForLoginThatMustRestart, resultOfTheCodeAttemptOfTheVisitor.LoginMustRestartErrorMessage);
-        Assert.Empty(servicesWithFakeToolsOfTheseTests.RepositoryThatKeepsSessionsInMemory.SavedSessions);
+        Assert.IsType<TwoFactorLoginResult.LoginMustRestart>(result);
+        Assert.Empty(services.SessionRepository.SavedSessions);
     }
 
     // Rien n'est écrit au journal : personne ne doit pouvoir le remplir sans avoir donné le bon mot de passe.
@@ -337,14 +357,14 @@ public class TwoFactorLoginServiceTests
     [InlineData(null)]
     [InlineData("")]
     [InlineData("jeton-inconnu")]
-    public async Task MissingOrUnknownTokenAsksToRestartWithoutWritingInTheJournal(string? waitingLoginTokenSentInThisTest)
+    public async Task MissingOrUnknownTokenAsksToRestartWithoutWritingInTheJournal(string? waitingLoginToken)
     {
-        servicesWithFakeToolsOfTheseTests.AddActivatedAccountToTheFakeDatabase();
+        services.AddActivatedAccount();
 
-        var resultOfTheCodeAttemptOfTheVisitor = await servicesWithFakeToolsOfTheseTests.FinishLoginWithThisCodeAsync(waitingLoginTokenSentInThisTest, "123456");
+        var result = await services.FinishLoginAsync(waitingLoginToken, "123456");
 
-        Assert.Equal(TwoFactorLoginService.ErrorMessageForLoginThatMustRestart, resultOfTheCodeAttemptOfTheVisitor.LoginMustRestartErrorMessage);
-        Assert.Empty(servicesWithFakeToolsOfTheseTests.RepositoryThatKeepsSecurityEventsInMemory.SavedSecurityEvents);
+        Assert.IsType<TwoFactorLoginResult.LoginMustRestart>(result);
+        Assert.Empty(services.SecurityEventRepository.SavedSecurityEvents);
     }
 
     // --- Les codes de secours
@@ -352,99 +372,99 @@ public class TwoFactorLoginServiceTests
     [Fact]
     public async Task BackupCodeOpensTheSessionAndIsMarkedAsUsed()
     {
-        var activatedAccountUsedByThisTest = servicesWithFakeToolsOfTheseTests.AddActivatedAccountToTheFakeDatabase();
-        var waitingLoginTokenOfTheVisitor = await servicesWithFakeToolsOfTheseTests.LogInWithTheRightPasswordThenGetTheWaitingLoginTokenAsync();
-        var backupCodeUsedInThisTest = activatedAccountUsedByThisTest.BackupCodesInTheirCleanForm[3];
+        var activatedAccount = services.AddActivatedAccount();
+        var waitingLoginToken = await services.LogInThenGetWaitingLoginTokenAsync();
+        var backupCode = activatedAccount.BackupCodes[3];
 
-        var resultOfTheCodeAttemptOfTheVisitor = await servicesWithFakeToolsOfTheseTests.FinishLoginWithThisCodeAsync(waitingLoginTokenOfTheVisitor, TwoFactorAuthenticationRules.ConvertBackupCodeIntoItsDisplayedForm(backupCodeUsedInThisTest));
+        var result = await services.FinishLoginAsync(waitingLoginToken, TwoFactorAuthenticationRules.FormatBackupCode(backupCode));
 
-        Assert.True(resultOfTheCodeAttemptOfTheVisitor.IsLoggedIn);
-        var backupCodesLeftUnusedAfterTheLogin = await servicesWithFakeToolsOfTheseTests.RepositoryThatKeepsTwoFactorDataInMemory.FindUnusedBackupCodesOfThisAccountAsync(activatedAccountUsedByThisTest.UserAccount.Id);
-        Assert.Equal(9, backupCodesLeftUnusedAfterTheLogin.Count);
-        var backupCodeJustUsedForTheLogin = servicesWithFakeToolsOfTheseTests.RepositoryThatKeepsTwoFactorDataInMemory.SavedBackupCodes[3];
-        Assert.Equal(servicesWithFakeToolsOfTheseTests.ClockThatOnlyMovesWhenTestsAskIt.GetUtcNow().UtcDateTime, backupCodeJustUsedForTheLogin.UsedAt);
+        Assert.IsType<TwoFactorLoginResult.LoggedIn>(result);
+        var backupCodes = await services.TwoFactorRepository.FindUnusedBackupCodesAsync(activatedAccount.UserAccount.Id);
+        Assert.Equal(9, backupCodes.Count);
+        var usedCode = services.TwoFactorRepository.SavedBackupCodes[3];
+        Assert.Equal(services.Clock.GetUtcNow().UtcDateTime, usedCode.UsedAt);
     }
 
     [Fact]
     public async Task BackupCodeAlreadyUsedIsRefusedAtTheNextLogin()
     {
-        var activatedAccountUsedByThisTest = servicesWithFakeToolsOfTheseTests.AddActivatedAccountToTheFakeDatabase();
-        var backupCodeUsedInThisTest = activatedAccountUsedByThisTest.BackupCodesInTheirCleanForm[0];
-        await servicesWithFakeToolsOfTheseTests.FinishLoginWithThisCodeAsync(await servicesWithFakeToolsOfTheseTests.LogInWithTheRightPasswordThenGetTheWaitingLoginTokenAsync(), backupCodeUsedInThisTest);
+        var activatedAccount = services.AddActivatedAccount();
+        var backupCode = activatedAccount.BackupCodes[0];
+        await services.FinishLoginAsync(await services.LogInThenGetWaitingLoginTokenAsync(), backupCode);
 
-        var resultOfTheSecondUseOfTheCode = await servicesWithFakeToolsOfTheseTests.FinishLoginWithThisCodeAsync(await servicesWithFakeToolsOfTheseTests.LogInWithTheRightPasswordThenGetTheWaitingLoginTokenAsync(), backupCodeUsedInThisTest);
+        var secondUseResult = await services.FinishLoginAsync(await services.LogInThenGetWaitingLoginTokenAsync(), backupCode);
 
-        Assert.Equal(TwoFactorCodeCheckingService.ErrorMessageForWrongTwoFactorCode, resultOfTheSecondUseOfTheCode.WrongCodeErrorMessage);
-        Assert.Single(servicesWithFakeToolsOfTheseTests.RepositoryThatKeepsSessionsInMemory.SavedSessions);
+        Assert.IsType<TwoFactorLoginResult.WrongCode>(secondUseResult);
+        Assert.Single(services.SessionRepository.SavedSessions);
     }
 
     [Theory]
     [InlineData(false, false)]
     [InlineData(true, false)]
     [InlineData(false, true)]
-    public async Task BackupCodeIsAcceptedInLowercaseAndWithoutItsDash(bool backupCodeIsWrittenWithItsDash, bool backupCodeIsWrittenInLowercaseLetters)
+    public async Task BackupCodeIsAcceptedInLowercaseAndWithoutItsDash(bool codeWithDash, bool lowercaseCode)
     {
-        var activatedAccountUsedByThisTest = servicesWithFakeToolsOfTheseTests.AddActivatedAccountToTheFakeDatabase();
-        var waitingLoginTokenOfTheVisitor = await servicesWithFakeToolsOfTheseTests.LogInWithTheRightPasswordThenGetTheWaitingLoginTokenAsync();
-        var codeTypedByTheVisitorInThisTest = activatedAccountUsedByThisTest.BackupCodesInTheirCleanForm[0];
+        var activatedAccount = services.AddActivatedAccount();
+        var waitingLoginToken = await services.LogInThenGetWaitingLoginTokenAsync();
+        var code = activatedAccount.BackupCodes[0];
 
-        if (backupCodeIsWrittenWithItsDash)
+        if (codeWithDash)
         {
-            codeTypedByTheVisitorInThisTest = TwoFactorAuthenticationRules.ConvertBackupCodeIntoItsDisplayedForm(codeTypedByTheVisitorInThisTest);
+            code = TwoFactorAuthenticationRules.FormatBackupCode(code);
         }
 
-        if (backupCodeIsWrittenInLowercaseLetters)
+        if (lowercaseCode)
         {
-            codeTypedByTheVisitorInThisTest = codeTypedByTheVisitorInThisTest.ToLowerInvariant();
+            code = code.ToLowerInvariant();
         }
 
-        var resultOfTheCodeAttemptOfTheVisitor = await servicesWithFakeToolsOfTheseTests.FinishLoginWithThisCodeAsync(waitingLoginTokenOfTheVisitor, codeTypedByTheVisitorInThisTest);
+        var result = await services.FinishLoginAsync(waitingLoginToken, code);
 
-        Assert.True(resultOfTheCodeAttemptOfTheVisitor.IsLoggedIn);
+        Assert.IsType<TwoFactorLoginResult.LoggedIn>(result);
     }
 
     [Fact]
     public async Task BackupCodeOfAnotherAccountIsRefused()
     {
-        servicesWithFakeToolsOfTheseTests.AddActivatedAccountToTheFakeDatabase();
-        var otherAccountUsedByThisTwoFactorTest = servicesWithFakeToolsOfTheseTests.AddActivatedAccountToTheFakeDatabase("autre-compte@exemple.test");
-        var waitingLoginTokenOfTheVisitor = await servicesWithFakeToolsOfTheseTests.LogInWithTheRightPasswordThenGetTheWaitingLoginTokenAsync();
+        services.AddActivatedAccount();
+        var otherAccount = services.AddActivatedAccount("autre-compte@exemple.test");
+        var waitingLoginToken = await services.LogInThenGetWaitingLoginTokenAsync();
 
-        var resultOfTheCodeAttemptOfTheVisitor = await servicesWithFakeToolsOfTheseTests.FinishLoginWithThisCodeAsync(waitingLoginTokenOfTheVisitor, otherAccountUsedByThisTwoFactorTest.BackupCodesInTheirCleanForm[0]);
+        var result = await services.FinishLoginAsync(waitingLoginToken, otherAccount.BackupCodes[0]);
 
-        Assert.Equal(TwoFactorCodeCheckingService.ErrorMessageForWrongTwoFactorCode, resultOfTheCodeAttemptOfTheVisitor.WrongCodeErrorMessage);
-        var backupCodesLeftToTheOtherAccount = await servicesWithFakeToolsOfTheseTests.RepositoryThatKeepsTwoFactorDataInMemory.FindUnusedBackupCodesOfThisAccountAsync(otherAccountUsedByThisTwoFactorTest.UserAccount.Id);
-        Assert.Equal(10, backupCodesLeftToTheOtherAccount.Count);
+        Assert.IsType<TwoFactorLoginResult.WrongCode>(result);
+        var backupCodes = await services.TwoFactorRepository.FindUnusedBackupCodesAsync(otherAccount.UserAccount.Id);
+        Assert.Equal(10, backupCodes.Count);
     }
 
     // Deux requêtes avec le même code de secours : celle qui arrive après le contrôle de l'autre ne doit rien ouvrir.
     [Fact]
     public async Task BackupCodeUsedByAnotherRequestDuringTheCheckOpensNothing()
     {
-        var activatedAccountUsedByThisTest = servicesWithFakeToolsOfTheseTests.AddActivatedAccountToTheFakeDatabase();
-        var waitingLoginTokenOfTheVisitor = await servicesWithFakeToolsOfTheseTests.LogInWithTheRightPasswordThenGetTheWaitingLoginTokenAsync();
-        servicesWithFakeToolsOfTheseTests.HasherThatCountsTheComparedPasswords.ActionRunWhenOnePasswordIsCompared = () =>
-            servicesWithFakeToolsOfTheseTests.RepositoryThatKeepsTwoFactorDataInMemory.SavedBackupCodes[0].UsedAt = servicesWithFakeToolsOfTheseTests.ClockThatOnlyMovesWhenTestsAskIt.GetUtcNow().UtcDateTime;
+        var activatedAccount = services.AddActivatedAccount();
+        var waitingLoginToken = await services.LogInThenGetWaitingLoginTokenAsync();
+        services.BackupCodeHasher.OnBackupCodeHashed = () =>
+            services.TwoFactorRepository.SavedBackupCodes[0].MarkAsUsed(services.Clock.GetUtcNow().UtcDateTime);
 
-        var resultOfTheCodeAttemptOfTheVisitor = await servicesWithFakeToolsOfTheseTests.FinishLoginWithThisCodeAsync(waitingLoginTokenOfTheVisitor, activatedAccountUsedByThisTest.BackupCodesInTheirCleanForm[0]);
+        var result = await services.FinishLoginAsync(waitingLoginToken, activatedAccount.BackupCodes[0]);
 
-        Assert.Equal(TwoFactorLoginService.ErrorMessageForLoginThatMustRestart, resultOfTheCodeAttemptOfTheVisitor.LoginMustRestartErrorMessage);
-        Assert.Empty(servicesWithFakeToolsOfTheseTests.RepositoryThatKeepsSessionsInMemory.SavedSessions);
+        Assert.IsType<TwoFactorLoginResult.LoginMustRestart>(result);
+        Assert.Empty(services.SessionRepository.SavedSessions);
     }
 
     [Fact]
     public async Task BackupCodeEffacedDuringTheCheckOpensNothing()
     {
-        var activatedAccountUsedByThisTest = servicesWithFakeToolsOfTheseTests.AddActivatedAccountToTheFakeDatabase();
-        var waitingLoginTokenOfTheVisitor = await servicesWithFakeToolsOfTheseTests.LogInWithTheRightPasswordThenGetTheWaitingLoginTokenAsync();
-        var backupCodeEffacedDuringTheCheck = servicesWithFakeToolsOfTheseTests.RepositoryThatKeepsTwoFactorDataInMemory.SavedBackupCodes[0];
-        servicesWithFakeToolsOfTheseTests.HasherThatCountsTheComparedPasswords.ActionRunWhenOnePasswordIsCompared = () =>
-            servicesWithFakeToolsOfTheseTests.RepositoryThatKeepsTwoFactorDataInMemory.SavedBackupCodes.Remove(backupCodeEffacedDuringTheCheck);
+        var activatedAccount = services.AddActivatedAccount();
+        var waitingLoginToken = await services.LogInThenGetWaitingLoginTokenAsync();
+        var erasedCode = services.TwoFactorRepository.SavedBackupCodes[0];
+        services.BackupCodeHasher.OnBackupCodeHashed = () =>
+            services.TwoFactorRepository.SavedBackupCodes.Remove(erasedCode);
 
-        var resultOfTheCodeAttemptOfTheVisitor = await servicesWithFakeToolsOfTheseTests.FinishLoginWithThisCodeAsync(waitingLoginTokenOfTheVisitor, activatedAccountUsedByThisTest.BackupCodesInTheirCleanForm[0]);
+        var result = await services.FinishLoginAsync(waitingLoginToken, activatedAccount.BackupCodes[0]);
 
-        Assert.Equal(TwoFactorLoginService.ErrorMessageForLoginThatMustRestart, resultOfTheCodeAttemptOfTheVisitor.LoginMustRestartErrorMessage);
-        Assert.Empty(servicesWithFakeToolsOfTheseTests.RepositoryThatKeepsSessionsInMemory.SavedSessions);
+        Assert.IsType<TwoFactorLoginResult.LoginMustRestart>(result);
+        Assert.Empty(services.SessionRepository.SavedSessions);
     }
 
     // --- Le compte change pendant l'attente
@@ -452,121 +472,118 @@ public class TwoFactorLoginServiceTests
     [Fact]
     public async Task PasswordChangedDuringTheWaitForcesTheVisitorToRestart()
     {
-        var activatedAccountUsedByThisTest = servicesWithFakeToolsOfTheseTests.AddActivatedAccountToTheFakeDatabase();
-        var waitingLoginTokenOfTheVisitor = await servicesWithFakeToolsOfTheseTests.LogInWithTheRightPasswordThenGetTheWaitingLoginTokenAsync();
-        activatedAccountUsedByThisTest.UserAccount.PasswordHash = FakePasswordHasher.PrefixOfTheFakePasswordHashes + "Nouveau-Mot-De-Passe-3";
+        var activatedAccount = services.AddActivatedAccount();
+        var waitingLoginToken = await services.LogInThenGetWaitingLoginTokenAsync();
+        activatedAccount.UserAccount.ReplacePasswordHash(FakePasswordHasher.HashPrefix + "Nouveau-Mot-De-Passe-3");
 
-        var resultOfTheCodeAttemptOfTheVisitor = await servicesWithFakeToolsOfTheseTests.FinishLoginWithThisCodeAsync(waitingLoginTokenOfTheVisitor, servicesWithFakeToolsOfTheseTests.CalculateCodeShownOnThePhoneNow(activatedAccountUsedByThisTest.SecretOfTheAuthenticatorApplication));
+        var result = await services.FinishLoginAsync(waitingLoginToken, services.CalculateCurrentCode(activatedAccount.Secret));
 
-        Assert.Equal(TwoFactorLoginService.ErrorMessageForLoginThatMustRestart, resultOfTheCodeAttemptOfTheVisitor.LoginMustRestartErrorMessage);
-        Assert.Empty(servicesWithFakeToolsOfTheseTests.RepositoryThatKeepsSessionsInMemory.SavedSessions);
-        Assert.Equal(1, servicesWithFakeToolsOfTheseTests.CountSecurityEventsInTheJournal(SecurityEventType.Login, SecurityEventResult.Failure));
+        Assert.IsType<TwoFactorLoginResult.LoginMustRestart>(result);
+        Assert.Empty(services.SessionRepository.SavedSessions);
+        Assert.Equal(1, services.CountSecurityEvents(SecurityEventType.Login, SecurityEventResult.Failure));
     }
 
     [Fact]
     public async Task PasswordChangedWhileTheCodeIsCheckedOpensNothing()
     {
-        var activatedAccountUsedByThisTest = servicesWithFakeToolsOfTheseTests.AddActivatedAccountToTheFakeDatabase();
-        var waitingLoginTokenOfTheVisitor = await servicesWithFakeToolsOfTheseTests.LogInWithTheRightPasswordThenGetTheWaitingLoginTokenAsync();
-        servicesWithFakeToolsOfTheseTests.HasherThatCountsTheComparedPasswords.ActionRunWhenOnePasswordIsCompared = () =>
-            activatedAccountUsedByThisTest.UserAccount.PasswordHash = FakePasswordHasher.PrefixOfTheFakePasswordHashes + "Nouveau-Mot-De-Passe-3";
+        var activatedAccount = services.AddActivatedAccount();
+        var waitingLoginToken = await services.LogInThenGetWaitingLoginTokenAsync();
+        services.BackupCodeHasher.OnBackupCodeHashed = () =>
+            activatedAccount.UserAccount.ReplacePasswordHash(FakePasswordHasher.HashPrefix + "Nouveau-Mot-De-Passe-3");
 
-        var resultOfTheCodeAttemptOfTheVisitor = await servicesWithFakeToolsOfTheseTests.FinishLoginWithThisCodeAsync(waitingLoginTokenOfTheVisitor, activatedAccountUsedByThisTest.BackupCodesInTheirCleanForm[0]);
+        var result = await services.FinishLoginAsync(waitingLoginToken, activatedAccount.BackupCodes[0]);
 
-        Assert.Equal(TwoFactorLoginService.ErrorMessageForLoginThatMustRestart, resultOfTheCodeAttemptOfTheVisitor.LoginMustRestartErrorMessage);
-        Assert.Empty(servicesWithFakeToolsOfTheseTests.RepositoryThatKeepsSessionsInMemory.SavedSessions);
+        Assert.IsType<TwoFactorLoginResult.LoginMustRestart>(result);
+        Assert.Empty(services.SessionRepository.SavedSessions);
     }
 
     [Fact]
     public async Task TwoFactorDeactivatedDuringTheWaitForcesTheVisitorToRestart()
     {
-        var activatedAccountUsedByThisTest = servicesWithFakeToolsOfTheseTests.AddActivatedAccountToTheFakeDatabase();
-        var waitingLoginTokenOfTheVisitor = await servicesWithFakeToolsOfTheseTests.LogInWithTheRightPasswordThenGetTheWaitingLoginTokenAsync();
-        var codeShownOnThePhoneInThisTest = servicesWithFakeToolsOfTheseTests.CalculateCodeShownOnThePhoneNow(activatedAccountUsedByThisTest.SecretOfTheAuthenticatorApplication);
-        activatedAccountUsedByThisTest.UserAccount.IsTwoFactorEnabled = false;
-        activatedAccountUsedByThisTest.UserAccount.EncryptedTotpSecret = null;
+        var activatedAccount = services.AddActivatedAccount();
+        var waitingLoginToken = await services.LogInThenGetWaitingLoginTokenAsync();
+        var code = services.CalculateCurrentCode(activatedAccount.Secret);
+        activatedAccount.UserAccount.DeactivateTwoFactor();
 
-        var resultOfTheCodeAttemptOfTheVisitor = await servicesWithFakeToolsOfTheseTests.FinishLoginWithThisCodeAsync(waitingLoginTokenOfTheVisitor, codeShownOnThePhoneInThisTest);
+        var result = await services.FinishLoginAsync(waitingLoginToken, code);
 
-        Assert.Equal(TwoFactorLoginService.ErrorMessageForLoginThatMustRestart, resultOfTheCodeAttemptOfTheVisitor.LoginMustRestartErrorMessage);
-        Assert.Empty(servicesWithFakeToolsOfTheseTests.RepositoryThatKeepsSessionsInMemory.SavedSessions);
+        Assert.IsType<TwoFactorLoginResult.LoginMustRestart>(result);
+        Assert.Empty(services.SessionRepository.SavedSessions);
     }
 
     // Une connexion abandonnée ne revient pas, même si le compte redevient comme avant : il faut redonner le mot de passe.
     [Fact]
     public async Task AbandonedWaitingLoginDoesNotComeBackWhenTheTwoFactorIsActivatedAgain()
     {
-        var activatedAccountUsedByThisTest = servicesWithFakeToolsOfTheseTests.AddActivatedAccountToTheFakeDatabase();
-        var waitingLoginTokenOfTheVisitor = await servicesWithFakeToolsOfTheseTests.LogInWithTheRightPasswordThenGetTheWaitingLoginTokenAsync();
-        var encryptedSecretReadBeforeTheDeactivationOfTheAccount = activatedAccountUsedByThisTest.UserAccount.EncryptedTotpSecret;
-        activatedAccountUsedByThisTest.UserAccount.IsTwoFactorEnabled = false;
-        activatedAccountUsedByThisTest.UserAccount.EncryptedTotpSecret = null;
-        await servicesWithFakeToolsOfTheseTests.FinishLoginWithThisCodeAsync(waitingLoginTokenOfTheVisitor, "123456");
+        var activatedAccount = services.AddActivatedAccount();
+        var waitingLoginToken = await services.LogInThenGetWaitingLoginTokenAsync();
+        var encryptedSecret = activatedAccount.UserAccount.EncryptedTotpSecret;
+        Assert.NotNull(encryptedSecret);
+        activatedAccount.UserAccount.DeactivateTwoFactor();
+        await services.FinishLoginAsync(waitingLoginToken, "123456");
 
-        activatedAccountUsedByThisTest.UserAccount.IsTwoFactorEnabled = true;
-        activatedAccountUsedByThisTest.UserAccount.EncryptedTotpSecret = encryptedSecretReadBeforeTheDeactivationOfTheAccount;
-        var resultOfTheCodeAttemptOfTheVisitor = await servicesWithFakeToolsOfTheseTests.FinishLoginWithThisCodeAsync(waitingLoginTokenOfTheVisitor, servicesWithFakeToolsOfTheseTests.CalculateCodeShownOnThePhoneNow(activatedAccountUsedByThisTest.SecretOfTheAuthenticatorApplication));
+        activatedAccount.UserAccount.ActivateTwoFactor(encryptedSecret);
+        var result = await services.FinishLoginAsync(waitingLoginToken, services.CalculateCurrentCode(activatedAccount.Secret));
 
-        Assert.Equal(TwoFactorLoginService.ErrorMessageForLoginThatMustRestart, resultOfTheCodeAttemptOfTheVisitor.LoginMustRestartErrorMessage);
-        Assert.Empty(servicesWithFakeToolsOfTheseTests.RepositoryThatKeepsSessionsInMemory.SavedSessions);
+        Assert.IsType<TwoFactorLoginResult.LoginMustRestart>(result);
+        Assert.Empty(services.SessionRepository.SavedSessions);
     }
 
     // Le secret qui vient de servir à vérifier le code ne vaut plus : le propriétaire vient peut-être de changer de téléphone.
     [Fact]
     public async Task SecretChangedWhileTheCodeIsCheckedOpensNothing()
     {
-        var activatedAccountUsedByThisTest = servicesWithFakeToolsOfTheseTests.AddActivatedAccountToTheFakeDatabase();
-        var waitingLoginTokenOfTheVisitor = await servicesWithFakeToolsOfTheseTests.LogInWithTheRightPasswordThenGetTheWaitingLoginTokenAsync();
-        servicesWithFakeToolsOfTheseTests.HasherThatCountsTheComparedPasswords.ActionRunWhenOnePasswordIsCompared = () =>
-            activatedAccountUsedByThisTest.UserAccount.EncryptedTotpSecret = "secret-du-nouveau-telephone";
+        var activatedAccount = services.AddActivatedAccount();
+        var waitingLoginToken = await services.LogInThenGetWaitingLoginTokenAsync();
+        services.BackupCodeHasher.OnBackupCodeHashed = () =>
+            activatedAccount.UserAccount.ActivateTwoFactor("secret-du-nouveau-telephone");
 
-        var resultOfTheCodeAttemptOfTheVisitor = await servicesWithFakeToolsOfTheseTests.FinishLoginWithThisCodeAsync(waitingLoginTokenOfTheVisitor, activatedAccountUsedByThisTest.BackupCodesInTheirCleanForm[0]);
+        var result = await services.FinishLoginAsync(waitingLoginToken, activatedAccount.BackupCodes[0]);
 
-        Assert.Equal(TwoFactorLoginService.ErrorMessageForLoginThatMustRestart, resultOfTheCodeAttemptOfTheVisitor.LoginMustRestartErrorMessage);
-        Assert.Empty(servicesWithFakeToolsOfTheseTests.RepositoryThatKeepsSessionsInMemory.SavedSessions);
+        Assert.IsType<TwoFactorLoginResult.LoginMustRestart>(result);
+        Assert.Empty(services.SessionRepository.SavedSessions);
     }
 
     // Le compte a disparu : le journal ne peut plus citer son identifiant, la vraie base refuserait l'écriture.
     [Fact]
     public async Task AccountEffacedDuringTheWaitForcesTheVisitorToRestartWithoutItsIdentifierInTheJournal()
     {
-        var activatedAccountUsedByThisTest = servicesWithFakeToolsOfTheseTests.AddActivatedAccountToTheFakeDatabase();
-        var waitingLoginTokenOfTheVisitor = await servicesWithFakeToolsOfTheseTests.LogInWithTheRightPasswordThenGetTheWaitingLoginTokenAsync();
-        servicesWithFakeToolsOfTheseTests.RepositoryThatKeepsAccountsInMemory.SavedUsers.Remove(activatedAccountUsedByThisTest.UserAccount);
+        var activatedAccount = services.AddActivatedAccount();
+        var waitingLoginToken = await services.LogInThenGetWaitingLoginTokenAsync();
+        services.AccountRepository.SavedUsers.Remove(activatedAccount.UserAccount);
 
-        var resultOfTheCodeAttemptOfTheVisitor = await servicesWithFakeToolsOfTheseTests.FinishLoginWithThisCodeAsync(waitingLoginTokenOfTheVisitor, "123456");
+        var result = await services.FinishLoginAsync(waitingLoginToken, "123456");
 
-        Assert.Equal(TwoFactorLoginService.ErrorMessageForLoginThatMustRestart, resultOfTheCodeAttemptOfTheVisitor.LoginMustRestartErrorMessage);
-        var securityEventOfTheRefusalOfTheRequest = Assert.Single(servicesWithFakeToolsOfTheseTests.RepositoryThatKeepsSecurityEventsInMemory.SavedSecurityEvents);
-        Assert.Equal(SecurityEventResult.Failure, securityEventOfTheRefusalOfTheRequest.Result);
-        Assert.Null(securityEventOfTheRefusalOfTheRequest.UserId);
+        Assert.IsType<TwoFactorLoginResult.LoginMustRestart>(result);
+        var securityEvent = Assert.Single(services.SecurityEventRepository.SavedSecurityEvents);
+        Assert.Equal(SecurityEventResult.Failure, securityEvent.Result);
+        Assert.Null(securityEvent.UserId);
     }
 
     // GR Auth : une récupération ne désactive pas la double authentification, et le pirate d'une boîte mail ne peut pas s'en servir pour entrer.
     [Fact]
     public async Task PasswordRecoveryKeepsTheTwoFactorAndTheNextLoginStillAsksForTheCode()
     {
-        var activatedAccountUsedByThisTest = servicesWithFakeToolsOfTheseTests.AddActivatedAccountToTheFakeDatabase();
-        var generatedTokenOfTheRecoveryLink = servicesWithFakeToolsOfTheseTests.RealGeneratorOfTheTokens.GenerateNewRandomSecureTokenWithItsHash();
-        servicesWithFakeToolsOfTheseTests.RepositoryThatKeepsAccountsInMemory.SavedEmailTokens.Add(new EmailToken
+        var activatedAccount = services.AddActivatedAccount();
+        var recoveryToken = services.TokenGenerator.GenerateToken();
+        services.AccountRepository.SavedEmailTokens.Add(new EmailToken
         {
             Type = EmailTokenType.PasswordRecovery,
-            TokenHash = generatedTokenOfTheRecoveryLink.HashToStoreInTheDatabase,
-            ExpiresAt = servicesWithFakeToolsOfTheseTests.ClockThatOnlyMovesWhenTestsAskIt.GetUtcNow().UtcDateTime.AddMinutes(30),
-            UserId = activatedAccountUsedByThisTest.UserAccount.Id
+            TokenHash = recoveryToken.Hash,
+            ExpiresAt = services.Clock.GetUtcNow().UtcDateTime.AddMinutes(30),
+            UserId = activatedAccount.UserAccount.Id
         });
-        var encryptedSecretReadBeforeThePasswordRecovery = activatedAccountUsedByThisTest.UserAccount.EncryptedTotpSecret;
+        var encryptedSecret = activatedAccount.UserAccount.EncryptedTotpSecret;
 
-        var resultOfTheRecoveryOfThePassword = await servicesWithFakeToolsOfTheseTests.CreatePasswordResetServiceWithFakeTools().ResetPasswordWithLinkTokenAsync(generatedTokenOfTheRecoveryLink.TokenGivenOnlyToTheVisitor, "Nouveau-Mot-De-Passe-3", IpAddressOfTheVisitorInTheseTests);
+        var recoveryResult = await services.CreatePasswordResetService().ResetAsync(recoveryToken.Token, "Nouveau-Mot-De-Passe-3", IpAddress);
 
-        Assert.True(resultOfTheRecoveryOfThePassword.IsPasswordChanged);
-        Assert.True(activatedAccountUsedByThisTest.UserAccount.IsTwoFactorEnabled);
-        Assert.Equal(encryptedSecretReadBeforeThePasswordRecovery, activatedAccountUsedByThisTest.UserAccount.EncryptedTotpSecret);
-        Assert.Equal(10, servicesWithFakeToolsOfTheseTests.RepositoryThatKeepsTwoFactorDataInMemory.SavedBackupCodes.Count);
+        Assert.Equal(PasswordResetResult.PasswordChanged, recoveryResult);
+        Assert.True(activatedAccount.UserAccount.IsTwoFactorEnabled);
+        Assert.Equal(encryptedSecret, activatedAccount.UserAccount.EncryptedTotpSecret);
+        Assert.Equal(10, services.TwoFactorRepository.SavedBackupCodes.Count);
 
-        var resultOfTheNextLoginOfTheAccount = await servicesWithFakeToolsOfTheseTests.TryToLogInWithThisPasswordAsync("Nouveau-Mot-De-Passe-3");
-        Assert.True(resultOfTheNextLoginOfTheAccount.IsWaitingForTwoFactorCode);
-        Assert.False(resultOfTheNextLoginOfTheAccount.IsLoggedIn);
+        var loginResult = await services.LogInAsync("Nouveau-Mot-De-Passe-3");
+        Assert.IsType<AccountLoginResult.WaitingForTwoFactorCode>(loginResult);
     }
 
     // --- Le blocage du compte
@@ -575,75 +592,74 @@ public class TwoFactorLoginServiceTests
     [Fact]
     public async Task FifthLoginWithTheRightPasswordLocksTheAccountAndWarnsTheOwnerOnce()
     {
-        var activatedAccountUsedByThisTest = servicesWithFakeToolsOfTheseTests.AddActivatedAccountToTheFakeDatabase();
+        var activatedAccount = services.AddActivatedAccount();
 
-        for (var numberOfTheLoginBeingTried = 1; numberOfTheLoginBeingTried <= 4; numberOfTheLoginBeingTried++)
+        for (var attemptNumber = 1; attemptNumber <= 4; attemptNumber++)
         {
-            var resultOfOneLoginWithThePassword = await servicesWithFakeToolsOfTheseTests.TryToLogInWithThisPasswordAsync(PasswordOfTheAccountInTheseTests);
-            Assert.True(resultOfOneLoginWithThePassword.IsWaitingForTwoFactorCode);
-            Assert.Null(activatedAccountUsedByThisTest.UserAccount.LockoutEndsAt);
+            var attemptResult = await services.LogInAsync(AccountPassword);
+            Assert.IsType<AccountLoginResult.WaitingForTwoFactorCode>(attemptResult);
+            Assert.Null(activatedAccount.UserAccount.LockoutEndsAt);
         }
 
-        Assert.Empty(servicesWithFakeToolsOfTheseTests.QueueThatKeepsTheEmailRequestsInMemory.RequestsAddedToTheBackgroundQueue);
+        Assert.Empty(services.EmailQueue.AddedRequests);
 
-        var resultOfTheFifthLoginOfTheAccount = await servicesWithFakeToolsOfTheseTests.TryToLogInWithThisPasswordAsync(PasswordOfTheAccountInTheseTests);
+        var fifthResult = await services.LogInAsync(AccountPassword);
 
-        Assert.True(resultOfTheFifthLoginOfTheAccount.IsWaitingForTwoFactorCode);
-        Assert.Equal(servicesWithFakeToolsOfTheseTests.ClockThatOnlyMovesWhenTestsAskIt.GetUtcNow().UtcDateTime.AddMinutes(15), activatedAccountUsedByThisTest.UserAccount.LockoutEndsAt);
-        Assert.Equal(1, activatedAccountUsedByThisTest.UserAccount.LockoutCount);
-        Assert.Equal(1, servicesWithFakeToolsOfTheseTests.CountSecurityEventsInTheJournal(SecurityEventType.Lockout, SecurityEventResult.Success));
-        var emailRequestAddedForTheAccountLockout = Assert.Single(servicesWithFakeToolsOfTheseTests.QueueThatKeepsTheEmailRequestsInMemory.RequestsAddedToTheBackgroundQueue);
-        Assert.Equal(activatedAccountUsedByThisTest.UserAccount.Id, emailRequestAddedForTheAccountLockout.IdentifierOfTheAccountJustLocked);
+        Assert.IsType<AccountLoginResult.WaitingForTwoFactorCode>(fifthResult);
+        Assert.Equal(services.Clock.GetUtcNow().UtcDateTime.AddMinutes(15), activatedAccount.UserAccount.LockoutEndsAt);
+        Assert.Equal(1, activatedAccount.UserAccount.LockoutCount);
+        Assert.Equal(1, services.CountSecurityEvents(SecurityEventType.Lockout, SecurityEventResult.Success));
+        var unlockRequest = Assert.IsType<BackgroundEmailRequest.AccountUnlock>(Assert.Single(services.EmailQueue.AddedRequests));
+        Assert.Equal(activatedAccount.UserAccount.Id, unlockRequest.AccountId);
     }
 
     [Fact]
     public async Task LoginDuringTheLockIsRefusedEvenWithTheRightPassword()
     {
-        servicesWithFakeToolsOfTheseTests.AddActivatedAccountToTheFakeDatabase();
-        for (var numberOfTheLoginBeingTried = 1; numberOfTheLoginBeingTried <= 5; numberOfTheLoginBeingTried++)
+        services.AddActivatedAccount();
+        for (var attemptNumber = 1; attemptNumber <= 5; attemptNumber++)
         {
-            await servicesWithFakeToolsOfTheseTests.TryToLogInWithThisPasswordAsync(PasswordOfTheAccountInTheseTests);
+            await services.LogInAsync(AccountPassword);
         }
 
-        var resultOfTheSixthLoginOfTheAccount = await servicesWithFakeToolsOfTheseTests.TryToLogInWithThisPasswordAsync(PasswordOfTheAccountInTheseTests);
+        var result = await services.LogInAsync(AccountPassword);
 
-        Assert.False(resultOfTheSixthLoginOfTheAccount.IsWaitingForTwoFactorCode);
-        Assert.Equal(AccountLoginService.ErrorMessageForWrongLoginCredentials, resultOfTheSixthLoginOfTheAccount.WrongCredentialsErrorMessage);
+        Assert.IsType<AccountLoginResult.WrongCredentials>(result);
     }
 
     // Le vrai propriétaire a le mot de passe et le code : son 5e essai le fait entrer, et le blocage disparaît.
     [Fact]
     public async Task RightCodeAfterTheLockOpensTheSessionAndRemovesTheLock()
     {
-        var activatedAccountUsedByThisTest = servicesWithFakeToolsOfTheseTests.AddActivatedAccountToTheFakeDatabase();
-        string waitingLoginTokenOfTheFifthLogin = "";
-        for (var numberOfTheLoginBeingTried = 1; numberOfTheLoginBeingTried <= 5; numberOfTheLoginBeingTried++)
+        var activatedAccount = services.AddActivatedAccount();
+        string fifthWaitingLoginToken = "";
+        for (var attemptNumber = 1; attemptNumber <= 5; attemptNumber++)
         {
-            waitingLoginTokenOfTheFifthLogin = await servicesWithFakeToolsOfTheseTests.LogInWithTheRightPasswordThenGetTheWaitingLoginTokenAsync();
+            fifthWaitingLoginToken = await services.LogInThenGetWaitingLoginTokenAsync();
         }
 
-        var resultOfTheCodeAttemptOfTheVisitor = await servicesWithFakeToolsOfTheseTests.FinishLoginWithThisCodeAsync(waitingLoginTokenOfTheFifthLogin, servicesWithFakeToolsOfTheseTests.CalculateCodeShownOnThePhoneNow(activatedAccountUsedByThisTest.SecretOfTheAuthenticatorApplication));
+        var result = await services.FinishLoginAsync(fifthWaitingLoginToken, services.CalculateCurrentCode(activatedAccount.Secret));
 
-        Assert.True(resultOfTheCodeAttemptOfTheVisitor.IsLoggedIn);
-        Assert.Null(activatedAccountUsedByThisTest.UserAccount.LockoutEndsAt);
-        Assert.Equal(0, activatedAccountUsedByThisTest.UserAccount.FailedLoginAttemptCount);
-        Assert.Equal(0, activatedAccountUsedByThisTest.UserAccount.LockoutCount);
+        Assert.IsType<TwoFactorLoginResult.LoggedIn>(result);
+        Assert.Null(activatedAccount.UserAccount.LockoutEndsAt);
+        Assert.Equal(0, activatedAccount.UserAccount.FailedLoginAttemptCount);
+        Assert.Equal(0, activatedAccount.UserAccount.LockoutCount);
     }
 
     // Une série de mauvais codes ne bloque pas toute seule : c'est de recommencer la connexion qui compte (SS §6).
     [Fact]
     public async Task WrongCodesDoNotCountAsLoginAttemptsOfTheAccount()
     {
-        var activatedAccountUsedByThisTest = servicesWithFakeToolsOfTheseTests.AddActivatedAccountToTheFakeDatabase();
-        var waitingLoginTokenOfTheVisitor = await servicesWithFakeToolsOfTheseTests.LogInWithTheRightPasswordThenGetTheWaitingLoginTokenAsync();
-        var codeThatIsWrongInThisTest = servicesWithFakeToolsOfTheseTests.FindCodeThatIsWrongNow(activatedAccountUsedByThisTest.SecretOfTheAuthenticatorApplication);
+        var activatedAccount = services.AddActivatedAccount();
+        var waitingLoginToken = await services.LogInThenGetWaitingLoginTokenAsync();
+        var wrongCode = services.FindWrongCode(activatedAccount.Secret);
 
-        for (var numberOfTheWrongCodeBeingTried = 1; numberOfTheWrongCodeBeingTried <= 5; numberOfTheWrongCodeBeingTried++)
+        for (var attemptNumber = 1; attemptNumber <= 5; attemptNumber++)
         {
-            await servicesWithFakeToolsOfTheseTests.FinishLoginWithThisCodeAsync(waitingLoginTokenOfTheVisitor, codeThatIsWrongInThisTest);
+            await services.FinishLoginAsync(waitingLoginToken, wrongCode);
         }
 
-        Assert.Equal(1, activatedAccountUsedByThisTest.UserAccount.FailedLoginAttemptCount);
+        Assert.Equal(1, activatedAccount.UserAccount.FailedLoginAttemptCount);
     }
 
     // --- Les pannes
@@ -651,80 +667,80 @@ public class TwoFactorLoginServiceTests
     [Fact]
     public async Task ConflictsWithOtherRequestsAreRetriedAndOpenOneSessionOnly()
     {
-        var activatedAccountUsedByThisTest = servicesWithFakeToolsOfTheseTests.AddActivatedAccountToTheFakeDatabase();
-        var waitingLoginTokenOfTheVisitor = await servicesWithFakeToolsOfTheseTests.LogInWithTheRightPasswordThenGetTheWaitingLoginTokenAsync();
-        servicesWithFakeToolsOfTheseTests.RepositoryThatKeepsSessionsInMemory.NumberOfConflictsBeforeTheLoginIsSaved = 9;
+        var activatedAccount = services.AddActivatedAccount();
+        var waitingLoginToken = await services.LogInThenGetWaitingLoginTokenAsync();
+        services.SessionRepository.LoginConflicts = 9;
 
-        var resultOfTheCodeAttemptOfTheVisitor = await servicesWithFakeToolsOfTheseTests.FinishLoginWithThisCodeAsync(waitingLoginTokenOfTheVisitor, servicesWithFakeToolsOfTheseTests.CalculateCodeShownOnThePhoneNow(activatedAccountUsedByThisTest.SecretOfTheAuthenticatorApplication));
+        var result = await services.FinishLoginAsync(waitingLoginToken, services.CalculateCurrentCode(activatedAccount.Secret));
 
-        Assert.True(resultOfTheCodeAttemptOfTheVisitor.IsLoggedIn);
-        Assert.Single(servicesWithFakeToolsOfTheseTests.RepositoryThatKeepsSessionsInMemory.SavedSessions);
+        Assert.IsType<TwoFactorLoginResult.LoggedIn>(result);
+        Assert.Single(services.SessionRepository.SavedSessions);
     }
 
     [Fact]
     public async Task TooManyConflictsAskToRestartAndOpenNothing()
     {
-        var activatedAccountUsedByThisTest = servicesWithFakeToolsOfTheseTests.AddActivatedAccountToTheFakeDatabase();
-        var waitingLoginTokenOfTheVisitor = await servicesWithFakeToolsOfTheseTests.LogInWithTheRightPasswordThenGetTheWaitingLoginTokenAsync();
-        servicesWithFakeToolsOfTheseTests.RepositoryThatKeepsSessionsInMemory.NumberOfConflictsBeforeTheLoginIsSaved = 10;
+        var activatedAccount = services.AddActivatedAccount();
+        var waitingLoginToken = await services.LogInThenGetWaitingLoginTokenAsync();
+        services.SessionRepository.LoginConflicts = 10;
 
-        var resultOfTheCodeAttemptOfTheVisitor = await servicesWithFakeToolsOfTheseTests.FinishLoginWithThisCodeAsync(waitingLoginTokenOfTheVisitor, servicesWithFakeToolsOfTheseTests.CalculateCodeShownOnThePhoneNow(activatedAccountUsedByThisTest.SecretOfTheAuthenticatorApplication));
+        var result = await services.FinishLoginAsync(waitingLoginToken, services.CalculateCurrentCode(activatedAccount.Secret));
 
-        Assert.Equal(TwoFactorLoginService.ErrorMessageForLoginThatMustRestart, resultOfTheCodeAttemptOfTheVisitor.LoginMustRestartErrorMessage);
-        Assert.Empty(servicesWithFakeToolsOfTheseTests.RepositoryThatKeepsSessionsInMemory.SavedSessions);
+        Assert.IsType<TwoFactorLoginResult.LoginMustRestart>(result);
+        Assert.Empty(services.SessionRepository.SavedSessions);
     }
 
     // Une panne ne fait croire à personne que la connexion a réussi. Le code est pris, mais le suivant fonctionne, sans recommencer.
     [Fact]
     public async Task DatabaseFailureDuringTheSaveIsNotHiddenAndTheNextCodeWorksAfterIt()
     {
-        var activatedAccountUsedByThisTest = servicesWithFakeToolsOfTheseTests.AddActivatedAccountToTheFakeDatabase();
-        var waitingLoginTokenOfTheVisitor = await servicesWithFakeToolsOfTheseTests.LogInWithTheRightPasswordThenGetTheWaitingLoginTokenAsync();
-        servicesWithFakeToolsOfTheseTests.RepositoryThatKeepsSessionsInMemory.DatabaseIsDownDuringThisTest = true;
+        var activatedAccount = services.AddActivatedAccount();
+        var waitingLoginToken = await services.LogInThenGetWaitingLoginTokenAsync();
+        services.SessionRepository.IsDown = true;
 
-        await Assert.ThrowsAsync<InvalidOperationException>(() => servicesWithFakeToolsOfTheseTests.FinishLoginWithThisCodeAsync(waitingLoginTokenOfTheVisitor, servicesWithFakeToolsOfTheseTests.CalculateCodeShownOnThePhoneNow(activatedAccountUsedByThisTest.SecretOfTheAuthenticatorApplication)));
-        Assert.Empty(servicesWithFakeToolsOfTheseTests.RepositoryThatKeepsSessionsInMemory.SavedSessions);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => services.FinishLoginAsync(waitingLoginToken, services.CalculateCurrentCode(activatedAccount.Secret)));
+        Assert.Empty(services.SessionRepository.SavedSessions);
 
-        servicesWithFakeToolsOfTheseTests.RepositoryThatKeepsSessionsInMemory.DatabaseIsDownDuringThisTest = false;
-        servicesWithFakeToolsOfTheseTests.WaitForTheNextCodeOnThePhone();
-        var resultOfTheCodeAfterTheFailure = await servicesWithFakeToolsOfTheseTests.FinishLoginWithThisCodeAsync(waitingLoginTokenOfTheVisitor, servicesWithFakeToolsOfTheseTests.CalculateCodeShownOnThePhoneNow(activatedAccountUsedByThisTest.SecretOfTheAuthenticatorApplication));
+        services.SessionRepository.IsDown = false;
+        services.WaitForNextCode();
+        var result = await services.FinishLoginAsync(waitingLoginToken, services.CalculateCurrentCode(activatedAccount.Secret));
 
-        Assert.True(resultOfTheCodeAfterTheFailure.IsLoggedIn);
+        Assert.IsType<TwoFactorLoginResult.LoggedIn>(result);
     }
 
     [Fact]
     public async Task JournalFailureOnAWrongCodeIsNotHidden()
     {
-        var activatedAccountUsedByThisTest = servicesWithFakeToolsOfTheseTests.AddActivatedAccountToTheFakeDatabase();
-        var waitingLoginTokenOfTheVisitor = await servicesWithFakeToolsOfTheseTests.LogInWithTheRightPasswordThenGetTheWaitingLoginTokenAsync();
-        servicesWithFakeToolsOfTheseTests.RepositoryThatKeepsSecurityEventsInMemory.DatabaseIsDownDuringThisTest = true;
+        var activatedAccount = services.AddActivatedAccount();
+        var waitingLoginToken = await services.LogInThenGetWaitingLoginTokenAsync();
+        services.SecurityEventRepository.IsDown = true;
 
-        await Assert.ThrowsAsync<InvalidOperationException>(() => servicesWithFakeToolsOfTheseTests.FinishLoginWithThisCodeAsync(waitingLoginTokenOfTheVisitor, servicesWithFakeToolsOfTheseTests.FindCodeThatIsWrongNow(activatedAccountUsedByThisTest.SecretOfTheAuthenticatorApplication)));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => services.FinishLoginAsync(waitingLoginToken, services.FindWrongCode(activatedAccount.Secret)));
     }
 
     [Fact]
     public async Task DatabaseFailureWhileReadingTheBackupCodesIsNotHidden()
     {
-        var activatedAccountUsedByThisTest = servicesWithFakeToolsOfTheseTests.AddActivatedAccountToTheFakeDatabase();
-        var waitingLoginTokenOfTheVisitor = await servicesWithFakeToolsOfTheseTests.LogInWithTheRightPasswordThenGetTheWaitingLoginTokenAsync();
-        servicesWithFakeToolsOfTheseTests.RepositoryThatKeepsTwoFactorDataInMemory.DatabaseIsDownWhileReadingTheBackupCodes = true;
+        var activatedAccount = services.AddActivatedAccount();
+        var waitingLoginToken = await services.LogInThenGetWaitingLoginTokenAsync();
+        services.TwoFactorRepository.FailsWhenReadingBackupCodes = true;
 
-        await Assert.ThrowsAsync<InvalidOperationException>(() => servicesWithFakeToolsOfTheseTests.FinishLoginWithThisCodeAsync(waitingLoginTokenOfTheVisitor, activatedAccountUsedByThisTest.BackupCodesInTheirCleanForm[0]));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => services.FinishLoginAsync(waitingLoginToken, activatedAccount.BackupCodes[0]));
     }
 
     // Une clé perdue ne se fait pas passer pour un mauvais code : l'erreur remonte, et elle sera vue dans le journal technique.
     [Fact]
     public async Task LostEncryptionKeyIsNotHiddenForAuthenticatorCodesAndLeavesTheBackupCodesWorking()
     {
-        var activatedAccountUsedByThisTest = servicesWithFakeToolsOfTheseTests.AddActivatedAccountToTheFakeDatabase();
-        var waitingLoginTokenOfTheVisitor = await servicesWithFakeToolsOfTheseTests.LogInWithTheRightPasswordThenGetTheWaitingLoginTokenAsync();
-        servicesWithFakeToolsOfTheseTests.RealProtectorOfTheSecrets = new AesGcmTotpSecretProtector(TwoFactorTestTools.CreateNewEncryptionKeyForOneTest());
+        var activatedAccount = services.AddActivatedAccount();
+        var waitingLoginToken = await services.LogInThenGetWaitingLoginTokenAsync();
+        services.SecretProtector = new AesGcmTotpSecretProtector(TwoFactorTestTools.CreateEncryptionKey());
 
-        await Assert.ThrowsAnyAsync<CryptographicException>(() => servicesWithFakeToolsOfTheseTests.FinishLoginWithThisCodeAsync(waitingLoginTokenOfTheVisitor, servicesWithFakeToolsOfTheseTests.CalculateCodeShownOnThePhoneNow(activatedAccountUsedByThisTest.SecretOfTheAuthenticatorApplication)));
-        Assert.Empty(servicesWithFakeToolsOfTheseTests.RepositoryThatKeepsSessionsInMemory.SavedSessions);
+        await Assert.ThrowsAnyAsync<CryptographicException>(() => services.FinishLoginAsync(waitingLoginToken, services.CalculateCurrentCode(activatedAccount.Secret)));
+        Assert.Empty(services.SessionRepository.SavedSessions);
 
-        var resultOfTheLoginWithTheBackupCode = await servicesWithFakeToolsOfTheseTests.FinishLoginWithThisCodeAsync(waitingLoginTokenOfTheVisitor, activatedAccountUsedByThisTest.BackupCodesInTheirCleanForm[0]);
-        Assert.True(resultOfTheLoginWithTheBackupCode.IsLoggedIn);
+        var result = await services.FinishLoginAsync(waitingLoginToken, activatedAccount.BackupCodes[0]);
+        Assert.IsType<TwoFactorLoginResult.LoggedIn>(result);
     }
 
     // --- Les cookies déjà présents
@@ -732,25 +748,25 @@ public class TwoFactorLoginServiceTests
     [Fact]
     public async Task KnownDeviceKeepsItsTokenAndTheOldSessionOfTheBrowserIsClosed()
     {
-        var activatedAccountUsedByThisTest = servicesWithFakeToolsOfTheseTests.AddActivatedAccountToTheFakeDatabase();
-        var generatedTokenOfTheKnownDevice = servicesWithFakeToolsOfTheseTests.RealGeneratorOfTheTokens.GenerateNewRandomSecureTokenWithItsHash();
-        servicesWithFakeToolsOfTheseTests.RepositoryThatKeepsSessionsInMemory.SavedDevices.Add(new Device { DeviceToken = generatedTokenOfTheKnownDevice.HashToStoreInTheDatabase, UserId = activatedAccountUsedByThisTest.UserAccount.Id });
-        var generatedTokenOfTheOldSession = servicesWithFakeToolsOfTheseTests.RealGeneratorOfTheTokens.GenerateNewRandomSecureTokenWithItsHash();
-        servicesWithFakeToolsOfTheseTests.RepositoryThatKeepsSessionsInMemory.SavedSessions.Add(new UserSession { Id = generatedTokenOfTheOldSession.HashToStoreInTheDatabase, UserId = activatedAccountUsedByThisTest.UserAccount.Id });
-        var waitingLoginTokenOfTheVisitor = await servicesWithFakeToolsOfTheseTests.LogInWithTheRightPasswordThenGetTheWaitingLoginTokenAsync();
+        var activatedAccount = services.AddActivatedAccount();
+        var deviceToken = services.TokenGenerator.GenerateToken();
+        services.SessionRepository.SavedDevices.Add(new Device { DeviceToken = deviceToken.Hash, UserId = activatedAccount.UserAccount.Id });
+        var oldSessionToken = services.TokenGenerator.GenerateToken();
+        services.SessionRepository.SavedSessions.Add(new UserSession { Id = oldSessionToken.Hash, LastActivityAt = services.Clock.GetUtcNow().UtcDateTime, UserId = activatedAccount.UserAccount.Id });
+        var waitingLoginToken = await services.LogInThenGetWaitingLoginTokenAsync();
 
-        var resultOfTheCodeAttemptOfTheVisitor = await servicesWithFakeToolsOfTheseTests.CreateTwoFactorLoginServiceWithFakeTools().FinishLoginOfTheVisitorWithThisCodeAsync(new TwoFactorCodeAttemptFromVisitor
+        var result = await services.CreateTwoFactorLoginService().FinishAsync(new TwoFactorCodeAttempt
         {
-            CodeTypedByTheVisitor = servicesWithFakeToolsOfTheseTests.CalculateCodeShownOnThePhoneNow(activatedAccountUsedByThisTest.SecretOfTheAuthenticatorApplication),
-            IpAddressOfTheVisitor = IpAddressOfTheVisitorInTheseTests,
-            WaitingLoginTokenReadInTheCookie = waitingLoginTokenOfTheVisitor,
-            DeviceTokenReadInTheCookie = generatedTokenOfTheKnownDevice.TokenGivenOnlyToTheVisitor,
-            SessionTokenReadInTheCookie = generatedTokenOfTheOldSession.TokenGivenOnlyToTheVisitor
+            Code = services.CalculateCurrentCode(activatedAccount.Secret),
+            IpAddress = IpAddress,
+            WaitingLoginToken = waitingLoginToken,
+            DeviceToken = deviceToken.Token,
+            SessionToken = oldSessionToken.Token
         });
 
-        Assert.Equal(generatedTokenOfTheKnownDevice.TokenGivenOnlyToTheVisitor, resultOfTheCodeAttemptOfTheVisitor.DeviceTokenToPutInTheCookie);
-        Assert.Single(servicesWithFakeToolsOfTheseTests.RepositoryThatKeepsSessionsInMemory.SavedDevices);
-        var onlySessionLeftInTheFakeDatabase = Assert.Single(servicesWithFakeToolsOfTheseTests.RepositoryThatKeepsSessionsInMemory.SavedSessions);
-        Assert.NotEqual(generatedTokenOfTheOldSession.HashToStoreInTheDatabase, onlySessionLeftInTheFakeDatabase.Id);
+        Assert.Equal(deviceToken.Token, Assert.IsType<TwoFactorLoginResult.LoggedIn>(result).DeviceToken);
+        Assert.Single(services.SessionRepository.SavedDevices);
+        var remainingSession = Assert.Single(services.SessionRepository.SavedSessions);
+        Assert.NotEqual(oldSessionToken.Hash, remainingSession.Id);
     }
 }

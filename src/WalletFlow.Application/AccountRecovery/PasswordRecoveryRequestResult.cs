@@ -1,10 +1,10 @@
 namespace WalletFlow.Application.AccountRecovery;
 
-// Résultat d'une demande de récupération : acceptée, ou refusée avec la raison du refus.
-public class PasswordRecoveryRequestResult
+// Résultat d'une demande de récupération : une seule de ces valeurs à la fois.
+// Il ne dit jamais si un compte utilise l'adresse (SS §2).
+public enum PasswordRecoveryRequestResult
 {
-    public string? EmailAddressErrorMessage { get; init; }
-    public bool TooManyRequestsForThisEmailAddress { get; init; }
-
-    public bool IsAccepted => EmailAddressErrorMessage == null && !TooManyRequestsForThisEmailAddress;
+    RequestAccepted,
+    InvalidEmailAddressFormat,
+    TooManyRequests
 }

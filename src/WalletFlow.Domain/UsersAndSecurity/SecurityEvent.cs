@@ -7,21 +7,22 @@ namespace WalletFlow.Domain.UsersAndSecurity;
 public class SecurityEvent
 {
     // id_evenement
-    public Guid Id { get; set; } = Guid.NewGuid();
+    public Guid Id { get; init; } = Guid.NewGuid();
 
     // type_evenement
-    public SecurityEventType Type { get; set; }
+    public SecurityEventType Type { get; init; }
 
     // resultat_evenement
-    public SecurityEventResult Result { get; set; }
+    public SecurityEventResult Result { get; init; }
 
     // date_evenement : l'événement est conservé de 6 mois à 1 an.
-    public DateTime OccurredAt { get; set; } = DateTime.UtcNow;
+    // Donnée par l'horloge de l'application : le compilateur refuse un événement créé sans elle.
+    public required DateTime OccurredAt { get; init; }
 
     // adresse_ip_evenement : effacée quand le compte de l'utilisateur est supprimé.
-    public IPAddress? IpAddress { get; set; }
+    public IPAddress? IpAddress { get; init; }
 
     // id_utilisateur : vide pour une connexion échouée avec une adresse inconnue,
     // ou quand le compte de l'utilisateur a été supprimé.
-    public Guid? UserId { get; set; }
+    public Guid? UserId { get; init; }
 }

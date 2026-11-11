@@ -19,7 +19,7 @@
 - L'utilisateur peut activer la double authentification avec une application d'authentification. Il reçoit alors 10 codes de secours.
 - Pour activer la double authentification, l'utilisateur saisit son mot de passe, puis un premier code de son application. Elle n'est active qu'après ce code.
 - Si la double authentification est activée, la connexion demande aussi un code de l'application ou un code de secours. Une connexion n'est réussie qu'après ce code.
-- Au 5e essai, le compte se bloque, même avec le bon mot de passe. Le bon code de double authentification permet encore d'entrer, et lève le blocage.
+- Avec la double authentification, au 5e essai, le compte se bloque, même avec le bon mot de passe. Le bon code de double authentification permet encore d'entrer, et lève le blocage.
 - L'utilisateur peut désactiver la double authentification avec son mot de passe et un code de l'application ou un code de secours. En la réactivant, il reçoit 10 nouveaux codes de secours.
 - L'utilisateur dispose de 5 tentatives de connexion avant que son compte soit bloqué.
 - Le blocage est temporaire : 15 minutes la première fois, puis la durée double à chaque nouveau blocage, sans dépasser 24 heures.

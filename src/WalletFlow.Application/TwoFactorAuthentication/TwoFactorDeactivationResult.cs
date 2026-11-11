@@ -1,10 +1,11 @@
 namespace WalletFlow.Application.TwoFactorAuthentication;
 
-// Résultat d'une désactivation : réussie, ou refusée avec le message à afficher.
-public class TwoFactorDeactivationResult
+// Résultat d'une désactivation : une seule de ces valeurs à la fois.
+// Un mauvais mot de passe et un mauvais code donnent la même valeur :
+// une session volée ne peut pas servir à tester des mots de passe un par un.
+public enum TwoFactorDeactivationResult
 {
-    public string? WrongPasswordOrCodeErrorMessage { get; init; }
-    public string? NotEnabledErrorMessage { get; init; }
-
-    public bool IsTwoFactorDeactivated => WrongPasswordOrCodeErrorMessage == null && NotEnabledErrorMessage == null;
+    TwoFactorDeactivated,
+    TwoFactorNotEnabled,
+    WrongPasswordOrCode
 }

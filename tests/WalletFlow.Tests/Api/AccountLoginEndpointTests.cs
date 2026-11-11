@@ -21,217 +21,214 @@ public class AccountLoginEndpointTests
     [Fact]
     public async Task RightPasswordAnswersOkAndWritesTheSessionCookieWithItsExactAttributes()
     {
-        using var apiStartedInMemoryForThisTest = new ApiFactoryWithFakeRepositoryAndEmails();
-        AddAccountToTheFakeRepositoryOfTheApi(apiStartedInMemoryForThisTest);
-        var clientThatKeepsTheCookiesOfTheBrowser = CreateClientThatKeepsCookiesLikeABrowser(apiStartedInMemoryForThisTest);
+        using var api = new ApiFactoryWithFakes();
+        await AddAccountAsync(api);
+        var browserClient = CreateBrowserClient(api);
 
-        var answerToTheVisitorLoginRequest = await SendLoginRequestToTheApiAsync(clientThatKeepsTheCookiesOfTheBrowser);
+        var response = await SendLoginRequestAsync(browserClient);
 
-        Assert.Equal(HttpStatusCode.OK, answerToTheVisitorLoginRequest.StatusCode);
-        var jsonDocumentOfTheApiAnswer = JsonDocument.Parse(await answerToTheVisitorLoginRequest.Content.ReadAsStringAsync());
-        Assert.Equal(AccountLoginController.MessageSentWhenTheVisitorIsLoggedIn, jsonDocumentOfTheApiAnswer.RootElement.GetProperty("message").GetString());
-        SecurityHeadersAssertions.CheckThatAnswerCarriesTheExactSecurityHeaders(answerToTheVisitorLoginRequest);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var jsonDocument = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.Equal(AccountLoginController.LoggedInMessage, jsonDocument.RootElement.GetProperty("message").GetString());
+        SecurityHeadersAssertions.AssertExactSecurityHeaders(response);
 
-        var sessionCookieWrittenByTheAnswer = FindCookieWrittenByTheAnswer(answerToTheVisitorLoginRequest, "__Host-walletflow-session");
-        Assert.NotNull(sessionCookieWrittenByTheAnswer);
-        Assert.True(sessionCookieWrittenByTheAnswer.HttpOnly);
-        Assert.True(sessionCookieWrittenByTheAnswer.Secure);
-        Assert.Equal(SameSiteMode.Lax, sessionCookieWrittenByTheAnswer.SameSite);
-        Assert.Equal("/", sessionCookieWrittenByTheAnswer.Path.ToString());
-        Assert.Equal(0, sessionCookieWrittenByTheAnswer.Domain.Length);
+        var sessionCookie = FindCookie(response, "__Host-walletflow-session");
+        Assert.NotNull(sessionCookie);
+        Assert.True(sessionCookie.HttpOnly);
+        Assert.True(sessionCookie.Secure);
+        Assert.Equal(SameSiteMode.Lax, sessionCookie.SameSite);
+        Assert.Equal("/", sessionCookie.Path.ToString());
+        Assert.Equal(0, sessionCookie.Domain.Length);
 
         // Sans date de fin, le cookie disparaît à la fermeture du navigateur.
-        Assert.Null(sessionCookieWrittenByTheAnswer.MaxAge);
-        Assert.Null(sessionCookieWrittenByTheAnswer.Expires);
+        Assert.Null(sessionCookie.MaxAge);
+        Assert.Null(sessionCookie.Expires);
     }
 
     [Fact]
     public async Task RightPasswordWritesTheDurableDeviceCookieWithItsExactAttributes()
     {
-        using var apiStartedInMemoryForThisTest = new ApiFactoryWithFakeRepositoryAndEmails();
-        AddAccountToTheFakeRepositoryOfTheApi(apiStartedInMemoryForThisTest);
-        var clientThatKeepsTheCookiesOfTheBrowser = CreateClientThatKeepsCookiesLikeABrowser(apiStartedInMemoryForThisTest);
+        using var api = new ApiFactoryWithFakes();
+        await AddAccountAsync(api);
+        var browserClient = CreateBrowserClient(api);
 
-        var answerToTheVisitorLoginRequest = await SendLoginRequestToTheApiAsync(clientThatKeepsTheCookiesOfTheBrowser);
+        var response = await SendLoginRequestAsync(browserClient);
 
-        var deviceCookieWrittenByTheAnswer = FindCookieWrittenByTheAnswer(answerToTheVisitorLoginRequest, "__Host-walletflow-device");
-        Assert.NotNull(deviceCookieWrittenByTheAnswer);
-        Assert.True(deviceCookieWrittenByTheAnswer.HttpOnly);
-        Assert.True(deviceCookieWrittenByTheAnswer.Secure);
-        Assert.Equal(SameSiteMode.Lax, deviceCookieWrittenByTheAnswer.SameSite);
-        Assert.Equal("/", deviceCookieWrittenByTheAnswer.Path.ToString());
-        Assert.Equal(0, deviceCookieWrittenByTheAnswer.Domain.Length);
-        Assert.Equal(TimeSpan.FromDays(365), deviceCookieWrittenByTheAnswer.MaxAge);
+        var deviceCookie = FindCookie(response, "__Host-walletflow-device");
+        Assert.NotNull(deviceCookie);
+        Assert.True(deviceCookie.HttpOnly);
+        Assert.True(deviceCookie.Secure);
+        Assert.Equal(SameSiteMode.Lax, deviceCookie.SameSite);
+        Assert.Equal("/", deviceCookie.Path.ToString());
+        Assert.Equal(0, deviceCookie.Domain.Length);
+        Assert.Equal(TimeSpan.FromDays(365), deviceCookie.MaxAge);
     }
 
     // Les jetons ne sont visibles dans aucune réponse lisible par un script : seulement dans les cookies HttpOnly.
     [Fact]
     public async Task TokensNeverAppearInTheBodyOfTheAnswer()
     {
-        using var apiStartedInMemoryForThisTest = new ApiFactoryWithFakeRepositoryAndEmails();
-        AddAccountToTheFakeRepositoryOfTheApi(apiStartedInMemoryForThisTest);
-        var clientThatKeepsTheCookiesOfTheBrowser = CreateClientThatKeepsCookiesLikeABrowser(apiStartedInMemoryForThisTest);
+        using var api = new ApiFactoryWithFakes();
+        await AddAccountAsync(api);
+        var browserClient = CreateBrowserClient(api);
 
-        var answerToTheVisitorLoginRequest = await SendLoginRequestToTheApiAsync(clientThatKeepsTheCookiesOfTheBrowser);
+        var response = await SendLoginRequestAsync(browserClient);
 
-        var textOfTheApiAnswerToCheck = await answerToTheVisitorLoginRequest.Content.ReadAsStringAsync();
-        Assert.DoesNotContain(FindCookieWrittenByTheAnswer(answerToTheVisitorLoginRequest, "__Host-walletflow-session")!.Value.ToString(), textOfTheApiAnswerToCheck);
-        Assert.DoesNotContain(FindCookieWrittenByTheAnswer(answerToTheVisitorLoginRequest, "__Host-walletflow-device")!.Value.ToString(), textOfTheApiAnswerToCheck);
+        var responseText = await response.Content.ReadAsStringAsync();
+        Assert.DoesNotContain(FindCookie(response, "__Host-walletflow-session")!.Value.ToString(), responseText);
+        Assert.DoesNotContain(FindCookie(response, "__Host-walletflow-device")!.Value.ToString(), responseText);
     }
 
     // La deuxième connexion du même navigateur garde l'appareil, et renouvelle son cookie.
     [Fact]
     public async Task SecondLoginOfTheSameBrowserKeepsTheDeviceAndRenewsItsCookie()
     {
-        using var apiStartedInMemoryForThisTest = new ApiFactoryWithFakeRepositoryAndEmails();
-        AddAccountToTheFakeRepositoryOfTheApi(apiStartedInMemoryForThisTest);
-        var clientThatKeepsTheCookiesOfTheBrowser = CreateClientThatKeepsCookiesLikeABrowser(apiStartedInMemoryForThisTest);
+        using var api = new ApiFactoryWithFakes();
+        await AddAccountAsync(api);
+        var browserClient = CreateBrowserClient(api);
 
-        var answerToTheFirstLoginRequest = await SendLoginRequestToTheApiAsync(clientThatKeepsTheCookiesOfTheBrowser);
-        var answerToTheSecondLoginRequest = await SendLoginRequestToTheApiAsync(clientThatKeepsTheCookiesOfTheBrowser);
+        var firstResponse = await SendLoginRequestAsync(browserClient);
+        var secondResponse = await SendLoginRequestAsync(browserClient);
 
         Assert.Equal(
-            FindCookieWrittenByTheAnswer(answerToTheFirstLoginRequest, "__Host-walletflow-device")!.Value,
-            FindCookieWrittenByTheAnswer(answerToTheSecondLoginRequest, "__Host-walletflow-device")!.Value);
-        Assert.Single(apiStartedInMemoryForThisTest.RepositoryThatKeepsSessionsInMemory.SavedDevices);
+            FindCookie(firstResponse, "__Host-walletflow-device")!.Value,
+            FindCookie(secondResponse, "__Host-walletflow-device")!.Value);
+        Assert.Single(api.SessionRepository.SavedDevices);
     }
 
     // Se reconnecter dans le même navigateur ferme la session d'avant : une seule reste ouverte.
     [Fact]
     public async Task SecondLoginOfTheSameBrowserClosesTheFirstSession()
     {
-        using var apiStartedInMemoryForThisTest = new ApiFactoryWithFakeRepositoryAndEmails();
-        AddAccountToTheFakeRepositoryOfTheApi(apiStartedInMemoryForThisTest);
-        var clientThatKeepsTheCookiesOfTheBrowser = CreateClientThatKeepsCookiesLikeABrowser(apiStartedInMemoryForThisTest);
+        using var api = new ApiFactoryWithFakes();
+        await AddAccountAsync(api);
+        var browserClient = CreateBrowserClient(api);
 
-        await SendLoginRequestToTheApiAsync(clientThatKeepsTheCookiesOfTheBrowser);
-        await SendLoginRequestToTheApiAsync(clientThatKeepsTheCookiesOfTheBrowser);
+        await SendLoginRequestAsync(browserClient);
+        await SendLoginRequestAsync(browserClient);
 
-        Assert.Single(apiStartedInMemoryForThisTest.RepositoryThatKeepsSessionsInMemory.SavedSessions);
+        Assert.Single(api.SessionRepository.SavedSessions);
     }
 
     // --- Refus
 
     [Theory]
-    [InlineData(EmailAddressOfTheLoginTests, WrongPasswordTypedInTheLoginTests)] // mauvais mot de passe
-    [InlineData("inconnu@exemple.test", ValidPasswordChosenInTheseTests)]        // adresse inconnue
-    [InlineData("sans-arobase", ValidPasswordChosenInTheseTests)]                // adresse mal formée
-    public async Task WrongCredentialsAnswerTheExactGenericMessageWithoutAnyCookie(string emailAddressTypedInThisTest, string passwordTypedByTheVisitorInThisTest)
+    [InlineData(Email, WrongPassword)] // mauvais mot de passe
+    [InlineData("inconnu@exemple.test", ValidPassword)]        // adresse inconnue
+    [InlineData("sans-arobase", ValidPassword)]                // adresse mal formée
+    public async Task WrongCredentialsAnswerTheExactGenericMessageWithoutAnyCookie(string emailAddress, string password)
     {
-        using var apiStartedInMemoryForThisTest = new ApiFactoryWithFakeRepositoryAndEmails();
-        AddAccountToTheFakeRepositoryOfTheApi(apiStartedInMemoryForThisTest);
-        var clientThatKeepsTheCookiesOfTheBrowser = CreateClientThatKeepsCookiesLikeABrowser(apiStartedInMemoryForThisTest);
+        using var api = new ApiFactoryWithFakes();
+        await AddAccountAsync(api);
+        var browserClient = CreateBrowserClient(api);
 
-        var answerToTheVisitorLoginRequest = await SendLoginRequestToTheApiAsync(clientThatKeepsTheCookiesOfTheBrowser, emailAddressTypedInThisTest, passwordTypedByTheVisitorInThisTest);
+        var response = await SendLoginRequestAsync(browserClient, emailAddress, password);
 
-        await CheckThatAnswerIsProblemWithThisExactTitleAsync(answerToTheVisitorLoginRequest, HttpStatusCode.Unauthorized, "Identifiants incorrects");
-        Assert.False(answerToTheVisitorLoginRequest.Headers.Contains("Set-Cookie"));
-        Assert.Empty(apiStartedInMemoryForThisTest.RepositoryThatKeepsSessionsInMemory.SavedSessions);
-        SecurityHeadersAssertions.CheckThatAnswerCarriesTheExactSecurityHeaders(answerToTheVisitorLoginRequest);
+        await AssertProblemTitleAsync(response, HttpStatusCode.Unauthorized, "Identifiants incorrects");
+        Assert.False(response.Headers.Contains("Set-Cookie"));
+        Assert.Empty(api.SessionRepository.SavedSessions);
+        SecurityHeadersAssertions.AssertExactSecurityHeaders(response);
     }
 
     // Lit tout ce qui compte dans une réponse d'erreur : son code, son titre et sa forme.
-    private static async Task<string> DescribeErrorAnswerWithoutItsTraceIdentifierAsync(HttpResponseMessage answerOfTheApiToDescribe)
+    private static async Task<string> DescribeErrorWithoutTraceIdAsync(HttpResponseMessage response)
     {
-        var jsonDocumentOfTheApiAnswer = JsonDocument.Parse(await answerOfTheApiToDescribe.Content.ReadAsStringAsync());
-        var descriptionOfTheErrorAnswerBeingBuilt = (int)answerOfTheApiToDescribe.StatusCode + "|";
+        var jsonDocument = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        var description = (int)response.StatusCode + "|";
 
-        foreach (var onePropertyOfTheApiAnswer in jsonDocumentOfTheApiAnswer.RootElement.EnumerateObject())
+        foreach (var property in jsonDocument.RootElement.EnumerateObject())
         {
-            if (onePropertyOfTheApiAnswer.Name != "traceId")
+            if (property.Name != "traceId")
             {
-                descriptionOfTheErrorAnswerBeingBuilt = descriptionOfTheErrorAnswerBeingBuilt + onePropertyOfTheApiAnswer.Name + "=" + onePropertyOfTheApiAnswer.Value + "|";
+                description = description + property.Name + "=" + property.Value + "|";
             }
         }
 
-        return descriptionOfTheErrorAnswerBeingBuilt;
+        return description;
     }
 
     // Une adresse inconnue, un mauvais mot de passe et un compte bloqué doivent donner exactement la même réponse.
     [Fact]
     public async Task UnknownAddressWrongPasswordAndLockedAccountGiveExactlyTheSameAnswer()
     {
-        using var apiStartedInMemoryForThisTest = new ApiFactoryWithFakeRepositoryAndEmails();
-        var accountLockedBeforeThisLoginTest = AddAccountToTheFakeRepositoryOfTheApi(apiStartedInMemoryForThisTest, "compte-bloque@exemple.test");
-        accountLockedBeforeThisLoginTest.FailedLoginAttemptCount = 5;
-        accountLockedBeforeThisLoginTest.LockoutCount = 1;
-        accountLockedBeforeThisLoginTest.LockoutEndsAt = apiStartedInMemoryForThisTest.ClockThatOnlyMovesWhenTestsAskIt.GetUtcNow().UtcDateTime.AddHours(1);
-        AddAccountToTheFakeRepositoryOfTheApi(apiStartedInMemoryForThisTest, "compte-ouvert@exemple.test");
-        var clientThatKeepsTheCookiesOfTheBrowser = CreateClientThatKeepsCookiesLikeABrowser(apiStartedInMemoryForThisTest);
+        using var api = new ApiFactoryWithFakes();
+        await AddLockedAccountAsync(api, "compte-bloque@exemple.test", 1, api.Clock.GetUtcNow().UtcDateTime.AddHours(1));
+        await AddAccountAsync(api, "compte-ouvert@exemple.test");
+        var browserClient = CreateBrowserClient(api);
 
-        var answerGivenForTheUnknownAddress = await SendLoginRequestToTheApiAsync(clientThatKeepsTheCookiesOfTheBrowser, "inconnu@exemple.test", ValidPasswordChosenInTheseTests);
-        var answerGivenForTheWrongPassword = await SendLoginRequestToTheApiAsync(clientThatKeepsTheCookiesOfTheBrowser, "compte-ouvert@exemple.test", WrongPasswordTypedInTheLoginTests);
-        var answerGivenForTheLockedAccount = await SendLoginRequestToTheApiAsync(clientThatKeepsTheCookiesOfTheBrowser, "compte-bloque@exemple.test", ValidPasswordChosenInTheseTests);
+        var unknownAddressResponse = await SendLoginRequestAsync(browserClient, "inconnu@exemple.test", ValidPassword);
+        var wrongPasswordResponse = await SendLoginRequestAsync(browserClient, "compte-ouvert@exemple.test", WrongPassword);
+        var lockedAccountResponse = await SendLoginRequestAsync(browserClient, "compte-bloque@exemple.test", ValidPassword);
 
-        var descriptionOfTheAnswerForUnknownAddress = await DescribeErrorAnswerWithoutItsTraceIdentifierAsync(answerGivenForTheUnknownAddress);
-        Assert.Equal(descriptionOfTheAnswerForUnknownAddress, await DescribeErrorAnswerWithoutItsTraceIdentifierAsync(answerGivenForTheWrongPassword));
-        Assert.Equal(descriptionOfTheAnswerForUnknownAddress, await DescribeErrorAnswerWithoutItsTraceIdentifierAsync(answerGivenForTheLockedAccount));
+        var unknownAddressDescription = await DescribeErrorWithoutTraceIdAsync(unknownAddressResponse);
+        Assert.Equal(unknownAddressDescription, await DescribeErrorWithoutTraceIdAsync(wrongPasswordResponse));
+        Assert.Equal(unknownAddressDescription, await DescribeErrorWithoutTraceIdAsync(lockedAccountResponse));
     }
 
     [Fact]
     public async Task UnconfirmedAccountWithRightPasswordAnswersForbiddenWithTheInvitation()
     {
-        using var apiStartedInMemoryForThisTest = new ApiFactoryWithFakeRepositoryAndEmails();
-        AddAccountToTheFakeRepositoryOfTheApi(apiStartedInMemoryForThisTest, emailAddressOfTheAccountIsConfirmed: false);
-        var clientThatKeepsTheCookiesOfTheBrowser = CreateClientThatKeepsCookiesLikeABrowser(apiStartedInMemoryForThisTest);
+        using var api = new ApiFactoryWithFakes();
+        await AddAccountAsync(api, isEmailConfirmed: false);
+        var browserClient = CreateBrowserClient(api);
 
-        var answerToTheVisitorLoginRequest = await SendLoginRequestToTheApiAsync(clientThatKeepsTheCookiesOfTheBrowser);
+        var response = await SendLoginRequestAsync(browserClient);
 
-        await CheckThatAnswerIsProblemWithThisExactTitleAsync(
-            answerToTheVisitorLoginRequest,
+        await AssertProblemTitleAsync(
+            response,
             HttpStatusCode.Forbidden,
             "Ton adresse e-mail n'est pas encore confirmée. Ouvre le lien reçu par e-mail, ou inscris-toi à nouveau pour en recevoir un autre.");
-        Assert.False(answerToTheVisitorLoginRequest.Headers.Contains("Set-Cookie"));
+        Assert.False(response.Headers.Contains("Set-Cookie"));
     }
 
     [Fact]
     public async Task UnconfirmedAccountWithWrongPasswordGetsTheGenericMessage()
     {
-        using var apiStartedInMemoryForThisTest = new ApiFactoryWithFakeRepositoryAndEmails();
-        AddAccountToTheFakeRepositoryOfTheApi(apiStartedInMemoryForThisTest, emailAddressOfTheAccountIsConfirmed: false);
-        var clientThatKeepsTheCookiesOfTheBrowser = CreateClientThatKeepsCookiesLikeABrowser(apiStartedInMemoryForThisTest);
+        using var api = new ApiFactoryWithFakes();
+        await AddAccountAsync(api, isEmailConfirmed: false);
+        var browserClient = CreateBrowserClient(api);
 
-        var answerToTheVisitorLoginRequest = await SendLoginRequestToTheApiAsync(clientThatKeepsTheCookiesOfTheBrowser, EmailAddressOfTheLoginTests, WrongPasswordTypedInTheLoginTests);
+        var response = await SendLoginRequestAsync(browserClient, Email, WrongPassword);
 
-        await CheckThatAnswerIsProblemWithThisExactTitleAsync(answerToTheVisitorLoginRequest, HttpStatusCode.Unauthorized, "Identifiants incorrects");
+        await AssertProblemTitleAsync(response, HttpStatusCode.Unauthorized, "Identifiants incorrects");
     }
 
     [Fact]
     public async Task FiveWrongPasswordsLockTheAccountAndTheRightPasswordIsThenRefused()
     {
-        using var apiStartedInMemoryForThisTest = new ApiFactoryWithFakeRepositoryAndEmails();
-        var accountUsedByThisLoginTest = AddAccountToTheFakeRepositoryOfTheApi(apiStartedInMemoryForThisTest);
-        var clientThatKeepsTheCookiesOfTheBrowser = CreateClientThatKeepsCookiesLikeABrowser(apiStartedInMemoryForThisTest);
+        using var api = new ApiFactoryWithFakes();
+        var account = await AddAccountAsync(api);
+        var browserClient = CreateBrowserClient(api);
 
-        for (var numberOfTheWrongPasswordBeingTried = 1; numberOfTheWrongPasswordBeingTried <= 5; numberOfTheWrongPasswordBeingTried++)
+        for (var attemptNumber = 1; attemptNumber <= 5; attemptNumber++)
         {
-            await SendLoginRequestToTheApiAsync(clientThatKeepsTheCookiesOfTheBrowser, EmailAddressOfTheLoginTests, WrongPasswordTypedInTheLoginTests);
+            await SendLoginRequestAsync(browserClient, Email, WrongPassword);
         }
 
-        var answerDuringTheLockoutOfTheAccount = await SendLoginRequestToTheApiAsync(clientThatKeepsTheCookiesOfTheBrowser);
+        var lockedResponse = await SendLoginRequestAsync(browserClient);
 
-        await CheckThatAnswerIsProblemWithThisExactTitleAsync(answerDuringTheLockoutOfTheAccount, HttpStatusCode.Unauthorized, "Identifiants incorrects");
-        Assert.Equal(1, accountUsedByThisLoginTest.LockoutCount);
+        await AssertProblemTitleAsync(lockedResponse, HttpStatusCode.Unauthorized, "Identifiants incorrects");
+        Assert.Equal(1, account.LockoutCount);
 
-        apiStartedInMemoryForThisTest.ClockThatOnlyMovesWhenTestsAskIt.MoveFakeClockForwardByThisDuration(TimeSpan.FromMinutes(15));
-        var answerAfterTheEndOfTheLockout = await SendLoginRequestToTheApiAsync(clientThatKeepsTheCookiesOfTheBrowser);
+        api.Clock.Advance(TimeSpan.FromMinutes(15));
+        var unlockedResponse = await SendLoginRequestAsync(browserClient);
 
-        Assert.Equal(HttpStatusCode.OK, answerAfterTheEndOfTheLockout.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, unlockedResponse.StatusCode);
     }
 
     // SS §11 : le journal note l'adresse IP de la requête.
     [Fact]
     public async Task IpAddressOfTheRequestIsWrittenInTheSecurityJournal()
     {
-        using var apiStartedInMemoryForThisTest = new ApiFactoryWithFakeRepositoryAndEmails();
-        AddAccountToTheFakeRepositoryOfTheApi(apiStartedInMemoryForThisTest);
-        var clientThatKeepsTheCookiesOfTheBrowser = CreateClientThatKeepsCookiesLikeABrowser(apiStartedInMemoryForThisTest);
-        clientThatKeepsTheCookiesOfTheBrowser.DefaultRequestHeaders.Add(StartupFilterThatReadsTheVisitorAddress.NameOfTheHeaderGivingTheVisitorAddress, "203.0.113.7");
+        using var api = new ApiFactoryWithFakes();
+        await AddAccountAsync(api);
+        var browserClient = CreateBrowserClient(api);
+        browserClient.DefaultRequestHeaders.Add(VisitorAddressStartupFilter.VisitorAddressHeader, "203.0.113.7");
 
-        await SendLoginRequestToTheApiAsync(clientThatKeepsTheCookiesOfTheBrowser, EmailAddressOfTheLoginTests, WrongPasswordTypedInTheLoginTests);
+        await SendLoginRequestAsync(browserClient, Email, WrongPassword);
 
-        var securityEventOfTheFailedLogin = Assert.Single(apiStartedInMemoryForThisTest.RepositoryThatKeepsSecurityEventsInMemory.SavedSecurityEvents);
-        Assert.Equal(IPAddress.Parse("203.0.113.7"), securityEventOfTheFailedLogin.IpAddress);
+        var securityEvent = Assert.Single(api.SecurityEventRepository.SavedSecurityEvents);
+        Assert.Equal(IPAddress.Parse("203.0.113.7"), securityEvent.IpAddress);
     }
 
     // --- Limite de débit
@@ -239,41 +236,41 @@ public class AccountLoginEndpointTests
     [Fact]
     public async Task LoginIsLimitedToTenAttemptsPerMinuteAndPerIpAddress()
     {
-        using var apiStartedInMemoryForThisTest = new ApiFactoryWithFakeRepositoryAndEmails();
-        var clientOfTheFirstIpAddress = CreateClientThatKeepsCookiesLikeABrowser(apiStartedInMemoryForThisTest);
-        clientOfTheFirstIpAddress.DefaultRequestHeaders.Add(StartupFilterThatReadsTheVisitorAddress.NameOfTheHeaderGivingTheVisitorAddress, "203.0.113.10");
-        var clientOfTheSecondIpAddress = CreateClientThatKeepsCookiesLikeABrowser(apiStartedInMemoryForThisTest);
-        clientOfTheSecondIpAddress.DefaultRequestHeaders.Add(StartupFilterThatReadsTheVisitorAddress.NameOfTheHeaderGivingTheVisitorAddress, "203.0.113.11");
+        using var api = new ApiFactoryWithFakes();
+        var firstClient = CreateBrowserClient(api);
+        firstClient.DefaultRequestHeaders.Add(VisitorAddressStartupFilter.VisitorAddressHeader, "203.0.113.10");
+        var secondClient = CreateBrowserClient(api);
+        secondClient.DefaultRequestHeaders.Add(VisitorAddressStartupFilter.VisitorAddressHeader, "203.0.113.11");
 
-        for (var numberOfTheAttemptBeingSent = 1; numberOfTheAttemptBeingSent <= 10; numberOfTheAttemptBeingSent++)
+        for (var attemptNumber = 1; attemptNumber <= 10; attemptNumber++)
         {
-            var answerToTheAttemptUnderTheLimit = await SendLoginRequestToTheApiAsync(clientOfTheFirstIpAddress, "inconnu@exemple.test");
-            Assert.Equal(HttpStatusCode.Unauthorized, answerToTheAttemptUnderTheLimit.StatusCode);
+            var allowedResponse = await SendLoginRequestAsync(firstClient, "inconnu@exemple.test");
+            Assert.Equal(HttpStatusCode.Unauthorized, allowedResponse.StatusCode);
         }
 
-        var answerToTheAttemptOverTheLimit = await SendLoginRequestToTheApiAsync(clientOfTheFirstIpAddress, "inconnu@exemple.test");
-        await CheckThatAnswerIsProblemWithThisExactTitleAsync(answerToTheAttemptOverTheLimit, HttpStatusCode.TooManyRequests, "Trop de demandes. Réessaie plus tard.");
+        var overLimitResponse = await SendLoginRequestAsync(firstClient, "inconnu@exemple.test");
+        await AssertProblemTitleAsync(overLimitResponse, HttpStatusCode.TooManyRequests, "Trop de demandes. Réessaie plus tard.");
 
-        var answerToTheOtherIpAddress = await SendLoginRequestToTheApiAsync(clientOfTheSecondIpAddress, "inconnu@exemple.test");
-        Assert.Equal(HttpStatusCode.Unauthorized, answerToTheOtherIpAddress.StatusCode);
+        var otherAddressResponse = await SendLoginRequestAsync(secondClient, "inconnu@exemple.test");
+        Assert.Equal(HttpStatusCode.Unauthorized, otherAddressResponse.StatusCode);
     }
 
     // Le test ne peut pas attendre : il vérifie la durée exacte de la limite (SS §6).
     [Fact]
     public void LoginLimitLastsExactlyOneMinute()
     {
-        var optionsOfTheLoginAttemptsLimit = RateLimitingConfiguration.CreateOptionsOfTheLoginAttemptsLimit();
+        var loginLimit = RateLimitingConfiguration.CreateLoginLimit();
 
-        Assert.Equal(10, optionsOfTheLoginAttemptsLimit.PermitLimit);
-        Assert.Equal(TimeSpan.FromMinutes(1), optionsOfTheLoginAttemptsLimit.Window);
+        Assert.Equal(10, loginLimit.PermitLimit);
+        Assert.Equal(TimeSpan.FromMinutes(1), loginLimit.Window);
     }
 
     // --- Entrées hostiles
 
     // Envoie un texte JSON écrit à la main sur la route de connexion.
-    private static async Task<HttpResponseMessage> SendRawJsonToTheLoginEndpointAsync(HttpClient clientThatCallsTheApiInMemory, string rawJsonSentByTheTest)
+    private static async Task<HttpResponseMessage> SendRawLoginJsonAsync(HttpClient client, string rawJson)
     {
-        return await clientThatCallsTheApiInMemory.PostAsync(AddressOfTheAccountLoginEndpoint, new StringContent(rawJsonSentByTheTest, Encoding.UTF8, "application/json"));
+        return await client.PostAsync(LoginEndpoint, new StringContent(rawJson, Encoding.UTF8, "application/json"));
     }
 
     // Aucune de ces valeurs ne doit provoquer d'erreur 500 : le visiteur reçoit le refus normal.
@@ -284,15 +281,15 @@ public class AccountLoginEndpointTests
     [InlineData("""{"email":"nul\u0000@exemple.test","password":"Mot-De-Passe-Valide-1"}""")] // caractère nul, refusé par PostgreSQL
     [InlineData("""{"email":"utilisateur@exemple.test\n","password":"Abc-Mauvais-1"}""")]     // retour à la ligne
     [InlineData("""{"email":"' OR 1=1 --@exemple.test","password":"' OR 1=1 --"}""")]         // injection SQL
-    public async Task HostileValuesGetTheNormalRefusal(string rawJsonSentByTheTest)
+    public async Task HostileValuesGetTheNormalRefusal(string rawJson)
     {
-        using var apiStartedInMemoryForThisTest = new ApiFactoryWithFakeRepositoryAndEmails();
-        AddAccountToTheFakeRepositoryOfTheApi(apiStartedInMemoryForThisTest);
-        var clientThatKeepsTheCookiesOfTheBrowser = CreateClientThatKeepsCookiesLikeABrowser(apiStartedInMemoryForThisTest);
+        using var api = new ApiFactoryWithFakes();
+        await AddAccountAsync(api);
+        var browserClient = CreateBrowserClient(api);
 
-        var answerToTheRequestWithHostileValues = await SendRawJsonToTheLoginEndpointAsync(clientThatKeepsTheCookiesOfTheBrowser, rawJsonSentByTheTest);
+        var response = await SendRawLoginJsonAsync(browserClient, rawJson);
 
-        await CheckThatAnswerIsProblemWithThisExactTitleAsync(answerToTheRequestWithHostileValues, HttpStatusCode.Unauthorized, "Identifiants incorrects");
+        await AssertProblemTitleAsync(response, HttpStatusCode.Unauthorized, "Identifiants incorrects");
     }
 
     // Le lecteur JSON de .NET refuse une moitié d'emoji : elle n'arrive donc jamais jusqu'aux règles du mot de passe.
@@ -300,15 +297,15 @@ public class AccountLoginEndpointTests
     [InlineData("""{"email":"utilisateur@exemple.test","password":"Abc\ud800"}""")]
     [InlineData("""{"email":"utilisateur@exemple.test","password":"Abc\udc00"}""")]
     [InlineData("""{"email":"utilisateur\ud800@exemple.test","password":"Abc"}""")]
-    public async Task HalfOfAnEmojiIsRefusedAsUnreadableRequest(string rawJsonSentByTheTest)
+    public async Task HalfOfAnEmojiIsRefusedAsUnreadableRequest(string rawJson)
     {
-        using var apiStartedInMemoryForThisTest = new ApiFactoryWithFakeRepositoryAndEmails();
-        var clientThatKeepsTheCookiesOfTheBrowser = CreateClientThatKeepsCookiesLikeABrowser(apiStartedInMemoryForThisTest);
+        using var api = new ApiFactoryWithFakes();
+        var browserClient = CreateBrowserClient(api);
 
-        var answerToTheRequestWithHostileValues = await SendRawJsonToTheLoginEndpointAsync(clientThatKeepsTheCookiesOfTheBrowser, rawJsonSentByTheTest);
+        var response = await SendRawLoginJsonAsync(browserClient, rawJson);
 
-        await CheckThatAnswerIsProblemWithThisExactTitleAsync(answerToTheRequestWithHostileValues, HttpStatusCode.BadRequest, ApiErrorConfiguration.TitleOfEveryRefusedRequestAnswer);
-        Assert.DoesNotContain("ud800", await answerToTheRequestWithHostileValues.Content.ReadAsStringAsync());
+        await AssertProblemTitleAsync(response, HttpStatusCode.BadRequest, ApiErrorConfiguration.RefusedRequestTitle);
+        Assert.DoesNotContain("ud800", await response.Content.ReadAsStringAsync());
     }
 
     // Les champs manquants donnent des messages en français, sans nom interne du code.
@@ -317,17 +314,17 @@ public class AccountLoginEndpointTests
     [InlineData("""{"email":"utilisateur@exemple.test"}""", "Password", "Le mot de passe est obligatoire.")]
     [InlineData("""{"email":null,"password":"Mot-De-Passe-Valide-1"}""", "Email", "L'adresse e-mail est obligatoire.")]
     [InlineData("""{"email":"utilisateur@exemple.test","password":""}""", "Password", "Le mot de passe est obligatoire.")]
-    public async Task MissingFieldIsRefusedWithItsFrenchMessage(string rawJsonSentByTheTest, string nameOfTheFieldInError, string messageExpectedForTheRefusedField)
+    public async Task MissingFieldIsRefusedWithItsFrenchMessage(string rawJson, string fieldName, string message)
     {
-        using var apiStartedInMemoryForThisTest = new ApiFactoryWithFakeRepositoryAndEmails();
-        var clientThatKeepsTheCookiesOfTheBrowser = CreateClientThatKeepsCookiesLikeABrowser(apiStartedInMemoryForThisTest);
+        using var api = new ApiFactoryWithFakes();
+        var browserClient = CreateBrowserClient(api);
 
-        var answerToTheRequestOfThisTest = await SendRawJsonToTheLoginEndpointAsync(clientThatKeepsTheCookiesOfTheBrowser, rawJsonSentByTheTest);
+        var response = await SendRawLoginJsonAsync(browserClient, rawJson);
 
-        Assert.Equal(HttpStatusCode.BadRequest, answerToTheRequestOfThisTest.StatusCode);
-        var jsonDocumentOfTheApiAnswer = JsonDocument.Parse(await answerToTheRequestOfThisTest.Content.ReadAsStringAsync());
-        Assert.Equal(messageExpectedForTheRefusedField, jsonDocumentOfTheApiAnswer.RootElement.GetProperty("errors").GetProperty(nameOfTheFieldInError)[0].GetString());
-        Assert.Empty(apiStartedInMemoryForThisTest.RepositoryThatKeepsSecurityEventsInMemory.SavedSecurityEvents);
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var jsonDocument = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.Equal(message, jsonDocument.RootElement.GetProperty("errors").GetProperty(fieldName)[0].GetString());
+        Assert.Empty(api.SecurityEventRepository.SavedSecurityEvents);
     }
 
     [Theory]
@@ -336,89 +333,89 @@ public class AccountLoginEndpointTests
     [InlineData("null")]
     [InlineData("")]
     [InlineData("""{"email":12,"password":34}""")]
-    public async Task UnreadableBodyIsRefusedWithoutAnyInternalName(string rawJsonSentByTheTest)
+    public async Task UnreadableBodyIsRefusedWithoutAnyInternalName(string rawJson)
     {
-        using var apiStartedInMemoryForThisTest = new ApiFactoryWithFakeRepositoryAndEmails();
-        var clientThatKeepsTheCookiesOfTheBrowser = CreateClientThatKeepsCookiesLikeABrowser(apiStartedInMemoryForThisTest);
+        using var api = new ApiFactoryWithFakes();
+        var browserClient = CreateBrowserClient(api);
 
-        var answerToTheRequestOfThisTest = await SendRawJsonToTheLoginEndpointAsync(clientThatKeepsTheCookiesOfTheBrowser, rawJsonSentByTheTest);
+        var response = await SendRawLoginJsonAsync(browserClient, rawJson);
 
-        Assert.Equal(HttpStatusCode.BadRequest, answerToTheRequestOfThisTest.StatusCode);
-        var textOfTheApiAnswerToCheck = await answerToTheRequestOfThisTest.Content.ReadAsStringAsync();
-        Assert.DoesNotContain(nameof(LoginRequest), textOfTheApiAnswerToCheck);
-        Assert.DoesNotContain("requestSentByTheVisitor", textOfTheApiAnswerToCheck);
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var responseText = await response.Content.ReadAsStringAsync();
+        Assert.DoesNotContain(nameof(LoginRequest), responseText);
+        Assert.DoesNotContain("requestSentByTheVisitor", responseText);
     }
 
     // Un site piégé ne peut envoyer qu'un formulaire ou du texte sans demander d'autorisation : ils sont refusés (SS §6).
     [Theory]
     [InlineData("text/plain")]
     [InlineData("application/x-www-form-urlencoded")]
-    public async Task ContentTypesThatATrappedWebsiteCanSendAreRefused(string contentTypeSentByTheTrappedWebsite)
+    public async Task ContentTypesThatATrappedWebsiteCanSendAreRefused(string contentType)
     {
-        using var apiStartedInMemoryForThisTest = new ApiFactoryWithFakeRepositoryAndEmails();
-        AddAccountToTheFakeRepositoryOfTheApi(apiStartedInMemoryForThisTest);
-        var clientThatKeepsTheCookiesOfTheBrowser = CreateClientThatKeepsCookiesLikeABrowser(apiStartedInMemoryForThisTest);
-        var bodySentByTheTrappedWebsite = new StringContent("""{"email":"utilisateur@exemple.test","password":"Mot-De-Passe-Valide-1"}""", Encoding.UTF8, contentTypeSentByTheTrappedWebsite);
+        using var api = new ApiFactoryWithFakes();
+        await AddAccountAsync(api);
+        var browserClient = CreateBrowserClient(api);
+        var body = new StringContent("""{"email":"utilisateur@exemple.test","password":"Mot-De-Passe-Valide-1"}""", Encoding.UTF8, contentType);
 
-        var answerGivenToTheTrappedWebsite = await clientThatKeepsTheCookiesOfTheBrowser.PostAsync(AddressOfTheAccountLoginEndpoint, bodySentByTheTrappedWebsite);
+        var response = await browserClient.PostAsync(LoginEndpoint, body);
 
-        Assert.Equal(HttpStatusCode.UnsupportedMediaType, answerGivenToTheTrappedWebsite.StatusCode);
-        Assert.Empty(apiStartedInMemoryForThisTest.RepositoryThatKeepsSessionsInMemory.SavedSessions);
+        Assert.Equal(HttpStatusCode.UnsupportedMediaType, response.StatusCode);
+        Assert.Empty(api.SessionRepository.SavedSessions);
     }
 
     // Le troisième type de formulaire qu'un site piégé peut envoyer sans demander d'autorisation.
     [Fact]
     public async Task MultipartFormOfATrappedWebsiteIsRefused()
     {
-        using var apiStartedInMemoryForThisTest = new ApiFactoryWithFakeRepositoryAndEmails();
-        AddAccountToTheFakeRepositoryOfTheApi(apiStartedInMemoryForThisTest);
-        var clientThatKeepsTheCookiesOfTheBrowser = CreateClientThatKeepsCookiesLikeABrowser(apiStartedInMemoryForThisTest);
-        var formSentByTheTrappedWebsite = new MultipartFormDataContent
+        using var api = new ApiFactoryWithFakes();
+        await AddAccountAsync(api);
+        var browserClient = CreateBrowserClient(api);
+        var form = new MultipartFormDataContent
         {
-            { new StringContent(EmailAddressOfTheLoginTests), "email" },
-            { new StringContent(ValidPasswordChosenInTheseTests), "password" }
+            { new StringContent(Email), "email" },
+            { new StringContent(ValidPassword), "password" }
         };
 
-        var answerGivenToTheTrappedWebsite = await clientThatKeepsTheCookiesOfTheBrowser.PostAsync(AddressOfTheAccountLoginEndpoint, formSentByTheTrappedWebsite);
+        var response = await browserClient.PostAsync(LoginEndpoint, form);
 
-        Assert.Equal(HttpStatusCode.UnsupportedMediaType, answerGivenToTheTrappedWebsite.StatusCode);
-        Assert.Empty(apiStartedInMemoryForThisTest.RepositoryThatKeepsSessionsInMemory.SavedSessions);
+        Assert.Equal(HttpStatusCode.UnsupportedMediaType, response.StatusCode);
+        Assert.Empty(api.SessionRepository.SavedSessions);
     }
 
     // Seuls l'adresse et le mot de passe sont lus : un champ ajouté ne change rien (SS §4).
     [Fact]
     public async Task ExtraFieldsInTheRequestAreIgnored()
     {
-        using var apiStartedInMemoryForThisTest = new ApiFactoryWithFakeRepositoryAndEmails();
-        var accountUsedByThisLoginTest = AddAccountToTheFakeRepositoryOfTheApi(apiStartedInMemoryForThisTest);
-        var clientThatKeepsTheCookiesOfTheBrowser = CreateClientThatKeepsCookiesLikeABrowser(apiStartedInMemoryForThisTest);
+        using var api = new ApiFactoryWithFakes();
+        var account = await AddAccountAsync(api);
+        var browserClient = CreateBrowserClient(api);
 
-        var answerToTheRequestOfThisTest = await clientThatKeepsTheCookiesOfTheBrowser.PostAsJsonAsync(AddressOfTheAccountLoginEndpoint, new
+        var response = await browserClient.PostAsJsonAsync(LoginEndpoint, new
         {
-            email = EmailAddressOfTheLoginTests,
-            password = ValidPasswordChosenInTheseTests,
+            email = Email,
+            password = ValidPassword,
             role = "administrateur",
             userId = Guid.NewGuid(),
             failedLoginAttemptCount = 0
         });
 
-        Assert.Equal(HttpStatusCode.OK, answerToTheRequestOfThisTest.StatusCode);
-        Assert.Equal(UserRole.User, accountUsedByThisLoginTest.Role);
-        Assert.Equal(accountUsedByThisLoginTest.Id, Assert.Single(apiStartedInMemoryForThisTest.RepositoryThatKeepsSessionsInMemory.SavedSessions).UserId);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(UserRole.User, account.Role);
+        Assert.Equal(account.Id, Assert.Single(api.SessionRepository.SavedSessions).UserId);
     }
 
     // Un cookie de session invalide ne doit pas empêcher de se connecter.
     [Fact]
     public async Task JunkSessionCookieDoesNotPreventTheLogin()
     {
-        using var apiStartedInMemoryForThisTest = new ApiFactoryWithFakeRepositoryAndEmails();
-        AddAccountToTheFakeRepositoryOfTheApi(apiStartedInMemoryForThisTest);
-        var clientThatSendsAJunkCookie = CreateClientThatOnlySendsHandwrittenCookies(apiStartedInMemoryForThisTest, "__Host-walletflow-session=faux; __Host-walletflow-device=faux");
+        using var api = new ApiFactoryWithFakes();
+        await AddAccountAsync(api);
+        var client = CreateClientWithManualCookies(api, "__Host-walletflow-session=faux; __Host-walletflow-device=faux");
 
-        var answerToTheVisitorLoginRequest = await SendLoginRequestToTheApiAsync(clientThatSendsAJunkCookie);
+        var response = await SendLoginRequestAsync(client);
 
-        Assert.Equal(HttpStatusCode.OK, answerToTheVisitorLoginRequest.StatusCode);
-        Assert.NotEqual("faux", FindCookieWrittenByTheAnswer(answerToTheVisitorLoginRequest, "__Host-walletflow-device")!.Value.ToString());
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.NotEqual("faux", FindCookie(response, "__Host-walletflow-device")!.Value.ToString());
     }
 
     // --- Journal technique
@@ -427,22 +424,22 @@ public class AccountLoginEndpointTests
     [Fact]
     public async Task TechnicalLogNeverContainsTheSecretsOfTheLogin()
     {
-        using var apiWithTheMostDetailedLog = new ApiFactoryLoggingEverything();
-        AddAccountToTheFakeRepositoryOfTheApi(apiWithTheMostDetailedLog);
-        var clientThatKeepsTheCookiesOfTheBrowser = CreateClientThatKeepsCookiesLikeABrowser(apiWithTheMostDetailedLog);
+        using var api = new ApiFactoryLoggingEverything();
+        await AddAccountAsync(api);
+        var browserClient = CreateBrowserClient(api);
 
-        await SendLoginRequestToTheApiAsync(clientThatKeepsTheCookiesOfTheBrowser, EmailAddressOfTheLoginTests, WrongPasswordTypedInTheLoginTests);
-        var answerToTheVisitorLoginRequest = await SendLoginRequestToTheApiAsync(clientThatKeepsTheCookiesOfTheBrowser);
-        var csrfTokenOfTheLoggedInUser = await AskForTheCsrfTokenOfTheLoggedInUserAsync(clientThatKeepsTheCookiesOfTheBrowser);
-        await SendLogoutRequestWithThisCsrfTokenAsync(clientThatKeepsTheCookiesOfTheBrowser, csrfTokenOfTheLoggedInUser);
+        await SendLoginRequestAsync(browserClient, Email, WrongPassword);
+        var response = await SendLoginRequestAsync(browserClient);
+        var csrfToken = await GetCsrfTokenAsync(browserClient);
+        await SendLogoutRequestAsync(browserClient, csrfToken);
 
-        var textOfTheWholeTechnicalLog = string.Join("\n", apiWithTheMostDetailedLog.LoggerThatKeepsTheMessagesInMemory.MessagesWrittenInTheLog);
-        Assert.NotEmpty(textOfTheWholeTechnicalLog);
-        Assert.DoesNotContain(EmailAddressOfTheLoginTests, textOfTheWholeTechnicalLog);
-        Assert.DoesNotContain(ValidPasswordChosenInTheseTests, textOfTheWholeTechnicalLog);
-        Assert.DoesNotContain(WrongPasswordTypedInTheLoginTests, textOfTheWholeTechnicalLog);
-        Assert.DoesNotContain(FindCookieWrittenByTheAnswer(answerToTheVisitorLoginRequest, "__Host-walletflow-session")!.Value.ToString(), textOfTheWholeTechnicalLog);
-        Assert.DoesNotContain(FindCookieWrittenByTheAnswer(answerToTheVisitorLoginRequest, "__Host-walletflow-device")!.Value.ToString(), textOfTheWholeTechnicalLog);
-        Assert.DoesNotContain(csrfTokenOfTheLoggedInUser, textOfTheWholeTechnicalLog);
+        var logText = string.Join("\n", api.LoggerProvider.Messages);
+        Assert.NotEmpty(logText);
+        Assert.DoesNotContain(Email, logText);
+        Assert.DoesNotContain(ValidPassword, logText);
+        Assert.DoesNotContain(WrongPassword, logText);
+        Assert.DoesNotContain(FindCookie(response, "__Host-walletflow-session")!.Value.ToString(), logText);
+        Assert.DoesNotContain(FindCookie(response, "__Host-walletflow-device")!.Value.ToString(), logText);
+        Assert.DoesNotContain(csrfToken, logText);
     }
 }

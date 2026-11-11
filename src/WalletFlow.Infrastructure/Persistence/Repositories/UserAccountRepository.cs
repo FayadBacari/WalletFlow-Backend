@@ -6,182 +6,151 @@ using WalletFlow.Domain.UsersAndSecurity;
 
 namespace WalletFlow.Infrastructure.Persistence.Repositories;
 
-// Lit et écrit les comptes des utilisateurs dans la base PostgreSQL.
+// Lit et écrit les comptes des utilisateurs et leurs liens dans la base PostgreSQL.
+// Les objets lus ici sont suivis par EF Core : l'unité de travail enregistre ce que leurs règles ont changé (voir IDatabaseUnitOfWork).
 public class UserAccountRepository : IUserAccountRepository
 {
     // Nom donné par PostgreSQL à la contrainte UNIQUE de la colonne email_utilisateur.
-    private const string NameOfTheEmailAddressUniqueConstraint = "utilisateur_email_utilisateur_key";
+    private const string EmailUniqueConstraint = "utilisateur_email_utilisateur_key";
 
-    private readonly WalletFlowDatabaseContext databaseContextOfTheCurrentHttpRequest;
+    private readonly WalletFlowDatabaseContext databaseContext;
 
     // Reçoit l'accès à la base de la requête en cours.
-    public UserAccountRepository(WalletFlowDatabaseContext databaseContextOfTheCurrentHttpRequest)
+    public UserAccountRepository(WalletFlowDatabaseContext databaseContext)
     {
-        this.databaseContextOfTheCurrentHttpRequest = databaseContextOfTheCurrentHttpRequest;
+        this.databaseContext = databaseContext;
     }
 
     // Cherche le compte qui utilise cette adresse e-mail. Renvoie null s'il n'y en a pas.
-    public async Task<User?> FindUserAccountByEmailAddressAsync(string emailAddressInItsStoredForm)
+    public async Task<User?> FindByEmailAsync(string email)
     {
-        return await databaseContextOfTheCurrentHttpRequest.Users.SingleOrDefaultAsync(userAlreadySavedInTheDatabase =>
-            userAlreadySavedInTheDatabase.Email == emailAddressInItsStoredForm);
+        return await databaseContext.Users.SingleOrDefaultAsync(user =>
+            user.Email == email);
     }
 
     // Cherche un compte par son identifiant. Renvoie null s'il n'existe plus.
-    public async Task<User?> FindUserAccountByIdentifierAsync(Guid identifierOfTheUserAccountToFind)
+    public async Task<User?> FindByIdAsync(Guid accountId)
     {
-        return await databaseContextOfTheCurrentHttpRequest.Users.SingleOrDefaultAsync(userAlreadySavedInTheDatabase =>
-            userAlreadySavedInTheDatabase.Id == identifierOfTheUserAccountToFind);
+        return await databaseContext.Users.SingleOrDefaultAsync(user =>
+            user.Id == accountId);
     }
 
     // Cherche un jeton de ce type par son empreinte. Renvoie null s'il n'existe pas : un lien ne sert jamais à un autre usage.
-    public async Task<EmailToken?> FindEmailTokenOfThisTypeByItsHashAsync(string hashOfTheTokenFromTheLink, EmailTokenType typeOfTheTokenToFindNow)
+    public async Task<EmailToken?> FindTokenAsync(string tokenHash, EmailTokenType tokenType)
     {
-        return await databaseContextOfTheCurrentHttpRequest.EmailTokens.SingleOrDefaultAsync(tokenAlreadySavedInTheDatabase =>
-            tokenAlreadySavedInTheDatabase.TokenHash == hashOfTheTokenFromTheLink
-            && tokenAlreadySavedInTheDatabase.Type == typeOfTheTokenToFindNow);
+        return await databaseContext.EmailTokens.SingleOrDefaultAsync(token =>
+            token.TokenHash == tokenHash
+            && token.Type == tokenType);
     }
 
     // Efface l'ancien jeton du même type et du même compte, puis enregistre le nouveau : l'ancien lien ne marche plus (SS §2),
     // et il ne reste jamais qu'un jeton par type et par compte. L'effacement est direct : un clic sur l'ancien lien au même instant
-    // ne peut pas le faire échouer. Une panne entre les deux écritures laisse le compte sans lien : il suffit d'en redemander un.
-    public async Task ReplaceEmailTokenOfThisTypeForThisAccountAsync(EmailToken newEmailTokenOfTheAccount)
+    // ne peut pas le faire échouer. Les deux écritures forment une seule transaction SQL : si l'enregistrement du nouveau jeton
+    // échoue, l'ancien n'est pas effacé, et le compte n'est jamais laissé sans lien. Cette écriture est immédiate :
+    // elle refuse de partir si des changements attendent l'unité de travail, pour ne jamais les emporter avec elle.
+    public async Task ReplaceTokenAsync(EmailToken newToken)
     {
-        await databaseContextOfTheCurrentHttpRequest.EmailTokens
-            .Where(tokenAlreadySavedInTheDatabase =>
-                tokenAlreadySavedInTheDatabase.UserId == newEmailTokenOfTheAccount.UserId
-                && tokenAlreadySavedInTheDatabase.Type == newEmailTokenOfTheAccount.Type)
+        databaseContext.ThrowIfChangesArePending();
+
+        // Une transaction déjà ouverte par l'appelant couvre les deux écritures : EF Core refuse d'en ouvrir une seconde.
+        if (databaseContext.Database.CurrentTransaction != null)
+        {
+            await DeleteOldThenAddTokenAsync(newToken);
+            return;
+        }
+
+        await using var transaction = await databaseContext.Database.BeginTransactionAsync();
+        await DeleteOldThenAddTokenAsync(newToken);
+        await transaction.CommitAsync();
+    }
+
+    // Efface l'ancien jeton du même type et du même compte, puis enregistre le nouveau, dans la transaction en cours.
+    private async Task DeleteOldThenAddTokenAsync(EmailToken newToken)
+    {
+        await databaseContext.EmailTokens
+            .Where(token =>
+                token.UserId == newToken.UserId
+                && token.Type == newToken.Type)
             .ExecuteDeleteAsync();
 
-        databaseContextOfTheCurrentHttpRequest.EmailTokens.Add(newEmailTokenOfTheAccount);
+        databaseContext.EmailTokens.Add(newToken);
 
-        await databaseContextOfTheCurrentHttpRequest.SaveChangesAsync();
-    }
-
-    // Enregistre le nouveau mot de passe, le compte débloqué, le jeton utilisé et l'événement du journal, en une seule transaction SQL.
-    // Les contrôles sur le mot de passe et sur le jeton renvoient faux si une autre requête vient de les changer.
-    public async Task<bool> TryToSaveNewPasswordAndUseItsTokenAsync(
-        User accountThatReceivesTheNewPassword,
-        EmailToken tokenUsedToChangeThePassword,
-        string secureHashOfTheNewPassword,
-        DateTime dateOfThePasswordChangeOfTheAccount,
-        SecurityEvent securityEventOfThePasswordChange)
-    {
-        accountThatReceivesTheNewPassword.PasswordHash = secureHashOfTheNewPassword;
-        tokenUsedToChangeThePassword.UsedAt = dateOfThePasswordChangeOfTheAccount;
-        databaseContextOfTheCurrentHttpRequest.SecurityEvents.Add(securityEventOfThePasswordChange);
-
-        return await databaseContextOfTheCurrentHttpRequest.TryToSaveChangesUnlessAnotherRequestChangedTheSameRowsAsync();
-    }
-
-    // Enregistre le compte débloqué, le jeton utilisé et l'événement du journal, en une seule transaction SQL.
-    // EF Core suit le compte depuis sa lecture, et n'écrit que les compteurs qui ont changé.
-    // Le contrôle sur le jeton renvoie faux si le lien vient de servir ou d'être remplacé.
-    public async Task<bool> TryToUnlockAccountAndUseItsTokenAsync(
-        User accountJustUnlockedByTheLink,
-        EmailToken tokenUsedToUnlockTheAccount,
-        DateTime dateOfTheAccountUnlockByTheLink,
-        SecurityEvent securityEventOfTheAccountUnlock)
-    {
-        tokenUsedToUnlockTheAccount.UsedAt = dateOfTheAccountUnlockByTheLink;
-        databaseContextOfTheCurrentHttpRequest.SecurityEvents.Add(securityEventOfTheAccountUnlock);
-
-        return await databaseContextOfTheCurrentHttpRequest.TryToSaveChangesUnlessAnotherRequestChangedTheSameRowsAsync();
+        await databaseContext.SaveChangesAsync();
     }
 
     // Enregistre le nouvel utilisateur, ses catégories et son jeton en une seule transaction SQL :
     // SaveChangesAsync enregistre tout, ou rien (MPD §3).
     // Renvoie faux si une autre inscription vient de prendre la même adresse.
-    public async Task<bool> TryToSaveNewAccountWithCategoriesAndTokenAsync(
-        User newUserToRegisterInTheDatabase,
-        List<Category> defaultCategoriesOfTheNewUser,
-        EmailToken signupConfirmationTokenOfTheNewUser)
+    public async Task<bool> TryAddAccountAsync(
+        User newAccount,
+        List<Category> categories,
+        EmailToken confirmationToken)
     {
-        databaseContextOfTheCurrentHttpRequest.Users.Add(newUserToRegisterInTheDatabase);
-        databaseContextOfTheCurrentHttpRequest.Categories.AddRange(defaultCategoriesOfTheNewUser);
-        databaseContextOfTheCurrentHttpRequest.EmailTokens.Add(signupConfirmationTokenOfTheNewUser);
+        databaseContext.Users.Add(newAccount);
+        databaseContext.Categories.AddRange(categories);
+        databaseContext.EmailTokens.Add(confirmationToken);
 
         try
         {
-            await databaseContextOfTheCurrentHttpRequest.SaveChangesAsync();
+            await databaseContext.SaveChangesAsync();
             return true;
         }
-        catch (DbUpdateException exceptionRaisedWhileSavingTheNewAccount)
+        catch (DbUpdateException exception)
         {
-            if (!CheckThatExceptionComesFromTheEmailAddressConstraint(exceptionRaisedWhileSavingTheNewAccount))
+            if (!IsEmailUniqueViolation(exception))
             {
                 throw;
             }
 
-            databaseContextOfTheCurrentHttpRequest.ChangeTracker.Clear();
+            databaseContext.ChangeTracker.Clear();
             return false;
         }
     }
 
-    // Remplace le mot de passe et le lien d'un compte non confirmé, en une seule transaction SQL.
-    // Renvoie faux si le compte vient d'être confirmé ou effacé : le contrôle sur email_confirme
-    // empêche alors de remplacer le mot de passe d'un compte déjà actif.
-    public async Task<bool> TryToReplacePasswordAndTokenOfUnconfirmedAccountAsync(
-        User unconfirmedAccountToUpdateInTheDatabase,
-        string newSecureHashOfThePassword,
-        EmailToken newSignupConfirmationTokenOfTheAccount)
+    // Prépare le remplacement du lien de confirmation d'un compte : ses anciens liens de confirmation seront effacés, et le nouveau enregistré.
+    // EF Core suit les anciens liens : si l'un d'eux vient de servir à confirmer le compte, l'enregistrement échoue.
+    public async Task PrepareConfirmationTokenReplacementAsync(EmailToken newToken)
     {
-        var oldTokensOfTheUnconfirmedAccount = await databaseContextOfTheCurrentHttpRequest.EmailTokens
-            .Where(tokenAlreadySavedInTheDatabase =>
-                tokenAlreadySavedInTheDatabase.UserId == unconfirmedAccountToUpdateInTheDatabase.Id
-                && tokenAlreadySavedInTheDatabase.Type == EmailTokenType.SignupConfirmation)
+        var oldTokens = await databaseContext.EmailTokens
+            .Where(token =>
+                token.UserId == newToken.UserId
+                && token.Type == EmailTokenType.SignupConfirmation)
             .ToListAsync();
 
-        unconfirmedAccountToUpdateInTheDatabase.PasswordHash = newSecureHashOfThePassword;
-        databaseContextOfTheCurrentHttpRequest.EmailTokens.RemoveRange(oldTokensOfTheUnconfirmedAccount);
-        databaseContextOfTheCurrentHttpRequest.EmailTokens.Add(newSignupConfirmationTokenOfTheAccount);
-
-        return await databaseContextOfTheCurrentHttpRequest.TryToSaveChangesUnlessAnotherRequestChangedTheSameRowsAsync();
+        databaseContext.EmailTokens.RemoveRange(oldTokens);
+        databaseContext.EmailTokens.Add(newToken);
     }
 
-    // Confirme le compte et marque son jeton comme utilisé, en une seule transaction SQL.
-    // Renvoie faux si le compte ou le jeton vient de changer : rien n'est alors modifié.
-    public async Task<bool> TryToConfirmAccountAndUseItsTokenAsync(
-        User accountToConfirmInTheDatabase,
-        EmailToken tokenUsedToConfirmTheAccount,
-        DateTime dateOfTheConfirmationOfTheAccount)
+    // Le compte sera écrit même si rien n'y a changé : cette écriture contrôle en base la version de la ligne,
+    // et elle échoue si une autre requête a changé le compte depuis sa lecture. EF Core n'écrit une ligne que si une colonne
+    // a changé : le compteur d'essais est donc réécrit avec sa propre valeur.
+    public void PrepareUnchangedCheck(User account)
     {
-        accountToConfirmInTheDatabase.IsEmailConfirmed = true;
-        tokenUsedToConfirmTheAccount.UsedAt = dateOfTheConfirmationOfTheAccount;
-
-        return await databaseContextOfTheCurrentHttpRequest.TryToSaveChangesUnlessAnotherRequestChangedTheSameRowsAsync();
-    }
-
-    // Enregistre les compteurs de connexion du compte : EF Core suit ce compte depuis sa lecture, et n'écrit que ce qui a changé.
-    // Le contrôle sur nb_tentatives_echouees et date_fin_blocage renvoie faux si une autre requête vient de les changer :
-    // aucun essai ne peut donc se perdre, et aucun blocage ne peut être effacé.
-    public async Task<bool> TryToSaveLoginCountersOfThisAccountAsync(User accountWithItsNewLoginCounters)
-    {
-        return await databaseContextOfTheCurrentHttpRequest.TryToSaveChangesUnlessAnotherRequestChangedTheSameRowsAsync();
+        databaseContext.Entry(account).Property(nameof(User.FailedLoginAttemptCount)).IsModified = true;
     }
 
     // Efface les comptes non confirmés qui n'ont plus aucun lien valable, et renvoie leur nombre.
     // Leurs catégories et leurs jetons partent avec eux (ON DELETE CASCADE).
-    public async Task<int> DeleteUnconfirmedAccountsWithExpiredLinkAsync(DateTime currentDateUsedForTheCleanup)
+    public async Task<int> DeleteExpiredUnconfirmedAccountsAsync(DateTime now)
     {
-        return await databaseContextOfTheCurrentHttpRequest.Users
-            .Where(userAlreadySavedInTheDatabase =>
-                !userAlreadySavedInTheDatabase.IsEmailConfirmed
-                && !databaseContextOfTheCurrentHttpRequest.EmailTokens.Any(tokenAlreadySavedInTheDatabase =>
-                    tokenAlreadySavedInTheDatabase.UserId == userAlreadySavedInTheDatabase.Id
-                    && tokenAlreadySavedInTheDatabase.Type == EmailTokenType.SignupConfirmation
-                    && tokenAlreadySavedInTheDatabase.ExpiresAt > currentDateUsedForTheCleanup))
+        return await databaseContext.Users
+            .Where(user =>
+                !user.IsEmailConfirmed
+                && !databaseContext.EmailTokens.Any(token =>
+                    token.UserId == user.Id
+                    && token.Type == EmailTokenType.SignupConfirmation
+                    && token.ExpiresAt > now))
             .ExecuteDeleteAsync();
     }
 
     // Renvoie vrai si l'erreur vient de la contrainte d'unicité de l'adresse e-mail.
-    private static bool CheckThatExceptionComesFromTheEmailAddressConstraint(DbUpdateException exceptionRaisedWhileSavingTheNewAccount)
+    private static bool IsEmailUniqueViolation(DbUpdateException exception)
     {
-        if (exceptionRaisedWhileSavingTheNewAccount.InnerException is not PostgresException errorReturnedByTheDatabaseServer)
+        if (exception.InnerException is not PostgresException postgresException)
         {
             return false;
         }
 
-        return errorReturnedByTheDatabaseServer.ConstraintName == NameOfTheEmailAddressUniqueConstraint;
+        return postgresException.ConstraintName == EmailUniqueConstraint;
     }
 }

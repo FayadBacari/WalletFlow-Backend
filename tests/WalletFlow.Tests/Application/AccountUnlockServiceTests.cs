@@ -1,5 +1,7 @@
 using System.Net;
 using WalletFlow.Application.AccountRecovery;
+using WalletFlow.Application.Persistence;
+using WalletFlow.Application.Security;
 using WalletFlow.Domain.UsersAndSecurity;
 using WalletFlow.Tests.Fakes;
 
@@ -8,134 +10,138 @@ namespace WalletFlow.Tests.Application;
 // Vérifie le déblocage avec le lien reçu (GR Auth, SS §2 et §11), avec de faux outils.
 public class AccountUnlockServiceTests
 {
-    private const string TokenOfTheUnlockLinkInTheseTests = FakeSecureTokenGenerator.TokenAlwaysReturnedByThisFakeGenerator;
+    private const string LinkToken = FakeSecureTokenGenerator.FixedToken;
 
-    private static readonly IPAddress IpAddressOfTheVisitorInTheseTests = IPAddress.Parse("203.0.113.7");
+    private static readonly IPAddress IpAddress = IPAddress.Parse("203.0.113.7");
 
-    private readonly FakeUserAccountRepository repositoryThatKeepsAccountsInMemory = new FakeUserAccountRepository();
-    private readonly FakeTimeProviderForTests clockThatOnlyMovesWhenTestsAskIt = new FakeTimeProviderForTests();
+    private readonly FakeUserAccountRepository accountRepository = new FakeUserAccountRepository();
+    private readonly FakeSecurityEventRepository securityEventRepository = new FakeSecurityEventRepository();
+    private readonly FakeTimeProvider clock = new FakeTimeProvider();
 
     // Crée le service à tester, avec ses faux outils.
-    private AccountUnlockService CreateAccountUnlockServiceWithFakeTools()
+    private AccountUnlockService CreateUnlockService()
     {
-        return new AccountUnlockService(repositoryThatKeepsAccountsInMemory, new FakeSecureTokenGenerator(), clockThatOnlyMovesWhenTestsAskIt);
+        return new AccountUnlockService(
+            accountRepository,
+            new DatabaseChangesSavingService(new FakeDatabaseUnitOfWork(accountRepository, securityEventRepository)),
+            new SecurityJournalService(securityEventRepository, clock),
+            new FakeSecureTokenGenerator(),
+            clock);
     }
 
     // Ajoute à la fausse base un compte bloqué, avec son lien de déblocage valable 1 heure.
-    private User AddLockedAccountWithItsUnlockLinkToTheFakeDatabase(EmailTokenType typeOfTheLinkOfTheAccount = EmailTokenType.AccountUnlock)
+    private User AddLockedAccountWithUnlockLink(EmailTokenType linkType = EmailTokenType.AccountUnlock, DateTime? lockoutEndsAt = null)
     {
-        var accountAddedToTheFakeDatabase = new User
+        var account = new User
         {
             Email = "utilisateur@exemple.test",
             IsEmailConfirmed = true,
             FailedLoginAttemptCount = 5,
             LockoutCount = 2,
-            LockoutEndsAt = clockThatOnlyMovesWhenTestsAskIt.GetUtcNow().UtcDateTime.AddMinutes(30)
+            LockoutEndsAt = lockoutEndsAt ?? clock.GetUtcNow().UtcDateTime.AddMinutes(30)
         };
-        repositoryThatKeepsAccountsInMemory.SavedUsers.Add(accountAddedToTheFakeDatabase);
-        repositoryThatKeepsAccountsInMemory.SavedEmailTokens.Add(new EmailToken
+        accountRepository.SavedUsers.Add(account);
+        accountRepository.SavedEmailTokens.Add(new EmailToken
         {
-            Type = typeOfTheLinkOfTheAccount,
-            TokenHash = FakeSecureTokenGenerator.HashAlwaysReturnedByThisFakeGenerator,
-            ExpiresAt = clockThatOnlyMovesWhenTestsAskIt.GetUtcNow().UtcDateTime.AddHours(1),
-            UserId = accountAddedToTheFakeDatabase.Id
+            Type = linkType,
+            TokenHash = FakeSecureTokenGenerator.FixedHash,
+            ExpiresAt = clock.GetUtcNow().UtcDateTime.AddHours(1),
+            UserId = account.Id
         });
 
-        return accountAddedToTheFakeDatabase;
+        return account;
     }
 
     // Clique sur le lien de ces tests.
-    private async Task<AccountUnlockResult> UnlockAccountWithTheLinkOfTheseTestsAsync()
+    private async Task<AccountUnlockResult> UnlockAccountAsync()
     {
-        return await CreateAccountUnlockServiceWithFakeTools().UnlockAccountWithLinkTokenAsync(TokenOfTheUnlockLinkInTheseTests, IpAddressOfTheVisitorInTheseTests);
+        return await CreateUnlockService().UnlockAsync(LinkToken, IpAddress);
     }
 
     // Vérifie que le lien a été refusé, et que le compte est resté bloqué, sans trace au journal.
-    private void CheckThatLinkWasRefusedAndTheAccountStaysLocked(AccountUnlockResult resultOfTheAccountUnlockToCheck, User accountThatMustStayLockedInThisTest)
+    private void AssertLinkRefusedAndAccountLocked(AccountUnlockResult result, User account)
     {
-        Assert.False(resultOfTheAccountUnlockToCheck.IsUnlocked);
-        Assert.Equal(AccountUnlockService.ErrorMessageForUnlockLinkNoLongerValid, resultOfTheAccountUnlockToCheck.LinkErrorMessage);
-        Assert.NotNull(accountThatMustStayLockedInThisTest.LockoutEndsAt);
-        Assert.Equal(5, accountThatMustStayLockedInThisTest.FailedLoginAttemptCount);
-        Assert.Empty(repositoryThatKeepsAccountsInMemory.SecurityEventsSavedWithTheLinks);
+        Assert.Equal(AccountUnlockResult.LinkNoLongerValid, result);
+        Assert.NotNull(account.LockoutEndsAt);
+        Assert.Equal(5, account.FailedLoginAttemptCount);
+        Assert.Empty(securityEventRepository.SavedSecurityEvents);
     }
 
     // GR Auth : le lien remet le compteur de tentatives à zéro. Le nombre de blocages ne change pas.
     [Fact]
     public async Task RightLinkEndsTheLockoutAndKeepsTheNumberOfLockouts()
     {
-        var accountBeingTestedInThisUnlock = AddLockedAccountWithItsUnlockLinkToTheFakeDatabase();
+        var account = AddLockedAccountWithUnlockLink();
 
-        var resultOfTheAccountUnlockRequest = await UnlockAccountWithTheLinkOfTheseTestsAsync();
+        var result = await UnlockAccountAsync();
 
-        Assert.True(resultOfTheAccountUnlockRequest.IsUnlocked);
-        Assert.Equal(0, accountBeingTestedInThisUnlock.FailedLoginAttemptCount);
-        Assert.Null(accountBeingTestedInThisUnlock.LockoutEndsAt);
-        Assert.Equal(2, accountBeingTestedInThisUnlock.LockoutCount);
+        Assert.Equal(AccountUnlockResult.AccountUnlocked, result);
+        Assert.Equal(0, account.FailedLoginAttemptCount);
+        Assert.Null(account.LockoutEndsAt);
+        Assert.Equal(2, account.LockoutCount);
     }
 
     [Fact]
     public async Task RightLinkIsUsedOnlyOnceAtTheCurrentDate()
     {
-        AddLockedAccountWithItsUnlockLinkToTheFakeDatabase();
+        AddLockedAccountWithUnlockLink();
 
-        await UnlockAccountWithTheLinkOfTheseTestsAsync();
+        await UnlockAccountAsync();
 
-        Assert.Equal(clockThatOnlyMovesWhenTestsAskIt.GetUtcNow().UtcDateTime, repositoryThatKeepsAccountsInMemory.SavedEmailTokens[0].UsedAt);
+        Assert.Equal(clock.GetUtcNow().UtcDateTime, accountRepository.SavedEmailTokens[0].UsedAt);
 
-        var resultOfTheSecondClickOnTheLink = await UnlockAccountWithTheLinkOfTheseTestsAsync();
-        Assert.Equal(AccountUnlockService.ErrorMessageForUnlockLinkNoLongerValid, resultOfTheSecondClickOnTheLink.LinkErrorMessage);
-        Assert.Single(repositoryThatKeepsAccountsInMemory.SecurityEventsSavedWithTheLinks);
+        var result = await UnlockAccountAsync();
+        Assert.Equal(AccountUnlockResult.LinkNoLongerValid, result);
+        Assert.Single(securityEventRepository.SavedSecurityEvents);
     }
 
     [Fact]
     public async Task SuccessfulUnlockIsWrittenInTheJournalWithItsUserAndIpAddress()
     {
-        var accountBeingTestedInThisUnlock = AddLockedAccountWithItsUnlockLinkToTheFakeDatabase();
+        var account = AddLockedAccountWithUnlockLink();
 
-        await UnlockAccountWithTheLinkOfTheseTestsAsync();
+        await UnlockAccountAsync();
 
-        var securityEventOfTheAccountUnlock = Assert.Single(repositoryThatKeepsAccountsInMemory.SecurityEventsSavedWithTheLinks);
-        Assert.Equal(SecurityEventType.Unlock, securityEventOfTheAccountUnlock.Type);
-        Assert.Equal(SecurityEventResult.Success, securityEventOfTheAccountUnlock.Result);
-        Assert.Equal(accountBeingTestedInThisUnlock.Id, securityEventOfTheAccountUnlock.UserId);
-        Assert.Equal(IpAddressOfTheVisitorInTheseTests, securityEventOfTheAccountUnlock.IpAddress);
-        Assert.Equal(clockThatOnlyMovesWhenTestsAskIt.GetUtcNow().UtcDateTime, securityEventOfTheAccountUnlock.OccurredAt);
+        var securityEvent = Assert.Single(securityEventRepository.SavedSecurityEvents);
+        Assert.Equal(SecurityEventType.Unlock, securityEvent.Type);
+        Assert.Equal(SecurityEventResult.Success, securityEvent.Result);
+        Assert.Equal(account.Id, securityEvent.UserId);
+        Assert.Equal(IpAddress, securityEvent.IpAddress);
+        Assert.Equal(clock.GetUtcNow().UtcDateTime, securityEvent.OccurredAt);
     }
 
     // Le blocage de 15 minutes peut finir avant le clic : le lien reste valable 1 heure, et répond la même chose.
     [Fact]
     public async Task LinkClickedAfterTheEndOfTheLockoutStillAnswersTheSame()
     {
-        var accountBeingTestedInThisUnlock = AddLockedAccountWithItsUnlockLinkToTheFakeDatabase();
-        clockThatOnlyMovesWhenTestsAskIt.MoveFakeClockForwardByThisDuration(TimeSpan.FromMinutes(45));
+        var account = AddLockedAccountWithUnlockLink();
+        clock.Advance(TimeSpan.FromMinutes(45));
 
-        var resultOfTheAccountUnlockRequest = await UnlockAccountWithTheLinkOfTheseTestsAsync();
+        var result = await UnlockAccountAsync();
 
-        Assert.True(resultOfTheAccountUnlockRequest.IsUnlocked);
-        Assert.Equal(0, accountBeingTestedInThisUnlock.FailedLoginAttemptCount);
+        Assert.Equal(AccountUnlockResult.AccountUnlocked, result);
+        Assert.Equal(0, account.FailedLoginAttemptCount);
     }
 
     [Fact]
     public async Task UnknownLinkOfTheAccountIsRefused()
     {
-        var accountBeingTestedInThisUnlock = AddLockedAccountWithItsUnlockLinkToTheFakeDatabase();
+        var account = AddLockedAccountWithUnlockLink();
 
-        var resultOfTheAccountUnlockRequest = await CreateAccountUnlockServiceWithFakeTools().UnlockAccountWithLinkTokenAsync("jeton-invente", IpAddressOfTheVisitorInTheseTests);
+        var result = await CreateUnlockService().UnlockAsync("jeton-invente", IpAddress);
 
-        CheckThatLinkWasRefusedAndTheAccountStaysLocked(resultOfTheAccountUnlockRequest, accountBeingTestedInThisUnlock);
+        AssertLinkRefusedAndAccountLocked(result, account);
     }
 
     [Fact]
     public async Task LinkAtItsExactExpirationDateIsRefused()
     {
-        var accountBeingTestedInThisUnlock = AddLockedAccountWithItsUnlockLinkToTheFakeDatabase();
-        accountBeingTestedInThisUnlock.LockoutEndsAt = clockThatOnlyMovesWhenTestsAskIt.GetUtcNow().UtcDateTime.AddHours(4);
-        clockThatOnlyMovesWhenTestsAskIt.MoveFakeClockForwardByThisDuration(TimeSpan.FromHours(1));
+        var account = AddLockedAccountWithUnlockLink(lockoutEndsAt: clock.GetUtcNow().UtcDateTime.AddHours(4));
+        clock.Advance(TimeSpan.FromHours(1));
 
-        var resultOfTheAccountUnlockRequest = await UnlockAccountWithTheLinkOfTheseTestsAsync();
+        var result = await UnlockAccountAsync();
 
-        CheckThatLinkWasRefusedAndTheAccountStaysLocked(resultOfTheAccountUnlockRequest, accountBeingTestedInThisUnlock);
+        AssertLinkRefusedAndAccountLocked(result, account);
     }
 
     // Un lien de récupération ne doit jamais servir à débloquer sans changer de mot de passe.
@@ -143,69 +149,69 @@ public class AccountUnlockServiceTests
     [InlineData(EmailTokenType.PasswordRecovery)]
     [InlineData(EmailTokenType.SignupConfirmation)]
     [InlineData(EmailTokenType.EmailChange)]
-    public async Task LinkOfAnotherTypeIsRefused(EmailTokenType typeOfTheLinkOfTheAccountInThisTest)
+    public async Task LinkOfAnotherTypeIsRefused(EmailTokenType linkType)
     {
-        var accountBeingTestedInThisUnlock = AddLockedAccountWithItsUnlockLinkToTheFakeDatabase(typeOfTheLinkOfTheAccountInThisTest);
+        var account = AddLockedAccountWithUnlockLink(linkType);
 
-        var resultOfTheAccountUnlockRequest = await UnlockAccountWithTheLinkOfTheseTestsAsync();
+        var result = await UnlockAccountAsync();
 
-        CheckThatLinkWasRefusedAndTheAccountStaysLocked(resultOfTheAccountUnlockRequest, accountBeingTestedInThisUnlock);
+        AssertLinkRefusedAndAccountLocked(result, account);
     }
 
     [Fact]
     public async Task LinkOfAnAccountThatNoLongerExistsIsRefused()
     {
-        var accountBeingTestedInThisUnlock = AddLockedAccountWithItsUnlockLinkToTheFakeDatabase();
-        repositoryThatKeepsAccountsInMemory.SavedUsers.Clear();
+        var account = AddLockedAccountWithUnlockLink();
+        accountRepository.SavedUsers.Clear();
 
-        var resultOfTheAccountUnlockRequest = await UnlockAccountWithTheLinkOfTheseTestsAsync();
+        var result = await UnlockAccountAsync();
 
-        CheckThatLinkWasRefusedAndTheAccountStaysLocked(resultOfTheAccountUnlockRequest, accountBeingTestedInThisUnlock);
+        AssertLinkRefusedAndAccountLocked(result, account);
     }
 
     [Fact]
     public async Task ConflictTriesAgainAndStillUnlocksTheAccount()
     {
-        var accountBeingTestedInThisUnlock = AddLockedAccountWithItsUnlockLinkToTheFakeDatabase();
-        repositoryThatKeepsAccountsInMemory.NumberOfConflictsBeforeTheLinkIsUsed = 3;
+        var account = AddLockedAccountWithUnlockLink();
+        accountRepository.LinkUseConflicts = 3;
 
-        var resultOfTheAccountUnlockRequest = await UnlockAccountWithTheLinkOfTheseTestsAsync();
+        var result = await UnlockAccountAsync();
 
-        Assert.True(resultOfTheAccountUnlockRequest.IsUnlocked);
-        Assert.Null(accountBeingTestedInThisUnlock.LockoutEndsAt);
-        Assert.Single(repositoryThatKeepsAccountsInMemory.SecurityEventsSavedWithTheLinks);
+        Assert.Equal(AccountUnlockResult.AccountUnlocked, result);
+        Assert.Null(account.LockoutEndsAt);
+        Assert.Single(securityEventRepository.SavedSecurityEvents);
     }
 
     [Fact]
     public async Task LinkUsedByAnotherRequestJustBeforeTheSaveIsRefused()
     {
-        AddLockedAccountWithItsUnlockLinkToTheFakeDatabase();
-        repositoryThatKeepsAccountsInMemory.LinkIsUsedByAnotherRequestJustBeforeTheSave = true;
+        AddLockedAccountWithUnlockLink();
+        accountRepository.UseLinkBeforeSave = true;
 
-        var resultOfTheAccountUnlockRequest = await UnlockAccountWithTheLinkOfTheseTestsAsync();
+        var result = await UnlockAccountAsync();
 
-        Assert.Equal(AccountUnlockService.ErrorMessageForUnlockLinkNoLongerValid, resultOfTheAccountUnlockRequest.LinkErrorMessage);
-        Assert.Empty(repositoryThatKeepsAccountsInMemory.SecurityEventsSavedWithTheLinks);
+        Assert.Equal(AccountUnlockResult.LinkNoLongerValid, result);
+        Assert.Empty(securityEventRepository.SavedSecurityEvents);
     }
 
     [Fact]
     public async Task TooManyConflictsRefuseTheLinkAfterTenTries()
     {
-        AddLockedAccountWithItsUnlockLinkToTheFakeDatabase();
-        repositoryThatKeepsAccountsInMemory.NumberOfConflictsBeforeTheLinkIsUsed = 1000;
+        AddLockedAccountWithUnlockLink();
+        accountRepository.LinkUseConflicts = 1000;
 
-        var resultOfTheAccountUnlockRequest = await UnlockAccountWithTheLinkOfTheseTestsAsync();
+        var result = await UnlockAccountAsync();
 
-        Assert.Equal(AccountUnlockService.ErrorMessageForUnlockLinkNoLongerValid, resultOfTheAccountUnlockRequest.LinkErrorMessage);
-        Assert.Equal(990, repositoryThatKeepsAccountsInMemory.NumberOfConflictsBeforeTheLinkIsUsed);
+        Assert.Equal(AccountUnlockResult.LinkNoLongerValid, result);
+        Assert.Equal(990, accountRepository.LinkUseConflicts);
     }
 
     [Fact]
     public async Task DatabaseFailureWhileReadingTheLinkIsNotHidden()
     {
-        AddLockedAccountWithItsUnlockLinkToTheFakeDatabase();
-        repositoryThatKeepsAccountsInMemory.DatabaseIsDownWhenReadingTheLinks = true;
+        AddLockedAccountWithUnlockLink();
+        accountRepository.FailsWhenReadingLinks = true;
 
-        await Assert.ThrowsAsync<InvalidOperationException>(UnlockAccountWithTheLinkOfTheseTestsAsync);
+        await Assert.ThrowsAsync<InvalidOperationException>(UnlockAccountAsync);
     }
 }

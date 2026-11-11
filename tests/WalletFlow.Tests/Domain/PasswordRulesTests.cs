@@ -9,12 +9,12 @@ public class PasswordRulesTests
     [Fact]
     public void ComposedAndDecomposedAccentsGiveTheSameNormalizedPassword()
     {
-        var passwordTypedWithOneComposedAccent = "Mot-De-Passé-1";
-        var passwordTypedWithOneDecomposedAccent = "Mot-De-Passé-1";
+        var composedPassword = "Mot-De-Passé-1";
+        var decomposedPassword = "Mot-De-Passé-1";
 
-        Assert.NotEqual(passwordTypedWithOneComposedAccent, passwordTypedWithOneDecomposedAccent);
-        Assert.Equal(passwordTypedWithOneComposedAccent, PasswordRules.ConvertPasswordIntoItsNormalizedForm(passwordTypedWithOneDecomposedAccent));
-        Assert.Equal(passwordTypedWithOneComposedAccent, PasswordRules.ConvertPasswordIntoItsNormalizedForm(passwordTypedWithOneComposedAccent));
+        Assert.NotEqual(composedPassword, decomposedPassword);
+        Assert.Equal(composedPassword, PasswordRules.Normalize(decomposedPassword));
+        Assert.Equal(composedPassword, PasswordRules.Normalize(composedPassword));
     }
 
     // .NET lève une erreur sur ces caractères : sans ce contrôle, ils provoqueraient une erreur 500 à la connexion.
@@ -22,19 +22,19 @@ public class PasswordRulesTests
     [InlineData(0xFFFE)] // caractère interdit par Unicode
     [InlineData(0xD800)] // moitié d'emoji seule
     [InlineData(0xDC00)] // autre moitié d'emoji seule
-    public void TextThatCannotBeNormalizedIsKeptWithoutAnyError(int codeOfTheCharacterThatCannotBeNormalized)
+    public void TextThatCannotBeNormalizedIsKeptWithoutAnyError(int unnormalizableCharacter)
     {
-        var passwordTextThatCannotBeNormalized = "Abcdefghij1!" + (char)codeOfTheCharacterThatCannotBeNormalized;
+        var unnormalizablePassword = "Abcdefghij1!" + (char)unnormalizableCharacter;
 
-        Assert.Equal(passwordTextThatCannotBeNormalized, PasswordRules.ConvertPasswordIntoItsNormalizedForm(passwordTextThatCannotBeNormalized));
+        Assert.Equal(unnormalizablePassword, PasswordRules.Normalize(unnormalizablePassword));
     }
 
     [Theory]
     [InlineData("Abcdefghij1!")] // exactement 12 caractères
     [InlineData("Abcdefghij 1")] // une espace compte comme caractère spécial
-    public void PasswordRespectingAllTheRulesIsAccepted(string passwordRespectingAllTheBusinessRules)
+    public void PasswordRespectingAllTheRulesIsAccepted(string validPassword)
     {
-        Assert.True(PasswordRules.CheckThatPasswordRespectsAllTheRules(passwordRespectingAllTheBusinessRules));
+        Assert.True(PasswordRules.IsValid(validPassword));
     }
 
     [Theory]
@@ -43,62 +43,62 @@ public class PasswordRulesTests
     [InlineData("ABCDEFGHIJ1!")] // sans minuscule
     [InlineData("Abcdefghijk!")] // sans chiffre
     [InlineData("Abcdefghijk1")] // sans caractère spécial
-    public void PasswordBreakingOneRuleIsRefused(string passwordBreakingOneOfTheRules)
+    public void PasswordBreakingOneRuleIsRefused(string invalidPassword)
     {
-        Assert.False(PasswordRules.CheckThatPasswordRespectsAllTheRules(passwordBreakingOneOfTheRules));
+        Assert.False(PasswordRules.IsValid(invalidPassword));
     }
 
     [Fact]
     public void PasswordOfExactlyTheMaximumLengthIsAccepted()
     {
-        var passwordOfExactlyTheMaximumLength = "Aa1!" + new string('x', 124);
+        var longestPassword = "Aa1!" + new string('x', 124);
 
-        Assert.Equal(128, passwordOfExactlyTheMaximumLength.Length);
-        Assert.True(PasswordRules.CheckThatPasswordRespectsAllTheRules(passwordOfExactlyTheMaximumLength));
+        Assert.Equal(128, longestPassword.Length);
+        Assert.True(PasswordRules.IsValid(longestPassword));
     }
 
     [Fact]
     public void PasswordLongerThanTheMaximumLengthIsRefused()
     {
-        var passwordLongerThanTheMaximumLength = "Aa1!" + new string('x', 125);
+        var tooLongPassword = "Aa1!" + new string('x', 125);
 
-        Assert.Equal(129, passwordLongerThanTheMaximumLength.Length);
-        Assert.False(PasswordRules.CheckThatPasswordRespectsAllTheRules(passwordLongerThanTheMaximumLength));
+        Assert.Equal(129, tooLongPassword.Length);
+        Assert.False(PasswordRules.IsValid(tooLongPassword));
     }
 
     // 8 vrais caractères, alors que Length en compte 12 : chaque emoji occupe deux unités en mémoire.
     [Fact]
     public void PasswordOfEightRealCharactersWithEmojisIsRefused()
     {
-        var passwordOfEightRealCharactersWithEmojis = "Aa1!😀😀😀😀";
+        var emojiPassword = "Aa1!😀😀😀😀";
 
-        Assert.Equal(12, passwordOfEightRealCharactersWithEmojis.Length);
-        Assert.False(PasswordRules.CheckThatPasswordRespectsAllTheRules(passwordOfEightRealCharactersWithEmojis));
+        Assert.Equal(12, emojiPassword.Length);
+        Assert.False(PasswordRules.IsValid(emojiPassword));
     }
 
     // Un emoji compte pour un seul caractère, et il compte comme caractère spécial.
     [Fact]
     public void PasswordOfTwelveRealCharactersWithOneEmojiIsAccepted()
     {
-        Assert.True(PasswordRules.CheckThatPasswordRespectsAllTheRules("Abcdefghij1😀"));
+        Assert.True(PasswordRules.IsValid("Abcdefghij1😀"));
     }
 
     // 128 vrais caractères, alors que Length en compte 252.
     [Fact]
     public void PasswordOfExactlyTheMaximumLengthWithEmojisIsAccepted()
     {
-        var passwordOfExactlyTheMaximumLengthWithEmojis = "Aa1!" + string.Concat(Enumerable.Repeat("😀", 124));
+        var longestEmojiPassword = "Aa1!" + string.Concat(Enumerable.Repeat("😀", 124));
 
-        Assert.Equal(252, passwordOfExactlyTheMaximumLengthWithEmojis.Length);
-        Assert.True(PasswordRules.CheckThatPasswordRespectsAllTheRules(passwordOfExactlyTheMaximumLengthWithEmojis));
+        Assert.Equal(252, longestEmojiPassword.Length);
+        Assert.True(PasswordRules.IsValid(longestEmojiPassword));
     }
 
     [Fact]
     public void PasswordLongerThanTheMaximumLengthWithEmojisIsRefused()
     {
-        var passwordLongerThanTheMaximumLengthWithEmojis = "Aa1!" + string.Concat(Enumerable.Repeat("😀", 125));
+        var tooLongEmojiPassword = "Aa1!" + string.Concat(Enumerable.Repeat("😀", 125));
 
-        Assert.False(PasswordRules.CheckThatPasswordRespectsAllTheRules(passwordLongerThanTheMaximumLengthWithEmojis));
+        Assert.False(PasswordRules.IsValid(tooLongEmojiPassword));
     }
 
     // Un caractère invisible ou non attribué est refusé, même si le mot de passe respecte toutes les autres règles.
@@ -113,11 +113,11 @@ public class PasswordRulesTests
     [InlineData(0x2029)] // séparateur de paragraphes
     [InlineData(0xE000)] // zone à usage privé
     [InlineData(0x0378)] // caractère non attribué par Unicode
-    public void PasswordContainingInvisibleOrUnassignedCharacterIsRefused(int codeOfTheRefusedCharacterForThisTest)
+    public void PasswordContainingInvisibleOrUnassignedCharacterIsRefused(int refusedCharacterCode)
     {
-        var passwordThatContainsOneRefusedCharacter = "Abcdefghij1!" + (char)codeOfTheRefusedCharacterForThisTest;
+        var password = "Abcdefghij1!" + (char)refusedCharacterCode;
 
-        Assert.False(PasswordRules.CheckThatPasswordRespectsAllTheRules(passwordThatContainsOneRefusedCharacter));
+        Assert.False(PasswordRules.IsValid(password));
     }
 
     // Un signe combinant, ajouté à une lettre, n'est pas un caractère spécial.
@@ -125,17 +125,17 @@ public class PasswordRulesTests
     [InlineData(0x0301)] // accent aigu
     [InlineData(0x0903)] // signe combinant avec espacement
     [InlineData(0x20DD)] // cercle autour de la lettre
-    public void CombiningAccentDoesNotCountAsSpecialCharacter(int codeOfTheCombiningMarkForThisTest)
+    public void CombiningAccentDoesNotCountAsSpecialCharacter(int combiningMarkCode)
     {
-        var passwordWithoutAnyRealSpecialCharacter = "Abcdefghije" + (char)codeOfTheCombiningMarkForThisTest + "1";
+        var password = "Abcdefghije" + (char)combiningMarkCode + "1";
 
-        Assert.False(PasswordRules.CheckThatPasswordRespectsAllTheRules(passwordWithoutAnyRealSpecialCharacter));
+        Assert.False(PasswordRules.IsValid(password));
     }
 
     // L'accent combinant reste permis à côté d'un vrai caractère spécial.
     [Fact]
     public void CombiningAccentIsAllowedNextToRealSpecialCharacter()
     {
-        Assert.True(PasswordRules.CheckThatPasswordRespectsAllTheRules("Abcdefghijé1!"));
+        Assert.True(PasswordRules.IsValid("Abcdefghijé1!"));
     }
 }

@@ -1,12 +1,27 @@
 namespace WalletFlow.Application.TwoFactorAuthentication;
 
-// Résultat de la fin d'une activation : les codes de secours à donner une seule fois, ou le refus à afficher.
-// Une classe plutôt qu'un record : un record afficherait les codes si on l'écrivait dans un journal.
-public class TwoFactorActivationFinishResult
+// Résultat de la fin d'une activation : toujours une seule des formes écrites dans ce fichier.
+// Des classes plutôt que des records : un record afficherait les codes si on l'écrivait dans un journal.
+public abstract class TwoFactorActivationFinishResult
 {
-    public string? WrongCodeErrorMessage { get; init; }
-    public string? ActivationMustRestartErrorMessage { get; init; }
-    public List<string>? BackupCodesToGiveOnlyOnce { get; init; }
+    // Constructeur privé : aucune autre forme ne peut être créée en dehors de ce fichier.
+    private TwoFactorActivationFinishResult()
+    {
+    }
 
-    public bool IsTwoFactorActivated => BackupCodesToGiveOnlyOnce != null;
+    // La double authentification est activée : les codes de secours ne sont donnés que cette fois.
+    public sealed class Activated : TwoFactorActivationFinishResult
+    {
+        public required List<string> BackupCodes { get; init; }
+    }
+
+    // Le premier code n'est pas bon : le propriétaire peut encore essayer.
+    public sealed class WrongCode : TwoFactorActivationFinishResult
+    {
+    }
+
+    // Le secret en attente n'existe plus, ou le compte a changé : il faut recommencer depuis le début.
+    public sealed class ActivationMustRestart : TwoFactorActivationFinishResult
+    {
+    }
 }

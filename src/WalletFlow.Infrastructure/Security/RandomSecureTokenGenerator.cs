@@ -10,28 +10,28 @@ namespace WalletFlow.Infrastructure.Security;
 public class RandomSecureTokenGenerator : ISecureTokenGenerator
 {
     // 32 octets, soit 256 bits aléatoires : au-delà des 128 bits demandés par la SS §2.
-    private const int NumberOfRandomBytesInSecureToken = 32;
+    private const int TokenByteCount = 32;
 
     // Tire au hasard un nouveau jeton, lisible dans une adresse web, et calcule son empreinte SHA-256.
-    public GeneratedSecureToken GenerateNewRandomSecureTokenWithItsHash()
+    public GeneratedSecureToken GenerateToken()
     {
-        var randomBytesOfTheNewSecureToken = RandomNumberGenerator.GetBytes(NumberOfRandomBytesInSecureToken);
-        var tokenGivenOnlyToTheVisitor = Base64Url.EncodeToString(randomBytesOfTheNewSecureToken);
+        var randomBytes = RandomNumberGenerator.GetBytes(TokenByteCount);
+        var token = Base64Url.EncodeToString(randomBytes);
 
-        return new GeneratedSecureToken(tokenGivenOnlyToTheVisitor, ConvertSecureTokenIntoItsHash(tokenGivenOnlyToTheVisitor));
+        return new GeneratedSecureToken(token, HashToken(token));
     }
 
     // Calcule l'empreinte SHA-256 d'un jeton, telle qu'elle est enregistrée en base.
-    public string ConvertSecureTokenIntoItsHash(string tokenToConvertIntoItsHash)
+    public string HashToken(string token)
     {
-        var hashBytesOfTheSecureToken = SHA256.HashData(Encoding.UTF8.GetBytes(tokenToConvertIntoItsHash));
+        var hashBytes = SHA256.HashData(Encoding.UTF8.GetBytes(token));
 
-        return Convert.ToHexStringLower(hashBytesOfTheSecureToken);
+        return Convert.ToHexStringLower(hashBytes);
     }
 
     // Tire au hasard un nouveau code de secours : GetString donne à chaque caractère permis la même chance d'être tiré.
-    public string GenerateNewRandomBackupCodeInItsCleanForm()
+    public string GenerateBackupCode()
     {
-        return RandomNumberGenerator.GetString(TwoFactorAuthenticationRules.CharactersAllowedInOneBackupCode, TwoFactorAuthenticationRules.NumberOfCharactersInOneBackupCode);
+        return RandomNumberGenerator.GetString(TwoFactorAuthenticationRules.BackupCodeAlphabet, TwoFactorAuthenticationRules.BackupCodeLength);
     }
 }

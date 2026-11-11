@@ -1,3 +1,4 @@
+using WalletFlow.Application.Persistence;
 using WalletFlow.Application.Security;
 using WalletFlow.Application.TwoFactorAuthentication;
 using WalletFlow.Application.UserAccounts;
@@ -8,162 +9,168 @@ namespace WalletFlow.Application.UserSessions;
 // Ouvre la session d'une connexion réussie, avec ou sans double authentification (GR Auth, SS §3).
 public class UserSessionOpeningService
 {
-    private readonly IUserAccountRepository repositoryOfTheUserAccountsInDatabase;
-    private readonly IUserSessionRepository repositoryOfTheUserSessionsInDatabase;
-    private readonly ITwoFactorAuthenticationRepository repositoryOfTheBackupCodesInDatabase;
-    private readonly ISecureTokenGenerator generatorOfTheSecureRandomTokens;
-    private readonly TimeProvider clockThatGivesTheCurrentDateAndTime;
+    private readonly IUserAccountRepository accountRepository;
+    private readonly IUserSessionRepository sessionRepository;
+    private readonly ITwoFactorAuthenticationRepository twoFactorRepository;
+    private readonly DatabaseChangesSavingService savingService;
+    private readonly SecurityJournalService securityJournal;
+    private readonly ISecureTokenGenerator tokenGenerator;
+    private readonly TimeProvider clock;
 
     // Reçoit les outils dont l'ouverture d'une session a besoin.
     public UserSessionOpeningService(
-        IUserAccountRepository repositoryOfTheUserAccountsInDatabase,
-        IUserSessionRepository repositoryOfTheUserSessionsInDatabase,
-        ITwoFactorAuthenticationRepository repositoryOfTheBackupCodesInDatabase,
-        ISecureTokenGenerator generatorOfTheSecureRandomTokens,
-        TimeProvider clockThatGivesTheCurrentDateAndTime)
+        IUserAccountRepository accountRepository,
+        IUserSessionRepository sessionRepository,
+        ITwoFactorAuthenticationRepository twoFactorRepository,
+        DatabaseChangesSavingService savingService,
+        SecurityJournalService securityJournal,
+        ISecureTokenGenerator tokenGenerator,
+        TimeProvider clock)
     {
-        this.repositoryOfTheUserAccountsInDatabase = repositoryOfTheUserAccountsInDatabase;
-        this.repositoryOfTheUserSessionsInDatabase = repositoryOfTheUserSessionsInDatabase;
-        this.repositoryOfTheBackupCodesInDatabase = repositoryOfTheBackupCodesInDatabase;
-        this.generatorOfTheSecureRandomTokens = generatorOfTheSecureRandomTokens;
-        this.clockThatGivesTheCurrentDateAndTime = clockThatGivesTheCurrentDateAndTime;
+        this.accountRepository = accountRepository;
+        this.sessionRepository = sessionRepository;
+        this.twoFactorRepository = twoFactorRepository;
+        this.savingService = savingService;
+        this.securityJournal = securityJournal;
+        this.tokenGenerator = tokenGenerator;
+        this.clock = clock;
     }
 
     // Ouvre une session avec un nouvel identifiant (SS §3), et enregistre l'appareil s'il est nouveau.
     // Renvoie null si la connexion ne peut plus s'enregistrer : rien n'est alors ouvert.
-    public async Task<OpenedUserSession?> TryToOpenSessionForThisSuccessfulLoginAsync(SuccessfulLoginToSave successfulLoginToSaveInTheDatabase)
+    public async Task<OpenedUserSession?> TryOpenSessionAsync(SuccessfulLogin login)
     {
-        var generatedTokenOfTheNewSession = generatorOfTheSecureRandomTokens.GenerateNewRandomSecureTokenWithItsHash();
-        var generatedTokenOfTheNewDevice = await GenerateDeviceTokenIfThisDeviceIsNewForTheAccountAsync(successfulLoginToSaveInTheDatabase.IdentifierOfTheAccountLoggingIn, successfulLoginToSaveInTheDatabase.DeviceTokenReadInTheCookie);
+        var newSessionToken = tokenGenerator.GenerateToken();
+        var session = CreateSession(newSessionToken, login.AccountId);
 
-        var loginWasSavedInTheDatabase = await TryToSaveLoginUnlessOtherRequestsKeepChangingTheAccountAsync(
-            successfulLoginToSaveInTheDatabase,
-            CreateSessionFromThisGeneratedToken(generatedTokenOfTheNewSession, successfulLoginToSaveInTheDatabase.IdentifierOfTheAccountLoggingIn),
-            CreateDeviceFromThisGeneratedToken(generatedTokenOfTheNewDevice, successfulLoginToSaveInTheDatabase.IdentifierOfTheAccountLoggingIn));
+        // L'appareil garde son jeton s'il est déjà connu du compte. Sinon, il en reçoit un nouveau.
+        Device? device = null;
+        var deviceToken = await FindKnownDeviceTokenAsync(login.AccountId, login.DeviceToken);
+        if (deviceToken == null)
+        {
+            var newDeviceToken = tokenGenerator.GenerateToken();
+            device = CreateDevice(newDeviceToken, login.AccountId);
+            deviceToken = newDeviceToken.Token;
+        }
 
-        if (!loginWasSavedInTheDatabase)
+        var saved = await savingService.SaveWithRetriesAsync(
+            () => PrepareLoginAsync(login, session, device),
+            false);
+
+        if (!saved)
         {
             return null;
         }
 
-        await CloseOldSessionOfThisBrowserAsync(successfulLoginToSaveInTheDatabase.SessionTokenReadInTheCookie);
+        await CloseOldSessionAsync(login.SessionToken);
 
-        // L'appareil garde son jeton s'il est déjà connu du compte.
         return new OpenedUserSession
         {
-            SessionTokenToPutInTheCookie = generatedTokenOfTheNewSession.TokenGivenOnlyToTheVisitor,
-            DeviceTokenToPutInTheCookie = generatedTokenOfTheNewDevice?.TokenGivenOnlyToTheVisitor ?? successfulLoginToSaveInTheDatabase.DeviceTokenReadInTheCookie!
+            SessionToken = newSessionToken.Token,
+            DeviceToken = deviceToken
         };
     }
 
-    // Enregistre la connexion. Si une autre requête a changé le compte pendant les vérifications, relit le compte et recommence.
-    // Renvoie faux si le compte a disparu, s'il change encore au bout de 10 passages, ou si ce qui vient d'être vérifié n'est plus valable.
-    private async Task<bool> TryToSaveLoginUnlessOtherRequestsKeepChangingTheAccountAsync(
-        SuccessfulLoginToSave successfulLoginToSaveInTheDatabase,
-        UserSession newSessionOfTheUserAccount,
-        Device? newDeviceOfTheUserAccount)
+    // Un passage : lit le compte, vérifie que ce qui vient d'être contrôlé est toujours valable, puis prépare en une fois
+    // les compteurs remis à zéro, la nouvelle session, le nouvel appareil s'il y en a un, le code de secours utilisé s'il y en a un,
+    // et l'événement du journal. Donne faux si le compte a disparu ou si ce qui vient d'être vérifié n'est plus valable.
+    private async Task<PreparedChanges<bool>> PrepareLoginAsync(
+        SuccessfulLogin login,
+        UserSession session,
+        Device? device)
     {
-        var securityEventOfTheSuccessfulLogin = CreateSecurityEventOfTheSuccessfulLogin(successfulLoginToSaveInTheDatabase);
-
-        for (var numberOfTheTryBeingDone = 1; numberOfTheTryBeingDone <= AccountLockoutRules.MaximumNumberOfTriesWhileOtherRequestsChangeTheAccount; numberOfTheTryBeingDone++)
+        var account = await accountRepository.FindByIdAsync(login.AccountId);
+        if (account == null || !AccountStillMatches(account, login))
         {
-            var accountReadBeforeSavingTheLogin = await repositoryOfTheUserAccountsInDatabase.FindUserAccountByIdentifierAsync(successfulLoginToSaveInTheDatabase.IdentifierOfTheAccountLoggingIn);
-            if (!CheckThatAccountStillMatchesWhatWasJustChecked(accountReadBeforeSavingTheLogin, successfulLoginToSaveInTheDatabase))
-            {
-                return false;
-            }
-
-            BackupCode? backupCodeUsedForThisLogin = null;
-            if (successfulLoginToSaveInTheDatabase.IdentifierOfTheBackupCodeJustUsed != null)
-            {
-                backupCodeUsedForThisLogin = await repositoryOfTheBackupCodesInDatabase.FindBackupCodeByItsIdentifierAsync(successfulLoginToSaveInTheDatabase.IdentifierOfTheBackupCodeJustUsed.Value);
-                if (backupCodeUsedForThisLogin == null || backupCodeUsedForThisLogin.UsedAt != null)
-                {
-                    return false;
-                }
-            }
-
-            AccountLockoutRules.ResetLoginCountersAfterSuccessfulLogin(accountReadBeforeSavingTheLogin!);
-
-            if (await repositoryOfTheUserSessionsInDatabase.TryToSaveSuccessfulLoginOfThisAccountAsync(accountReadBeforeSavingTheLogin!, newSessionOfTheUserAccount, newDeviceOfTheUserAccount, backupCodeUsedForThisLogin, securityEventOfTheSuccessfulLogin))
-            {
-                return true;
-            }
+            return PreparedChanges<bool>.NothingToSave(false);
         }
 
-        return false;
+        if (login.BackupCodeId != null)
+        {
+            var backupCode = await twoFactorRepository.FindBackupCodeAsync(login.BackupCodeId.Value);
+            if (backupCode == null || backupCode.UsedAt != null)
+            {
+                return PreparedChanges<bool>.NothingToSave(false);
+            }
+
+            // L'enregistrement refusera tout si une autre requête vient de se servir de ce code.
+            backupCode.MarkAsUsed(session.LastActivityAt);
+        }
+
+        account.ResetLoginCounters();
+
+        // Le compte est contrôlé même si ses compteurs n'ont pas changé : ce contrôle vérifie en base que personne ne l'a changé
+        // depuis sa lecture, mot de passe compris. Sinon, une session survivrait à une récupération du mot de passe.
+        accountRepository.PrepareUnchangedCheck(account);
+        sessionRepository.PrepareSession(session);
+
+        if (device != null)
+        {
+            sessionRepository.PrepareDevice(device);
+        }
+
+        securityJournal.PrepareEvent(
+            SecurityEventType.Login,
+            SecurityEventResult.Success,
+            login.AccountId,
+            login.IpAddress);
+
+        return PreparedChanges<bool>.SaveThenReturn(true);
     }
 
     // Une récupération du mot de passe (SS §3), une activation ou une désactivation a pu passer pendant les vérifications.
     // Une connexion sans code ne s'enregistre donc jamais sur un compte qui vient d'activer la double authentification.
-    private static bool CheckThatAccountStillMatchesWhatWasJustChecked(User? accountReadBeforeSavingTheLogin, SuccessfulLoginToSave successfulLoginToSaveInTheDatabase)
+    private static bool AccountStillMatches(User account, SuccessfulLogin login)
     {
-        return accountReadBeforeSavingTheLogin != null
-            && accountReadBeforeSavingTheLogin.PasswordHash == successfulLoginToSaveInTheDatabase.SecureHashOfThePasswordJustChecked
-            && accountReadBeforeSavingTheLogin.EncryptedTotpSecret == successfulLoginToSaveInTheDatabase.EncryptedTotpSecretJustChecked;
+        return account.PasswordHash == login.PasswordHash
+            && account.EncryptedTotpSecret == login.EncryptedTotpSecret;
     }
 
     // Crée la session à enregistrer. Seule l'empreinte de son identifiant va en base.
-    private UserSession CreateSessionFromThisGeneratedToken(GeneratedSecureToken generatedTokenOfTheNewSession, Guid identifierOfTheAccountLoggingIn)
+    private UserSession CreateSession(GeneratedSecureToken newSessionToken, Guid accountId)
     {
         return new UserSession
         {
-            Id = generatedTokenOfTheNewSession.HashToStoreInTheDatabase,
-            LastActivityAt = clockThatGivesTheCurrentDateAndTime.GetUtcNow().UtcDateTime,
-            UserId = identifierOfTheAccountLoggingIn
+            Id = newSessionToken.Hash,
+            LastActivityAt = clock.GetUtcNow().UtcDateTime,
+            UserId = accountId
         };
     }
 
-    // Tire un nouveau jeton si le navigateur n'a pas de jeton d'appareil, ou s'il n'est pas celui de ce compte.
-    // Renvoie null si l'appareil est déjà connu du compte.
-    private async Task<GeneratedSecureToken?> GenerateDeviceTokenIfThisDeviceIsNewForTheAccountAsync(Guid identifierOfTheAccountLoggingIn, string? deviceTokenReadInTheCookie)
+    // Renvoie le jeton d'appareil du cookie si ce compte le connaît déjà.
+    // Renvoie null si le navigateur n'a pas de jeton d'appareil, ou si ce jeton n'est pas celui de ce compte.
+    private async Task<string?> FindKnownDeviceTokenAsync(Guid accountId, string? deviceToken)
     {
-        if (deviceTokenReadInTheCookie != null)
-        {
-            var hashOfTheDeviceTokenFromCookie = generatorOfTheSecureRandomTokens.ConvertSecureTokenIntoItsHash(deviceTokenReadInTheCookie);
-
-            if (await repositoryOfTheUserSessionsInDatabase.CheckThatDeviceTokenBelongsToThisAccountAsync(hashOfTheDeviceTokenFromCookie, identifierOfTheAccountLoggingIn))
-            {
-                return null;
-            }
-        }
-
-        return generatorOfTheSecureRandomTokens.GenerateNewRandomSecureTokenWithItsHash();
-    }
-
-    // Crée l'appareil à enregistrer. Seule l'empreinte de son jeton va en base.
-    private static Device? CreateDeviceFromThisGeneratedToken(GeneratedSecureToken? generatedTokenOfTheNewDevice, Guid identifierOfTheAccountLoggingIn)
-    {
-        if (generatedTokenOfTheNewDevice == null)
+        if (deviceToken == null)
         {
             return null;
         }
 
-        return new Device { DeviceToken = generatedTokenOfTheNewDevice.HashToStoreInTheDatabase, UserId = identifierOfTheAccountLoggingIn };
+        var deviceTokenHash = tokenGenerator.HashToken(deviceToken);
+
+        if (!await sessionRepository.DeviceBelongsToAccountAsync(deviceTokenHash, accountId))
+        {
+            return null;
+        }
+
+        return deviceToken;
+    }
+
+    // Crée l'appareil à enregistrer. Seule l'empreinte de son jeton va en base.
+    private static Device CreateDevice(GeneratedSecureToken newDeviceToken, Guid accountId)
+    {
+        return new Device { DeviceToken = newDeviceToken.Hash, UserId = accountId };
     }
 
     // Le navigateur reçoit une nouvelle session : l'ancienne ne doit pas rester ouverte sans que personne ne s'en serve.
-    private async Task CloseOldSessionOfThisBrowserAsync(string? sessionTokenReadInTheCookie)
+    private async Task CloseOldSessionAsync(string? sessionToken)
     {
-        if (sessionTokenReadInTheCookie == null)
+        if (sessionToken == null)
         {
             return;
         }
 
-        var hashOfTheOldSessionToken = generatorOfTheSecureRandomTokens.ConvertSecureTokenIntoItsHash(sessionTokenReadInTheCookie);
-        await repositoryOfTheUserSessionsInDatabase.DeleteUserSessionByItsHashAsync(hashOfTheOldSessionToken);
-    }
-
-    // Crée l'événement du journal : date, utilisateur, adresse IP, événement et résultat. Jamais l'adresse e-mail (SS §7 et §11).
-    private SecurityEvent CreateSecurityEventOfTheSuccessfulLogin(SuccessfulLoginToSave successfulLoginToSaveInTheDatabase)
-    {
-        return new SecurityEvent
-        {
-            Type = SecurityEventType.Login,
-            Result = SecurityEventResult.Success,
-            OccurredAt = clockThatGivesTheCurrentDateAndTime.GetUtcNow().UtcDateTime,
-            IpAddress = successfulLoginToSaveInTheDatabase.IpAddressOfTheVisitor,
-            UserId = successfulLoginToSaveInTheDatabase.IdentifierOfTheAccountLoggingIn
-        };
+        var oldSessionTokenHash = tokenGenerator.HashToken(sessionToken);
+        await sessionRepository.DeleteAsync(oldSessionTokenHash);
     }
 }

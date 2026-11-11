@@ -9,62 +9,58 @@ namespace WalletFlow.Tests.Application;
 // il ne peut donc rien révéler sur les comptes qui existent.
 public class PasswordRecoveryRequestServiceTests
 {
-    private static readonly IPAddress IpAddressOfTheVisitorInTheseTests = IPAddress.Parse("203.0.113.7");
+    private static readonly IPAddress IpAddress = IPAddress.Parse("203.0.113.7");
 
-    private readonly FakePasswordRecoveryRequestLimiter limiterThatCountsTheEmailAddresses = new FakePasswordRecoveryRequestLimiter();
-    private readonly FakeBackgroundEmailRequestQueue queueThatKeepsTheEmailRequestsInMemory = new FakeBackgroundEmailRequestQueue();
+    private readonly FakePasswordRecoveryRequestLimiter requestLimiter = new FakePasswordRecoveryRequestLimiter();
+    private readonly FakeBackgroundEmailRequestQueue emailQueue = new FakeBackgroundEmailRequestQueue();
 
     // Crée le service à tester, avec ses faux outils.
-    private PasswordRecoveryRequestService CreateRecoveryRequestServiceWithFakeTools()
+    private PasswordRecoveryRequestService CreateRecoveryRequestService()
     {
-        return new PasswordRecoveryRequestService(limiterThatCountsTheEmailAddresses, queueThatKeepsTheEmailRequestsInMemory);
+        return new PasswordRecoveryRequestService(requestLimiter, emailQueue);
     }
 
     [Fact]
     public void AcceptedRequestIsQueuedWithTheStoredAddressAndTheIpAddress()
     {
-        var resultOfThePasswordRecoveryRequest = CreateRecoveryRequestServiceWithFakeTools().RequestPasswordRecoveryForThisEmailAddress(" Visiteur@Exemple.TEST ", IpAddressOfTheVisitorInTheseTests);
+        var result = CreateRecoveryRequestService().Request(" Visiteur@Exemple.TEST ", IpAddress);
 
-        Assert.True(resultOfThePasswordRecoveryRequest.IsAccepted);
-        var requestAddedToTheFakeBackgroundQueue = Assert.Single(queueThatKeepsTheEmailRequestsInMemory.RequestsAddedToTheBackgroundQueue);
-        Assert.Equal(BackgroundEmailRequestType.PasswordRecovery, requestAddedToTheFakeBackgroundQueue.TypeOfTheRequestedBackgroundEmail);
-        Assert.Equal("visiteur@exemple.test", requestAddedToTheFakeBackgroundQueue.EmailAddressOfTheRecoveryRequest);
-        Assert.Equal(IpAddressOfTheVisitorInTheseTests, requestAddedToTheFakeBackgroundQueue.IpAddressOfTheRequestingVisitor);
-        Assert.Null(requestAddedToTheFakeBackgroundQueue.IdentifierOfTheAccountJustLocked);
+        Assert.Equal(PasswordRecoveryRequestResult.RequestAccepted, result);
+        var request = Assert.IsType<BackgroundEmailRequest.PasswordRecovery>(Assert.Single(emailQueue.AddedRequests));
+        Assert.Equal("visiteur@exemple.test", request.EmailAddress);
+        Assert.Equal(IpAddress, request.IpAddress);
     }
 
     // Sans la forme enregistrée, changer une majuscule ferait contourner la limite de 3 demandes.
     [Fact]
     public void LimitCountsTheAddressInItsStoredForm()
     {
-        CreateRecoveryRequestServiceWithFakeTools().RequestPasswordRecoveryForThisEmailAddress(" Visiteur@Exemple.TEST ", IpAddressOfTheVisitorInTheseTests);
+        CreateRecoveryRequestService().Request(" Visiteur@Exemple.TEST ", IpAddress);
 
-        Assert.Equal("visiteur@exemple.test", Assert.Single(limiterThatCountsTheEmailAddresses.EmailAddressesCounted));
+        Assert.Equal("visiteur@exemple.test", Assert.Single(requestLimiter.CountedAddresses));
     }
 
     [Theory]
     [InlineData("sans-arobase")]
     [InlineData("nul\0caractere@exemple.test")]
     [InlineData("")]
-    public void MalformedAddressIsRefusedWithoutBeingCountedNorQueued(string malformedEmailAddressTypedInThisTest)
+    public void MalformedAddressIsRefusedWithoutBeingCountedNorQueued(string malformedEmailAddress)
     {
-        var resultOfThePasswordRecoveryRequest = CreateRecoveryRequestServiceWithFakeTools().RequestPasswordRecoveryForThisEmailAddress(malformedEmailAddressTypedInThisTest, IpAddressOfTheVisitorInTheseTests);
+        var result = CreateRecoveryRequestService().Request(malformedEmailAddress, IpAddress);
 
-        Assert.False(resultOfThePasswordRecoveryRequest.IsAccepted);
-        Assert.Equal(AccountRegistrationService.ErrorMessageForInvalidEmailAddressFormat, resultOfThePasswordRecoveryRequest.EmailAddressErrorMessage);
-        Assert.Empty(limiterThatCountsTheEmailAddresses.EmailAddressesCounted);
-        Assert.Empty(queueThatKeepsTheEmailRequestsInMemory.RequestsAddedToTheBackgroundQueue);
+        Assert.Equal(PasswordRecoveryRequestResult.InvalidEmailAddressFormat, result);
+        Assert.Empty(requestLimiter.CountedAddresses);
+        Assert.Empty(emailQueue.AddedRequests);
     }
 
     [Fact]
     public void RequestOverTheLimitIsRefusedAndNeverQueued()
     {
-        limiterThatCountsTheEmailAddresses.EveryRequestIsRefusedDuringThisTest = true;
+        requestLimiter.RefusesEveryRequest = true;
 
-        var resultOfThePasswordRecoveryRequest = CreateRecoveryRequestServiceWithFakeTools().RequestPasswordRecoveryForThisEmailAddress("visiteur@exemple.test", IpAddressOfTheVisitorInTheseTests);
+        var result = CreateRecoveryRequestService().Request("visiteur@exemple.test", IpAddress);
 
-        Assert.False(resultOfThePasswordRecoveryRequest.IsAccepted);
-        Assert.True(resultOfThePasswordRecoveryRequest.TooManyRequestsForThisEmailAddress);
-        Assert.Empty(queueThatKeepsTheEmailRequestsInMemory.RequestsAddedToTheBackgroundQueue);
+        Assert.Equal(PasswordRecoveryRequestResult.TooManyRequests, result);
+        Assert.Empty(emailQueue.AddedRequests);
     }
 }

@@ -4,5 +4,5 @@ namespace WalletFlow.Application.AccountRecovery;
 public class BackgroundEmailRequestResult
 {
     public bool EmailCouldNotBeSent { get; init; }
-    public Guid? UserIdentifierForTheTechnicalLog { get; init; }
+    public Guid? UserId { get; init; }
 }

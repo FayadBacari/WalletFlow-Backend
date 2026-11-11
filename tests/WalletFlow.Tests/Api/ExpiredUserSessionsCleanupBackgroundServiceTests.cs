@@ -11,73 +11,73 @@ namespace WalletFlow.Tests.Api;
 public class ExpiredUserSessionsCleanupBackgroundServiceTests
 {
     // Crée la tâche à tester, branchée sur ce faux accès à la base.
-    private static ExpiredUserSessionsCleanupBackgroundService CreateCleanupTaskWithThisRepository(
-        FakeUserSessionRepository repositoryThatKeepsSessionsInMemory,
-        ILogger<ExpiredUserSessionsCleanupBackgroundService>? loggerOfTheCleanupsForThisTest = null)
+    private static ExpiredUserSessionsCleanupBackgroundService CreateCleanupTask(
+        FakeUserSessionRepository sessionRepository,
+        ILogger<ExpiredUserSessionsCleanupBackgroundService>? logger = null)
     {
-        var clockThatOnlyMovesWhenTestsAskIt = new FakeTimeProviderForTests();
-        var servicesUsedByTheCleanupTask = new ServiceCollection();
-        servicesUsedByTheCleanupTask.AddSingleton<IUserSessionRepository>(repositoryThatKeepsSessionsInMemory);
-        servicesUsedByTheCleanupTask.AddSingleton<TimeProvider>(clockThatOnlyMovesWhenTestsAskIt);
-        servicesUsedByTheCleanupTask.AddScoped<ExpiredUserSessionsCleanupService>();
-        var providerOfTheCleanupTaskServices = servicesUsedByTheCleanupTask.BuildServiceProvider();
+        var clock = new FakeTimeProvider();
+        var services = new ServiceCollection();
+        services.AddSingleton<IUserSessionRepository>(sessionRepository);
+        services.AddSingleton<TimeProvider>(clock);
+        services.AddScoped<ExpiredUserSessionsCleanupService>();
+        var serviceProvider = services.BuildServiceProvider();
 
         return new ExpiredUserSessionsCleanupBackgroundService(
-            providerOfTheCleanupTaskServices.GetRequiredService<IServiceScopeFactory>(),
-            clockThatOnlyMovesWhenTestsAskIt,
-            loggerOfTheCleanupsForThisTest ?? NullLogger<ExpiredUserSessionsCleanupBackgroundService>.Instance);
+            serviceProvider.GetRequiredService<IServiceScopeFactory>(),
+            clock,
+            logger ?? NullLogger<ExpiredUserSessionsCleanupBackgroundService>.Instance);
     }
 
     [Fact]
     public async Task OneCleanupAsksTheDatabaseToDeleteTheExpiredSessions()
     {
-        var repositoryThatKeepsSessionsInMemory = new FakeUserSessionRepository(new FakeSecurityEventRepository());
-        var cleanupTaskBeingTestedWithFakeRepository = CreateCleanupTaskWithThisRepository(repositoryThatKeepsSessionsInMemory);
+        var sessionRepository = new FakeUserSessionRepository();
+        var cleanupTask = CreateCleanupTask(sessionRepository);
 
-        await cleanupTaskBeingTestedWithFakeRepository.RunOneCleanupOfTheExpiredUserSessionsAsync();
+        await cleanupTask.RunCleanupAsync();
 
-        Assert.Single(repositoryThatKeepsSessionsInMemory.DatesOfTheCleanupsRequested);
+        Assert.Single(sessionRepository.CleanupDates);
     }
 
     // La panne est notée dans le journal technique : sans cela, personne ne saurait que l'effacement échoue.
     [Fact]
     public async Task DatabaseFailureIsWrittenInTheTechnicalLogAndDoesNotStopTheTask()
     {
-        var repositoryThatKeepsSessionsInMemory = new FakeUserSessionRepository(new FakeSecurityEventRepository()) { DatabaseIsDownDuringTheCleanup = true };
-        var providerThatKeepsTheLogMessages = new LoggerProviderThatKeepsTheMessages();
-        using var factoryOfTheLoggersForThisTest = new LoggerFactory(new ILoggerProvider[] { providerThatKeepsTheLogMessages });
-        var cleanupTaskBeingTestedWithFakeRepository = CreateCleanupTaskWithThisRepository(
-            repositoryThatKeepsSessionsInMemory,
-            new Logger<ExpiredUserSessionsCleanupBackgroundService>(factoryOfTheLoggersForThisTest));
+        var sessionRepository = new FakeUserSessionRepository() { FailsDuringCleanup = true };
+        var loggerProvider = new MemoryLoggerProvider();
+        using var loggerFactory = new LoggerFactory(new ILoggerProvider[] { loggerProvider });
+        var cleanupTask = CreateCleanupTask(
+            sessionRepository,
+            new Logger<ExpiredUserSessionsCleanupBackgroundService>(loggerFactory));
 
-        await cleanupTaskBeingTestedWithFakeRepository.RunOneCleanupOfTheExpiredUserSessionsAsync();
+        await cleanupTask.RunCleanupAsync();
 
-        Assert.Contains(providerThatKeepsTheLogMessages.MessagesWrittenInTheLog, messageWrittenInTheTechnicalLog =>
-            messageWrittenInTheTechnicalLog.StartsWith("Error") && messageWrittenInTheTechnicalLog.Contains("a échoué"));
+        Assert.Contains(loggerProvider.Messages, message =>
+            message.StartsWith("Error") && message.Contains("a échoué"));
 
-        repositoryThatKeepsSessionsInMemory.DatabaseIsDownDuringTheCleanup = false;
-        await cleanupTaskBeingTestedWithFakeRepository.RunOneCleanupOfTheExpiredUserSessionsAsync();
+        sessionRepository.FailsDuringCleanup = false;
+        await cleanupTask.RunCleanupAsync();
 
-        Assert.Single(repositoryThatKeepsSessionsInMemory.DatesOfTheCleanupsRequested);
+        Assert.Single(sessionRepository.CleanupDates);
     }
 
     // La tâche tourne une fois par jour : le test ne peut pas attendre un jour pour le vérifier.
     [Fact]
     public void CleanupTaskRunsOncePerDay()
     {
-        Assert.Equal(TimeSpan.FromDays(1), ExpiredUserSessionsCleanupBackgroundService.DurationBetweenTwoCleanupsOfTheSessions);
+        Assert.Equal(TimeSpan.FromDays(1), ExpiredUserSessionsCleanupBackgroundService.CleanupInterval);
     }
 
     // La tâche est bien lancée avec l'API, dès son démarrage.
     [Fact]
     public async Task CleanupTaskRunsWhenTheApiStarts()
     {
-        using var apiStartedInMemoryForThisTest = new ApiFactoryWithFakeRepositoryAndEmails();
-        apiStartedInMemoryForThisTest.CreateClient();
+        using var api = new ApiFactoryWithFakes();
+        api.CreateClient();
 
-        for (var numberOfTheCheckBeingDone = 1; numberOfTheCheckBeingDone <= 100; numberOfTheCheckBeingDone++)
+        for (var checkNumber = 1; checkNumber <= 100; checkNumber++)
         {
-            if (apiStartedInMemoryForThisTest.RepositoryThatKeepsSessionsInMemory.DatesOfTheCleanupsRequested.Count > 0)
+            if (api.SessionRepository.CleanupDates.Count > 0)
             {
                 break;
             }
@@ -85,6 +85,6 @@ public class ExpiredUserSessionsCleanupBackgroundServiceTests
             await Task.Delay(TimeSpan.FromMilliseconds(50));
         }
 
-        Assert.NotEmpty(apiStartedInMemoryForThisTest.RepositoryThatKeepsSessionsInMemory.DatesOfTheCleanupsRequested);
+        Assert.NotEmpty(api.SessionRepository.CleanupDates);
     }
 }

@@ -9,21 +9,21 @@ namespace WalletFlow.Infrastructure.Persistence.TableConfigurations.BagsAndSugge
 public class BagTableConfiguration : IEntityTypeConfiguration<Bag>
 {
     // Appelée par EF Core au démarrage (nom imposé par le framework).
-    public void Configure(EntityTypeBuilder<Bag> builderOfTheBagTableMapping)
+    public void Configure(EntityTypeBuilder<Bag> builder)
     {
-        builderOfTheBagTableMapping.ToTable("sac");
+        builder.ToTable("sac");
 
         // L'identifiant est créé par l'entité elle-même, jamais par EF Core.
-        builderOfTheBagTableMapping.HasKey(nameof(Bag.Id));
-        builderOfTheBagTableMapping.Property(nameof(Bag.Id)).HasColumnName("id_sac").ValueGeneratedNever();
+        builder.HasKey(nameof(Bag.Id));
+        builder.Property(nameof(Bag.Id)).HasColumnName("id_sac").ValueGeneratedNever();
 
-        builderOfTheBagTableMapping.Property(nameof(Bag.Name)).HasColumnName("nom_sac");
-        builderOfTheBagTableMapping.Property(nameof(Bag.TargetAmountInCents)).HasColumnName("montant_objectif");
-        builderOfTheBagTableMapping.Property(nameof(Bag.TargetDate)).HasColumnName("date_objectif");
-        builderOfTheBagTableMapping.Property(nameof(Bag.UserId)).HasColumnName("id_utilisateur");
+        builder.Property(nameof(Bag.Name)).HasColumnName("nom_sac");
+        builder.Property(nameof(Bag.TargetAmountInCents)).HasColumnName("montant_objectif");
+        builder.Property(nameof(Bag.TargetDate)).HasColumnName("date_objectif");
+        builder.Property(nameof(Bag.UserId)).HasColumnName("id_utilisateur");
 
         // Un sac appartient à un utilisateur et disparaît avec lui (ON DELETE CASCADE).
-        builderOfTheBagTableMapping.HasOne<User>().WithMany()
+        builder.HasOne<User>().WithMany()
             .HasForeignKey(nameof(Bag.UserId))
             .OnDelete(DeleteBehavior.Cascade);
     }

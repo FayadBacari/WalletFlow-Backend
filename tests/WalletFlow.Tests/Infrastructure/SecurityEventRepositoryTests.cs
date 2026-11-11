@@ -2,7 +2,7 @@ using System.Net;
 using Microsoft.EntityFrameworkCore;
 using WalletFlow.Domain.UsersAndSecurity;
 using WalletFlow.Infrastructure.Persistence.Repositories;
-using static WalletFlow.Tests.Infrastructure.LocalDatabaseForTheTests;
+using static WalletFlow.Tests.Infrastructure.LocalTestDatabase;
 
 namespace WalletFlow.Tests.Infrastructure;
 
@@ -10,75 +10,134 @@ namespace WalletFlow.Tests.Infrastructure;
 // Chaque test travaille dans une transaction annulée à la fin : la base reste vide.
 public class SecurityEventRepositoryTests
 {
-    private static readonly DateTime DateOfTheEventInTheseTests = new DateTime(2026, 11, 4, 12, 0, 0, DateTimeKind.Utc);
+    private static readonly DateTime EventDate = new DateTime(2026, 11, 4, 12, 0, 0, DateTimeKind.Utc);
 
     // Les codes écrits dans la table sont ceux du dictionnaire de données, et l'adresse est une vraie adresse IP.
     [Theory]
     [InlineData("203.0.113.7")]
     [InlineData("2001:db8::7")]
-    public async Task EventIsSavedWithTheCodesOfTheDataDictionaryAndItsIpAddress(string ipAddressOfTheEventInThisTest)
+    public async Task EventIsSavedWithTheCodesOfTheDataDictionaryAndItsIpAddress(string ipAddress)
     {
-        await using var databaseContextOfThisRepositoryTest = CreateDatabaseContextConnectedToLocalDatabase();
-        await using var transactionCancelledAtTheEndOfThisTest = await databaseContextOfThisRepositoryTest.Database.BeginTransactionAsync();
-        var repositoryBeingTestedOnTheRealDatabase = new SecurityEventRepository(databaseContextOfThisRepositoryTest);
-        var securityEventSavedByThisTest = new SecurityEvent
+        await using var databaseContext = CreateDatabaseContext();
+        await using var transaction = await databaseContext.Database.BeginTransactionAsync();
+        var repository = new SecurityEventRepository(databaseContext);
+        var savedEvent = new SecurityEvent
         {
             Type = SecurityEventType.Login,
             Result = SecurityEventResult.Failure,
-            OccurredAt = DateOfTheEventInTheseTests,
-            IpAddress = IPAddress.Parse(ipAddressOfTheEventInThisTest)
+            OccurredAt = EventDate,
+            IpAddress = IPAddress.Parse(ipAddress)
         };
 
-        await repositoryBeingTestedOnTheRealDatabase.SaveSecurityEventInTheJournalAsync(securityEventSavedByThisTest);
+        await repository.SaveEventAsync(savedEvent);
 
-        var columnsReadDirectlyFromTheTable = await databaseContextOfThisRepositoryTest.Database
-            .SqlQuery<string>($"SELECT type_evenement || '/' || resultat_evenement || '/' || host(adresse_ip_evenement) AS \"Value\" FROM evenement_securite WHERE id_evenement = {securityEventSavedByThisTest.Id}")
+        var columns = await databaseContext.Database
+            .SqlQuery<string>($"SELECT type_evenement || '/' || resultat_evenement || '/' || host(adresse_ip_evenement) AS \"Value\" FROM evenement_securite WHERE id_evenement = {savedEvent.Id}")
             .SingleAsync();
-        Assert.Equal("connexion/echec/" + ipAddressOfTheEventInThisTest, columnsReadDirectlyFromTheTable);
+        Assert.Equal("connexion/echec/" + ipAddress, columns);
     }
 
     [Fact]
     public async Task LockoutEventIsSavedWithItsCodeAndItsResult()
     {
-        await using var databaseContextOfThisRepositoryTest = CreateDatabaseContextConnectedToLocalDatabase();
-        await using var transactionCancelledAtTheEndOfThisTest = await databaseContextOfThisRepositoryTest.Database.BeginTransactionAsync();
-        var repositoryBeingTestedOnTheRealDatabase = new SecurityEventRepository(databaseContextOfThisRepositoryTest);
-        var securityEventSavedByThisTest = new SecurityEvent
+        await using var databaseContext = CreateDatabaseContext();
+        await using var transaction = await databaseContext.Database.BeginTransactionAsync();
+        var repository = new SecurityEventRepository(databaseContext);
+        var savedEvent = new SecurityEvent
         {
             Type = SecurityEventType.Lockout,
             Result = SecurityEventResult.Success,
-            OccurredAt = DateOfTheEventInTheseTests
+            OccurredAt = EventDate
         };
 
-        await repositoryBeingTestedOnTheRealDatabase.SaveSecurityEventInTheJournalAsync(securityEventSavedByThisTest);
+        await repository.SaveEventAsync(savedEvent);
 
-        var columnsReadDirectlyFromTheTable = await databaseContextOfThisRepositoryTest.Database
-            .SqlQuery<string>($"SELECT type_evenement || '/' || resultat_evenement AS \"Value\" FROM evenement_securite WHERE id_evenement = {securityEventSavedByThisTest.Id}")
+        var columns = await databaseContext.Database
+            .SqlQuery<string>($"SELECT type_evenement || '/' || resultat_evenement AS \"Value\" FROM evenement_securite WHERE id_evenement = {savedEvent.Id}")
             .SingleAsync();
-        Assert.Equal("blocage/succes", columnsReadDirectlyFromTheTable);
+        Assert.Equal("blocage/succes", columns);
     }
 
     // Une connexion avec une adresse inconnue n'a pas d'utilisateur, et le serveur de test n'a pas d'adresse IP.
     [Fact]
     public async Task EventWithoutUserAndWithoutIpAddressIsAccepted()
     {
-        await using var databaseContextOfThisRepositoryTest = CreateDatabaseContextConnectedToLocalDatabase();
-        await using var transactionCancelledAtTheEndOfThisTest = await databaseContextOfThisRepositoryTest.Database.BeginTransactionAsync();
-        var repositoryBeingTestedOnTheRealDatabase = new SecurityEventRepository(databaseContextOfThisRepositoryTest);
-        var securityEventSavedByThisTest = new SecurityEvent
+        await using var databaseContext = CreateDatabaseContext();
+        await using var transaction = await databaseContext.Database.BeginTransactionAsync();
+        var repository = new SecurityEventRepository(databaseContext);
+        var savedEvent = new SecurityEvent
         {
             Type = SecurityEventType.Login,
             Result = SecurityEventResult.Failure,
-            OccurredAt = DateOfTheEventInTheseTests
+            OccurredAt = EventDate
         };
 
-        await repositoryBeingTestedOnTheRealDatabase.SaveSecurityEventInTheJournalAsync(securityEventSavedByThisTest);
+        await repository.SaveEventAsync(savedEvent);
 
-        databaseContextOfThisRepositoryTest.ChangeTracker.Clear();
-        var eventReadBackFromTheRealDatabase = await databaseContextOfThisRepositoryTest.SecurityEvents.SingleAsync(eventSearchedInTheDatabaseTable =>
-            eventSearchedInTheDatabaseTable.Id == securityEventSavedByThisTest.Id);
-        Assert.Null(eventReadBackFromTheRealDatabase.UserId);
-        Assert.Null(eventReadBackFromTheRealDatabase.IpAddress);
-        Assert.Equal(DateOfTheEventInTheseTests, eventReadBackFromTheRealDatabase.OccurredAt);
+        databaseContext.ChangeTracker.Clear();
+        var reloadedEvent = await databaseContext.SecurityEvents.SingleAsync(row =>
+            row.Id == savedEvent.Id);
+        Assert.Null(reloadedEvent.UserId);
+        Assert.Null(reloadedEvent.IpAddress);
+        Assert.Equal(EventDate, reloadedEvent.OccurredAt);
+    }
+
+    // Un refus écrit tout de suite n'emporte jamais ce qui attend l'unité de travail : rien ne part, ni l'un ni l'autre.
+    [Fact]
+    public async Task ImmediateEventRefusesToCarryChangesWaitingForTheUnitOfWork()
+    {
+        await using var databaseContext = CreateDatabaseContext();
+        await using var transaction = await databaseContext.Database.BeginTransactionAsync();
+        var repository = new SecurityEventRepository(databaseContext);
+        var preparedEvent = new SecurityEvent
+        {
+            Type = SecurityEventType.Login,
+            Result = SecurityEventResult.Success,
+            OccurredAt = EventDate
+        };
+        var refusalEvent = new SecurityEvent
+        {
+            Type = SecurityEventType.Login,
+            Result = SecurityEventResult.Failure,
+            OccurredAt = EventDate
+        };
+        repository.PrepareEvent(preparedEvent);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => repository.SaveEventAsync(refusalEvent));
+
+        databaseContext.ChangeTracker.Clear();
+        var savedEventCount = await databaseContext.SecurityEvents.CountAsync(row =>
+            row.Id == preparedEvent.Id
+            || row.Id == refusalEvent.Id);
+        Assert.Equal(0, savedEventCount);
+    }
+
+    // Le compte d'un refus a pu être effacé entre-temps, par exemple par le nettoyage des comptes non confirmés.
+    // L'événement est quand même gardé, comme ceux d'un compte supprimé : sans identifiant ni adresse IP (GR Suppression).
+    [Fact]
+    public async Task EventOfAnAccountErasedMeanwhileIsKeptWithoutIdentifierNorIpAddress()
+    {
+        await using var databaseContext = CreateDatabaseContext();
+        await using var transaction = await databaseContext.Database.BeginTransactionAsync();
+        var repository = new SecurityEventRepository(databaseContext);
+        var savedEvent = new SecurityEvent
+        {
+            Type = SecurityEventType.Login,
+            Result = SecurityEventResult.Failure,
+            OccurredAt = EventDate,
+            IpAddress = IPAddress.Parse("203.0.113.7"),
+            UserId = Guid.NewGuid()
+        };
+
+        await repository.SaveEventAsync(savedEvent);
+
+        databaseContext.ChangeTracker.Clear();
+        var reloadedEvent = await databaseContext.SecurityEvents.SingleAsync(row =>
+            row.Id == savedEvent.Id);
+        Assert.Null(reloadedEvent.UserId);
+        Assert.Null(reloadedEvent.IpAddress);
+        Assert.Equal(SecurityEventType.Login, reloadedEvent.Type);
+        Assert.Equal(SecurityEventResult.Failure, reloadedEvent.Result);
+        Assert.Equal(EventDate, reloadedEvent.OccurredAt);
     }
 }

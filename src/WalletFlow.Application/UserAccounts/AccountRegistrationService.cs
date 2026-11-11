@@ -1,5 +1,6 @@
 using WalletFlow.Application.Configuration;
 using WalletFlow.Application.Emails;
+using WalletFlow.Application.Persistence;
 using WalletFlow.Application.Security;
 using WalletFlow.Domain.AccountsAndCategories;
 using WalletFlow.Domain.UsersAndSecurity;
@@ -9,207 +10,202 @@ namespace WalletFlow.Application.UserAccounts;
 // Cas d'utilisation : un visiteur crée un compte (GR Auth, SS §2).
 public class AccountRegistrationService
 {
-    public const string ErrorMessageForInvalidEmailAddressFormat = "L'adresse e-mail n'est pas valide.";
-
-    public const string ErrorMessageForPasswordBreakingTheRules =
-        "Le mot de passe doit contenir de 12 à 128 caractères, dont une majuscule, une minuscule, un chiffre et un caractère spécial, sans caractère invisible.";
-
-    private readonly IUserAccountRepository repositoryOfTheUserAccountsInDatabase;
-    private readonly IPasswordHasher hasherOfThePasswordsChosenByVisitors;
-    private readonly ISecureTokenGenerator generatorOfTheSecureRandomEmailTokens;
-    private readonly IEmailSender senderOfTheEmailsToTheVisitors;
-    private readonly PublicWebsiteSettings settingsOfThePublicWalletFlowWebsite;
-    private readonly IEmailAddressRequestLimiter limiterOfTheRequestsPerEmailAddress;
-    private readonly TimeProvider clockThatGivesTheCurrentDateAndTime;
+    private readonly IUserAccountRepository accountRepository;
+    private readonly IDatabaseUnitOfWork unitOfWork;
+    private readonly IPasswordHasher passwordHasher;
+    private readonly ISecureTokenGenerator tokenGenerator;
+    private readonly IEmailSender emailSender;
+    private readonly IAccountRegistrationEmails registrationEmails;
+    private readonly PublicWebsiteSettings websiteSettings;
+    private readonly IEmailAddressRequestLimiter requestLimiter;
+    private readonly TimeProvider clock;
 
     // Reçoit les outils dont l'inscription a besoin.
     public AccountRegistrationService(
-        IUserAccountRepository repositoryOfTheUserAccountsInDatabase,
-        IPasswordHasher hasherOfThePasswordsChosenByVisitors,
-        ISecureTokenGenerator generatorOfTheSecureRandomEmailTokens,
-        IEmailSender senderOfTheEmailsToTheVisitors,
-        PublicWebsiteSettings settingsOfThePublicWalletFlowWebsite,
-        IEmailAddressRequestLimiter limiterOfTheRequestsPerEmailAddress,
-        TimeProvider clockThatGivesTheCurrentDateAndTime)
+        IUserAccountRepository accountRepository,
+        IDatabaseUnitOfWork unitOfWork,
+        IPasswordHasher passwordHasher,
+        ISecureTokenGenerator tokenGenerator,
+        IEmailSender emailSender,
+        IAccountRegistrationEmails registrationEmails,
+        PublicWebsiteSettings websiteSettings,
+        IEmailAddressRequestLimiter requestLimiter,
+        TimeProvider clock)
     {
-        this.repositoryOfTheUserAccountsInDatabase = repositoryOfTheUserAccountsInDatabase;
-        this.hasherOfThePasswordsChosenByVisitors = hasherOfThePasswordsChosenByVisitors;
-        this.generatorOfTheSecureRandomEmailTokens = generatorOfTheSecureRandomEmailTokens;
-        this.senderOfTheEmailsToTheVisitors = senderOfTheEmailsToTheVisitors;
-        this.settingsOfThePublicWalletFlowWebsite = settingsOfThePublicWalletFlowWebsite;
-        this.limiterOfTheRequestsPerEmailAddress = limiterOfTheRequestsPerEmailAddress;
-        this.clockThatGivesTheCurrentDateAndTime = clockThatGivesTheCurrentDateAndTime;
+        this.accountRepository = accountRepository;
+        this.unitOfWork = unitOfWork;
+        this.passwordHasher = passwordHasher;
+        this.tokenGenerator = tokenGenerator;
+        this.emailSender = emailSender;
+        this.registrationEmails = registrationEmails;
+        this.websiteSettings = websiteSettings;
+        this.requestLimiter = requestLimiter;
+        this.clock = clock;
     }
 
     // Inscrit un visiteur. La réponse est la même que l'adresse soit libre, non confirmée ou confirmée,
     // pour ne pas révéler quels comptes existent : seul l'e-mail envoyé change (SS §2).
-    public async Task<AccountRegistrationResult> RegisterNewAccountForVisitorAsync(
-        string emailAddressTypedByTheVisitor,
-        string passwordChosenByTheVisitorToRegister)
+    public async Task<AccountRegistrationResult> RegisterAsync(
+        string typedEmail,
+        string password)
     {
-        var emailAddressInItsStoredForm = EmailAddressRules.ConvertEmailAddressIntoItsStoredForm(emailAddressTypedByTheVisitor);
-        var passwordWrittenInItsNormalizedForm = PasswordRules.ConvertPasswordIntoItsNormalizedForm(passwordChosenByTheVisitorToRegister);
+        var email = EmailAddressRules.Normalize(typedEmail);
+        var normalizedPassword = PasswordRules.Normalize(password);
 
-        var resultOfTheVisitorRequestValidation = CheckThatVisitorRequestRespectsTheRules(emailAddressInItsStoredForm, passwordWrittenInItsNormalizedForm);
-        if (!resultOfTheVisitorRequestValidation.IsAccepted)
+        var refusal = FindRuleRefusal(email, normalizedPassword);
+        if (refusal != null)
         {
-            return resultOfTheVisitorRequestValidation;
+            return refusal;
         }
 
         // La limite compte les demandes, qu'un compte existe ou non : elle ne révèle donc rien (SS §6).
-        if (!limiterOfTheRequestsPerEmailAddress.TryToCountNewRequestForThisEmailAddress(emailAddressInItsStoredForm))
+        if (!requestLimiter.TryCountRequest(email))
         {
-            return new AccountRegistrationResult { TooManyRequestsForThisEmailAddress = true };
+            return new AccountRegistrationResult.TooManyRequests();
         }
 
         // Le mot de passe est haché dans tous les cas : sinon, une réponse plus rapide
         // révélerait que l'adresse est déjà utilisée.
-        var secureHashOfTheChosenPassword = hasherOfThePasswordsChosenByVisitors.ConvertPasswordIntoItsSecureHash(passwordWrittenInItsNormalizedForm);
+        var passwordHash = await passwordHasher.HashAsync(normalizedPassword);
 
-        return await SaveAccountThenSendEmailToTheVisitorAsync(emailAddressInItsStoredForm, secureHashOfTheChosenPassword);
+        return await SaveAccountThenSendEmailAsync(email, passwordHash);
     }
 
     // Enregistre le compte selon l'état de l'adresse, puis envoie le bon e-mail.
-    private async Task<AccountRegistrationResult> SaveAccountThenSendEmailToTheVisitorAsync(
-        string emailAddressInItsStoredForm,
-        string secureHashOfTheChosenPassword)
+    private async Task<AccountRegistrationResult> SaveAccountThenSendEmailAsync(
+        string email,
+        string passwordHash)
     {
-        var accountAlreadyUsingThisEmailAddress = await repositoryOfTheUserAccountsInDatabase.FindUserAccountByEmailAddressAsync(emailAddressInItsStoredForm);
+        var existingAccount = await accountRepository.FindByEmailAsync(email);
 
-        if (accountAlreadyUsingThisEmailAddress == null)
+        if (existingAccount == null)
         {
-            var resultForTheBrandNewAccount = await TryToSaveBrandNewAccountThenSendItsLinkAsync(emailAddressInItsStoredForm, secureHashOfTheChosenPassword);
-            if (resultForTheBrandNewAccount != null)
+            var result = await TrySaveNewAccountThenSendLinkAsync(email, passwordHash);
+            if (result != null)
             {
-                return resultForTheBrandNewAccount;
+                return result;
             }
 
             // Une autre inscription vient de prendre la même adresse.
-            accountAlreadyUsingThisEmailAddress = await repositoryOfTheUserAccountsInDatabase.FindUserAccountByEmailAddressAsync(emailAddressInItsStoredForm);
+            existingAccount = await accountRepository.FindByEmailAsync(email);
         }
 
-        if (accountAlreadyUsingThisEmailAddress != null && !accountAlreadyUsingThisEmailAddress.IsEmailConfirmed)
+        if (existingAccount != null && !existingAccount.IsEmailConfirmed)
         {
-            var resultForTheAccountNotYetConfirmed = await TryToReplacePasswordThenSendNewLinkAsync(accountAlreadyUsingThisEmailAddress, secureHashOfTheChosenPassword);
-            if (resultForTheAccountNotYetConfirmed != null)
+            var result = await TryReplacePasswordThenSendLinkAsync(existingAccount, passwordHash);
+            if (result != null)
             {
-                return resultForTheAccountNotYetConfirmed;
+                return result;
             }
         }
 
         // L'adresse est confirmée, ou vient de l'être pendant cette inscription : son mot de passe ne change pas.
-        var warningEmailForTheAddressOwner = AccountRegistrationEmails.CreateWarningEmailForAddressAlreadyUsed(emailAddressInItsStoredForm);
-        return await SendEmailToTheVisitorAsync(warningEmailForTheAddressOwner, accountAlreadyUsingThisEmailAddress?.Id);
+        var warningEmail = registrationEmails.CreateAddressAlreadyUsedEmail(email);
+        return await SendEmailAsync(warningEmail, existingAccount?.Id);
     }
 
     // Enregistre un nouveau compte et envoie son lien. Renvoie null si une autre inscription vient de prendre l'adresse.
-    private async Task<AccountRegistrationResult?> TryToSaveBrandNewAccountThenSendItsLinkAsync(
-        string emailAddressInItsStoredForm,
-        string secureHashOfTheChosenPassword)
+    private async Task<AccountRegistrationResult?> TrySaveNewAccountThenSendLinkAsync(
+        string email,
+        string passwordHash)
     {
-        var generatedTokenForTheConfirmationLink = generatorOfTheSecureRandomEmailTokens.GenerateNewRandomSecureTokenWithItsHash();
-        var newUserToRegisterInTheDatabase = new User { Email = emailAddressInItsStoredForm, PasswordHash = secureHashOfTheChosenPassword };
+        var confirmationToken = tokenGenerator.GenerateToken();
+        var newAccount = new User { Email = email, PasswordHash = passwordHash };
 
-        var newAccountWasSavedInTheDatabase = await repositoryOfTheUserAccountsInDatabase.TryToSaveNewAccountWithCategoriesAndTokenAsync(
-            newUserToRegisterInTheDatabase,
-            DefaultCategories.CreateTheEightDefaultCategoriesForNewUser(newUserToRegisterInTheDatabase.Id),
-            CreateSignupConfirmationTokenForThisAccount(generatedTokenForTheConfirmationLink, newUserToRegisterInTheDatabase.Id));
+        var saved = await accountRepository.TryAddAccountAsync(
+            newAccount,
+            DefaultCategories.CreateForUser(newAccount.Id),
+            CreateConfirmationToken(confirmationToken, newAccount.Id));
 
-        if (!newAccountWasSavedInTheDatabase)
+        if (!saved)
         {
             return null;
         }
 
-        return await SendSignupConfirmationEmailToTheVisitorAsync(emailAddressInItsStoredForm, generatedTokenForTheConfirmationLink, newUserToRegisterInTheDatabase.Id);
+        return await SendConfirmationEmailAsync(email, confirmationToken, newAccount.Id);
     }
 
     // Remplace le mot de passe d'un compte non confirmé et envoie un nouveau lien (GR Auth).
     // Renvoie null si le compte vient d'être confirmé ou effacé : rien n'a alors changé.
-    private async Task<AccountRegistrationResult?> TryToReplacePasswordThenSendNewLinkAsync(
-        User unconfirmedAccountToUpdateInTheDatabase,
-        string secureHashOfTheChosenPassword)
+    private async Task<AccountRegistrationResult?> TryReplacePasswordThenSendLinkAsync(
+        User account,
+        string passwordHash)
     {
-        var generatedTokenForTheConfirmationLink = generatorOfTheSecureRandomEmailTokens.GenerateNewRandomSecureTokenWithItsHash();
+        var confirmationToken = tokenGenerator.GenerateToken();
 
-        var unconfirmedAccountWasUpdatedInTheDatabase = await repositoryOfTheUserAccountsInDatabase.TryToReplacePasswordAndTokenOfUnconfirmedAccountAsync(
-            unconfirmedAccountToUpdateInTheDatabase,
-            secureHashOfTheChosenPassword,
-            CreateSignupConfirmationTokenForThisAccount(generatedTokenForTheConfirmationLink, unconfirmedAccountToUpdateInTheDatabase.Id));
+        account.ReplacePasswordHash(passwordHash);
+        await accountRepository.PrepareConfirmationTokenReplacementAsync(
+            CreateConfirmationToken(confirmationToken, account.Id));
 
-        if (!unconfirmedAccountWasUpdatedInTheDatabase)
+        // L'enregistrement contrôle que le compte n'est toujours pas confirmé : le mot de passe d'un compte déjà actif n'est jamais remplacé.
+        var saved = await unitOfWork.TrySaveChangesAsync();
+
+        if (!saved)
         {
             return null;
         }
 
-        return await SendSignupConfirmationEmailToTheVisitorAsync(unconfirmedAccountToUpdateInTheDatabase.Email, generatedTokenForTheConfirmationLink, unconfirmedAccountToUpdateInTheDatabase.Id);
+        return await SendConfirmationEmailAsync(account.Email, confirmationToken, account.Id);
     }
 
     // Vérifie le format de l'adresse et les règles du mot de passe, côté serveur (SS §5).
-    private static AccountRegistrationResult CheckThatVisitorRequestRespectsTheRules(
-        string emailAddressInItsStoredForm,
-        string passwordWrittenInItsNormalizedForm)
+    // Renvoie null si la demande respecte toutes les règles.
+    private static AccountRegistrationResult.RefusedByRules? FindRuleRefusal(
+        string email,
+        string normalizedPassword)
     {
-        string? errorMessageAboutTheEmailAddressFormat = null;
-        string? errorMessageAboutTheChosenPassword = null;
+        var isEmailInvalid = !EmailAddressRules.IsValid(email);
+        var isPasswordInvalid = !PasswordRules.IsValid(normalizedPassword);
 
-        if (!EmailAddressRules.CheckThatEmailAddressHasValidFormat(emailAddressInItsStoredForm))
+        if (!isEmailInvalid && !isPasswordInvalid)
         {
-            errorMessageAboutTheEmailAddressFormat = ErrorMessageForInvalidEmailAddressFormat;
+            return null;
         }
 
-        if (!PasswordRules.CheckThatPasswordRespectsAllTheRules(passwordWrittenInItsNormalizedForm))
+        return new AccountRegistrationResult.RefusedByRules
         {
-            errorMessageAboutTheChosenPassword = ErrorMessageForPasswordBreakingTheRules;
-        }
-
-        return new AccountRegistrationResult
-        {
-            EmailAddressErrorMessage = errorMessageAboutTheEmailAddressFormat,
-            PasswordErrorMessage = errorMessageAboutTheChosenPassword
+            IsEmailInvalid = isEmailInvalid,
+            IsPasswordInvalid = isPasswordInvalid
         };
     }
 
     // Crée le jeton de confirmation d'un compte : seule son empreinte ira en base (SS §2).
-    private EmailToken CreateSignupConfirmationTokenForThisAccount(GeneratedSecureToken generatedTokenForTheConfirmationLink, Guid identifierOfTheAccountToConfirm)
+    private EmailToken CreateConfirmationToken(GeneratedSecureToken confirmationToken, Guid accountId)
     {
         return new EmailToken
         {
             Type = EmailTokenType.SignupConfirmation,
-            TokenHash = generatedTokenForTheConfirmationLink.HashToStoreInTheDatabase,
-            ExpiresAt = clockThatGivesTheCurrentDateAndTime.GetUtcNow().UtcDateTime + EmailTokenValidityDurations.ValidityDurationOfTheSignupConfirmationLink,
-            UserId = identifierOfTheAccountToConfirm
+            TokenHash = confirmationToken.Hash,
+            ExpiresAt = clock.GetUtcNow().UtcDateTime + EmailTokenValidityDurations.SignupConfirmationLink,
+            UserId = accountId
         };
     }
 
     // Envoie au visiteur l'e-mail qui contient le lien de confirmation.
-    private async Task<AccountRegistrationResult> SendSignupConfirmationEmailToTheVisitorAsync(
-        string emailAddressInItsStoredForm,
-        GeneratedSecureToken generatedTokenForTheConfirmationLink,
-        Guid identifierOfTheAccountToConfirm)
+    private async Task<AccountRegistrationResult> SendConfirmationEmailAsync(
+        string email,
+        GeneratedSecureToken confirmationToken,
+        Guid accountId)
     {
-        var emailWithTheSignupConfirmationLink = AccountRegistrationEmails.CreateSignupConfirmationEmailWithItsLink(
-            emailAddressInItsStoredForm,
-            settingsOfThePublicWalletFlowWebsite.BuildLinkToThisWebsitePageWithItsToken("/confirm-email", generatedTokenForTheConfirmationLink.TokenGivenOnlyToTheVisitor));
+        var confirmationEmail = registrationEmails.CreateConfirmationEmail(
+            email,
+            websiteSettings.BuildLink("/confirm-email", confirmationToken.Token));
 
-        return await SendEmailToTheVisitorAsync(emailWithTheSignupConfirmationLink, identifierOfTheAccountToConfirm);
+        return await SendEmailAsync(confirmationEmail, accountId);
     }
 
     // Envoie un e-mail. S'il ne peut pas partir, le visiteur est invité à réessayer :
     // le compte reste non confirmé, et une nouvelle inscription enverra un nouveau lien (GR Auth).
-    private async Task<AccountRegistrationResult> SendEmailToTheVisitorAsync(EmailMessageToSend emailMessageToSendToTheVisitor, Guid? identifierOfTheAccountConcernedByTheEmail)
+    private async Task<AccountRegistrationResult> SendEmailAsync(EmailMessage message, Guid? accountId)
     {
         try
         {
-            await senderOfTheEmailsToTheVisitors.SendEmailToItsRecipientAsync(emailMessageToSendToTheVisitor);
-            return new AccountRegistrationResult();
+            await emailSender.SendAsync(message);
+            return new AccountRegistrationResult.Accepted();
         }
         catch (EmailCouldNotBeSentException)
         {
-            return new AccountRegistrationResult
-            {
-                EmailCouldNotBeSent = true,
-                UserIdentifierForTheTechnicalLog = identifierOfTheAccountConcernedByTheEmail
-            };
+            return new AccountRegistrationResult.EmailCouldNotBeSent { UserId = accountId };
         }
     }
 }

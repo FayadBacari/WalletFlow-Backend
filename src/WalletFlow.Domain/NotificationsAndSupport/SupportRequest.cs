@@ -5,17 +5,17 @@ namespace WalletFlow.Domain.NotificationsAndSupport;
 public class SupportRequest
 {
     // id_demande
-    public Guid Id { get; set; } = Guid.NewGuid();
+    public Guid Id { get; init; } = Guid.NewGuid();
 
     // message_demande : contenu non fiable, toujours affiché comme du texte.
-    public string Message { get; set; } = string.Empty;
+    public string Message { get; init; } = string.Empty;
 
     // email_contact : obligatoire quand la demande vient d'un visiteur.
-    public string? ContactEmail { get; set; }
+    public string? ContactEmail { get; init; }
 
     // statut_demande : envoyée par défaut.
-    public SupportRequestStatus Status { get; set; } = SupportRequestStatus.Sent;
+    public SupportRequestStatus Status { get; init; } = SupportRequestStatus.Sent;
 
     // id_utilisateur : vide quand la demande vient d'un visiteur.
-    public Guid? UserId { get; set; }
+    public Guid? UserId { get; init; }
 }

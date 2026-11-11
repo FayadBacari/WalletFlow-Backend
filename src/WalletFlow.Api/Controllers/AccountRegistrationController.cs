@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
 using WalletFlow.Api.Configuration;
 using WalletFlow.Api.Contracts;
+using WalletFlow.Api.Filters;
 using WalletFlow.Application.UserAccounts;
 
 namespace WalletFlow.Api.Controllers;
@@ -16,73 +17,75 @@ namespace WalletFlow.Api.Controllers;
 public class AccountRegistrationController : ControllerBase
 {
     // Le même message pour toute inscription acceptée, que l'adresse soit libre ou déjà utilisée (SS §2).
-    public const string MessageSentForEveryAcceptedRegistration =
+    public const string AcceptedMessage =
         "Un e-mail vient d'être envoyé à cette adresse pour finaliser l'inscription.";
 
-    public const string MessageShownWhenTheEmailCouldNotBeSent = "L'e-mail n'a pas pu partir. Réessaie dans quelques minutes.";
+    public const string EmailNotSentMessage = "L'e-mail n'a pas pu partir. Réessaie dans quelques minutes.";
 
-    private readonly AccountRegistrationService serviceThatRegistersTheNewUserAccounts;
-    private readonly ILogger<AccountRegistrationController> loggerOfTheAccountRegistrationTechnicalProblems;
+    private readonly AccountRegistrationService registrationService;
+    private readonly ILogger<AccountRegistrationController> logger;
 
     // Reçoit le cas d'utilisation de l'inscription et le journal technique.
     public AccountRegistrationController(
-        AccountRegistrationService serviceThatRegistersTheNewUserAccounts,
-        ILogger<AccountRegistrationController> loggerOfTheAccountRegistrationTechnicalProblems)
+        AccountRegistrationService registrationService,
+        ILogger<AccountRegistrationController> logger)
     {
-        this.serviceThatRegistersTheNewUserAccounts = serviceThatRegistersTheNewUserAccounts;
-        this.loggerOfTheAccountRegistrationTechnicalProblems = loggerOfTheAccountRegistrationTechnicalProblems;
+        this.registrationService = registrationService;
+        this.logger = logger;
     }
 
     // POST api/account/register : crée un compte et envoie un e-mail de confirmation.
+    // Une adresse libre écrit un compte, une adresse confirmée n'écrit rien : la durée minimale cache cette différence.
     [HttpPost("register")]
-    [EnableRateLimiting(RateLimitingConfiguration.PolicyNameForSignupRequestsPerIpAddress)]
-    [RequestSizeLimit(RequestSizeConfiguration.MaximumNumberOfBytesInOneAccountRequest)]
-    public async Task<IActionResult> RegisterNewAccountFromVisitorRequest(RegisterAccountRequest requestSentByTheVisitorToRegister)
+    [ServiceFilter(typeof(MinimumAnswerDurationFilter))]
+    [EnableRateLimiting(RateLimitingConfiguration.SignupPolicy)]
+    [RequestSizeLimit(RequestSizeConfiguration.MaximumAccountRequestBytes)]
+    public async Task<IActionResult> Register(RegisterAccountRequest request)
     {
-        var resultOfTheVisitorAccountRegistration = await serviceThatRegistersTheNewUserAccounts.RegisterNewAccountForVisitorAsync(
-            requestSentByTheVisitorToRegister.Email,
-            requestSentByTheVisitorToRegister.Password);
+        var result = await registrationService.RegisterAsync(
+            request.Email,
+            request.Password);
 
-        if (resultOfTheVisitorAccountRegistration.IsAccepted)
+        if (result is AccountRegistrationResult.RefusedByRules refusal)
         {
-            return Ok(new MessageResponse(MessageSentForEveryAcceptedRegistration));
+            return AnswerRefusedByRules(refusal);
         }
 
-        if (resultOfTheVisitorAccountRegistration.TooManyRequestsForThisEmailAddress)
+        if (result is AccountRegistrationResult.TooManyRequests)
         {
             return StatusCode(StatusCodes.Status429TooManyRequests);
         }
 
-        if (resultOfTheVisitorAccountRegistration.EmailCouldNotBeSent)
+        if (result is AccountRegistrationResult.EmailCouldNotBeSent emailNotSent)
         {
-            return CreateAnswerForTheEmailThatCouldNotBeSent(resultOfTheVisitorAccountRegistration);
+            return AnswerEmailNotSent(emailNotSent);
         }
 
-        return CreateAnswerForTheRequestBreakingTheRules(resultOfTheVisitorAccountRegistration);
+        return Ok(new MessageResponse(AcceptedMessage));
     }
 
     // Note la panne dans le journal, et invite le visiteur à réessayer.
     // Le journal désigne l'utilisateur par son identifiant, jamais par son adresse (SS §7).
-    private ObjectResult CreateAnswerForTheEmailThatCouldNotBeSent(AccountRegistrationResult resultOfTheVisitorAccountRegistration)
+    private ObjectResult AnswerEmailNotSent(AccountRegistrationResult.EmailCouldNotBeSent emailNotSent)
     {
-        loggerOfTheAccountRegistrationTechnicalProblems.LogError(
+        logger.LogError(
             "L'e-mail d'inscription n'a pas pu partir pour l'utilisateur {IdentifiantUtilisateur}.",
-            resultOfTheVisitorAccountRegistration.UserIdentifierForTheTechnicalLog);
+            emailNotSent.UserId);
 
-        return Problem(statusCode: StatusCodes.Status503ServiceUnavailable, title: MessageShownWhenTheEmailCouldNotBeSent);
+        return Problem(statusCode: StatusCodes.Status503ServiceUnavailable, title: EmailNotSentMessage);
     }
 
     // Donne le message de chaque champ refusé.
-    private ActionResult CreateAnswerForTheRequestBreakingTheRules(AccountRegistrationResult resultOfTheVisitorAccountRegistration)
+    private ActionResult AnswerRefusedByRules(AccountRegistrationResult.RefusedByRules refusal)
     {
-        if (resultOfTheVisitorAccountRegistration.EmailAddressErrorMessage != null)
+        if (refusal.IsEmailInvalid)
         {
-            ModelState.AddModelError(nameof(RegisterAccountRequest.Email), resultOfTheVisitorAccountRegistration.EmailAddressErrorMessage);
+            ModelState.AddModelError(nameof(RegisterAccountRequest.Email), ErrorMessages.InvalidEmailAddress);
         }
 
-        if (resultOfTheVisitorAccountRegistration.PasswordErrorMessage != null)
+        if (refusal.IsPasswordInvalid)
         {
-            ModelState.AddModelError(nameof(RegisterAccountRequest.Password), resultOfTheVisitorAccountRegistration.PasswordErrorMessage);
+            ModelState.AddModelError(nameof(RegisterAccountRequest.Password), ErrorMessages.PasswordBreaksRules);
         }
 
         return ValidationProblem();

@@ -3,6 +3,7 @@ using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
 using WalletFlow.Api.Configuration;
+using WalletFlow.Api.Controllers;
 using static WalletFlow.Tests.Api.RegistrationRequestTestValues;
 
 namespace WalletFlow.Tests.Api;
@@ -12,107 +13,107 @@ namespace WalletFlow.Tests.Api;
 public class ApiErrorFormatTests
 {
     // Vérifie le format commun d'une erreur et renvoie le texte de la réponse.
-    private static async Task<string> CheckThatAnswerIsProblemWithThisFrenchTitleAsync(
-        HttpResponseMessage answerOfTheApiToCheck,
-        HttpStatusCode statusCodeExpectedInTheAnswer,
-        string frenchTitleExpectedInTheAnswer)
+    private static async Task<string> AssertFrenchProblemTitleAsync(
+        HttpResponseMessage response,
+        HttpStatusCode statusCode,
+        string frenchTitle)
     {
-        Assert.Equal(statusCodeExpectedInTheAnswer, answerOfTheApiToCheck.StatusCode);
-        Assert.Equal("application/problem+json", answerOfTheApiToCheck.Content.Headers.ContentType?.MediaType);
+        Assert.Equal(statusCode, response.StatusCode);
+        Assert.Equal("application/problem+json", response.Content.Headers.ContentType?.MediaType);
 
-        var textOfTheAnswerToCheck = await answerOfTheApiToCheck.Content.ReadAsStringAsync();
-        var jsonDocumentOfTheApiAnswer = JsonDocument.Parse(textOfTheAnswerToCheck);
-        Assert.Equal(frenchTitleExpectedInTheAnswer, jsonDocumentOfTheApiAnswer.RootElement.GetProperty("title").GetString());
-        Assert.Equal((int)statusCodeExpectedInTheAnswer, jsonDocumentOfTheApiAnswer.RootElement.GetProperty("status").GetInt32());
+        var responseText = await response.Content.ReadAsStringAsync();
+        var jsonDocument = JsonDocument.Parse(responseText);
+        Assert.Equal(frenchTitle, jsonDocument.RootElement.GetProperty("title").GetString());
+        Assert.Equal((int)statusCode, jsonDocument.RootElement.GetProperty("status").GetInt32());
 
-        return textOfTheAnswerToCheck;
+        return responseText;
     }
 
     [Fact]
     public async Task UnknownWebsiteAddressOfTheApiGivesFrenchProblem()
     {
-        using var apiStartedLikeInProductionForThisTest = new ApiFactoryRunningLikeInProduction();
-        var clientThatCallsTheApiInProductionMode = apiStartedLikeInProductionForThisTest.CreateClient();
+        using var productionApi = new ApiFactoryInProduction();
+        var client = productionApi.CreateClient();
 
-        var answerToTheUnknownWebsiteAddress = await clientThatCallsTheApiInProductionMode.GetAsync("/adresse-inconnue");
+        var response = await client.GetAsync("/adresse-inconnue");
 
-        await CheckThatAnswerIsProblemWithThisFrenchTitleAsync(answerToTheUnknownWebsiteAddress, HttpStatusCode.NotFound, "Cette adresse n'existe pas.");
-        SecurityHeadersAssertions.CheckThatAnswerCarriesTheExactSecurityHeaders(answerToTheUnknownWebsiteAddress);
+        await AssertFrenchProblemTitleAsync(response, HttpStatusCode.NotFound, "Cette adresse n'existe pas.");
+        SecurityHeadersAssertions.AssertExactSecurityHeaders(response);
     }
 
     [Fact]
     public async Task WrongHttpMethodGivesFrenchProblem()
     {
-        using var apiStartedLikeInProductionForThisTest = new ApiFactoryRunningLikeInProduction();
-        var clientThatCallsTheApiInProductionMode = apiStartedLikeInProductionForThisTest.CreateClient();
+        using var productionApi = new ApiFactoryInProduction();
+        var client = productionApi.CreateClient();
 
-        var answerToTheWrongHttpMethodRequest = await clientThatCallsTheApiInProductionMode.GetAsync(AddressOfTheAccountRegistrationEndpoint);
+        var response = await client.GetAsync(RegistrationEndpoint);
 
-        await CheckThatAnswerIsProblemWithThisFrenchTitleAsync(answerToTheWrongHttpMethodRequest, HttpStatusCode.MethodNotAllowed, "Cette action n'est pas possible à cette adresse.");
+        await AssertFrenchProblemTitleAsync(response, HttpStatusCode.MethodNotAllowed, "Cette action n'est pas possible à cette adresse.");
     }
 
     [Fact]
     public async Task WrongContentTypeGivesFrenchProblem()
     {
-        using var apiStartedLikeInProductionForThisTest = new ApiFactoryRunningLikeInProduction();
-        var clientThatCallsTheApiInProductionMode = apiStartedLikeInProductionForThisTest.CreateClient();
+        using var productionApi = new ApiFactoryInProduction();
+        var client = productionApi.CreateClient();
 
-        var answerToTheWrongContentType = await clientThatCallsTheApiInProductionMode.PostAsync(
-            AddressOfTheAccountRegistrationEndpoint,
+        var response = await client.PostAsync(
+            RegistrationEndpoint,
             new StringContent("email=visiteur@exemple.test", Encoding.UTF8, "text/plain"));
 
-        await CheckThatAnswerIsProblemWithThisFrenchTitleAsync(answerToTheWrongContentType, HttpStatusCode.UnsupportedMediaType, "Le format de la requête n'est pas accepté.");
+        await AssertFrenchProblemTitleAsync(response, HttpStatusCode.UnsupportedMediaType, "Le format de la requête n'est pas accepté.");
     }
 
     // Le dépassement d'une limite de débit n'a pas de contenu : il reçoit quand même le format commun.
     [Fact]
     public async Task RequestOverTheRateLimitGivesFrenchProblem()
     {
-        using var apiStartedLikeInProductionForThisTest = new ApiFactoryRunningLikeInProduction();
-        var clientThatCallsTheApiInProductionMode = apiStartedLikeInProductionForThisTest.CreateClient();
+        using var productionApi = new ApiFactoryInProduction();
+        var client = productionApi.CreateClient();
 
-        for (var numberOfTheRegistrationBeingSent = 1; numberOfTheRegistrationBeingSent <= 5; numberOfTheRegistrationBeingSent++)
+        for (var registrationNumber = 1; registrationNumber <= 5; registrationNumber++)
         {
-            await clientThatCallsTheApiInProductionMode.PostAsJsonAsync(
-                AddressOfTheAccountRegistrationEndpoint,
-                new { email = "visiteur" + numberOfTheRegistrationBeingSent + "@exemple.test", password = ValidPasswordChosenInTheseTests });
+            await client.PostAsJsonAsync(
+                RegistrationEndpoint,
+                new { email = "visiteur" + registrationNumber + "@exemple.test", password = ValidPassword });
         }
 
-        var answerToRequestOverTheRateLimit = await clientThatCallsTheApiInProductionMode.PostAsJsonAsync(
-            AddressOfTheAccountRegistrationEndpoint,
-            new { email = "visiteur6@exemple.test", password = ValidPasswordChosenInTheseTests });
+        var response = await client.PostAsJsonAsync(
+            RegistrationEndpoint,
+            new { email = "visiteur6@exemple.test", password = ValidPassword });
 
-        await CheckThatAnswerIsProblemWithThisFrenchTitleAsync(answerToRequestOverTheRateLimit, HttpStatusCode.TooManyRequests, "Trop de demandes. Réessaie plus tard.");
+        await AssertFrenchProblemTitleAsync(response, HttpStatusCode.TooManyRequests, "Trop de demandes. Réessaie plus tard.");
     }
 
     [Fact]
     public async Task UnexpectedFailureOfTheApiGivesFrenchProblem()
     {
-        using var apiStartedLikeInProductionForThisTest = new ApiFactoryRunningLikeInProduction();
-        apiStartedLikeInProductionForThisTest.RepositoryThatKeepsAccountsInMemory.DatabaseIsDownDuringThisTest = true;
-        var clientThatCallsTheApiInProductionMode = apiStartedLikeInProductionForThisTest.CreateClient();
+        using var productionApi = new ApiFactoryInProduction();
+        productionApi.AccountRepository.IsDown = true;
+        var client = productionApi.CreateClient();
 
-        var answerDuringTheSimulatedDatabaseFailure = await clientThatCallsTheApiInProductionMode.PostAsJsonAsync(
-            AddressOfTheAccountRegistrationEndpoint,
-            new { email = "visiteur@exemple.test", password = ValidPasswordChosenInTheseTests });
+        var response = await client.PostAsJsonAsync(
+            RegistrationEndpoint,
+            new { email = "visiteur@exemple.test", password = ValidPassword });
 
-        await CheckThatAnswerIsProblemWithThisFrenchTitleAsync(answerDuringTheSimulatedDatabaseFailure, HttpStatusCode.InternalServerError, "Une erreur est survenue. Réessaie plus tard.");
+        await AssertFrenchProblemTitleAsync(response, HttpStatusCode.InternalServerError, "Une erreur est survenue. Réessaie plus tard.");
     }
 
     // Le champ refusé garde sa clé stable et son message en français.
     [Fact]
     public async Task RefusedFieldKeepsItsStableKeyAndItsFrenchMessage()
     {
-        using var apiStartedLikeInProductionForThisTest = new ApiFactoryRunningLikeInProduction();
-        var clientThatCallsTheApiInProductionMode = apiStartedLikeInProductionForThisTest.CreateClient();
+        using var productionApi = new ApiFactoryInProduction();
+        var client = productionApi.CreateClient();
 
-        var answerToTheRefusedRegistrationRequest = await clientThatCallsTheApiInProductionMode.PostAsJsonAsync(
-            AddressOfTheAccountRegistrationEndpoint,
-            new { email = "adresse-sans-arobase", password = ValidPasswordChosenInTheseTests });
+        var response = await client.PostAsJsonAsync(
+            RegistrationEndpoint,
+            new { email = "adresse-sans-arobase", password = ValidPassword });
 
-        var textOfTheAnswerToRefusedRequest = await CheckThatAnswerIsProblemWithThisFrenchTitleAsync(answerToTheRefusedRegistrationRequest, HttpStatusCode.BadRequest, ApiErrorConfiguration.TitleOfEveryRefusedRequestAnswer);
-        var errorsListedInTheRefusedAnswer = JsonDocument.Parse(textOfTheAnswerToRefusedRequest).RootElement.GetProperty("errors");
-        Assert.Equal("L'adresse e-mail n'est pas valide.", errorsListedInTheRefusedAnswer.GetProperty("Email")[0].GetString());
+        var responseText = await AssertFrenchProblemTitleAsync(response, HttpStatusCode.BadRequest, ApiErrorConfiguration.RefusedRequestTitle);
+        var errors = JsonDocument.Parse(responseText).RootElement.GetProperty("errors");
+        Assert.Equal("L'adresse e-mail n'est pas valide.", errors.GetProperty("Email")[0].GetString());
     }
 
     // Une requête illisible donne toujours la même erreur, quel que soit son contenu : aucune clé ne dépend du visiteur.
@@ -127,46 +128,56 @@ public class ApiErrorFormatTests
     [InlineData("{\"<script>alert(1)</script>\":}")]
     [InlineData("{\"email\":\"visiteur@exemple.test\",\"<img src=x onerror=alert(1)>\":[")]
     [InlineData("{\"email\":\"visiteur@exemple.test\",\"password\":\"Aa1!\\ud83dbcdefghij\"}")] // moitié d'emoji seule
-    public async Task UnreadableRequestAlwaysGivesTheSameGenericError(string unreadableBodyOfTheRegistrationRequest)
+    public async Task UnreadableRequestAlwaysGivesTheSameGenericError(string unreadableBody)
     {
-        using var apiStartedLikeInProductionForThisTest = new ApiFactoryRunningLikeInProduction();
-        var clientThatCallsTheApiInProductionMode = apiStartedLikeInProductionForThisTest.CreateClient();
+        using var productionApi = new ApiFactoryInProduction();
+        var client = productionApi.CreateClient();
 
-        var answerToTheUnreadableRegistrationRequest = await clientThatCallsTheApiInProductionMode.PostAsync(
-            AddressOfTheAccountRegistrationEndpoint,
-            new StringContent(unreadableBodyOfTheRegistrationRequest, Encoding.UTF8, "application/json"));
+        var response = await client.PostAsync(
+            RegistrationEndpoint,
+            new StringContent(unreadableBody, Encoding.UTF8, "application/json"));
 
-        var textOfTheAnswerToUnreadableRequest = await CheckThatAnswerIsProblemWithThisFrenchTitleAsync(answerToTheUnreadableRegistrationRequest, HttpStatusCode.BadRequest, ApiErrorConfiguration.TitleOfEveryRefusedRequestAnswer);
+        var responseText = await AssertFrenchProblemTitleAsync(response, HttpStatusCode.BadRequest, ApiErrorConfiguration.RefusedRequestTitle);
 
-        var errorsListedInTheRefusedAnswer = JsonDocument.Parse(textOfTheAnswerToUnreadableRequest).RootElement.GetProperty("errors");
-        var propertyOfTheOnlyErrorInAnswer = Assert.Single(errorsListedInTheRefusedAnswer.EnumerateObject());
-        Assert.Equal(ApiErrorConfiguration.KeyOfTheErrorsOutsideTheRequestFields, propertyOfTheOnlyErrorInAnswer.Name);
-        var messageOfTheOnlyErrorInAnswer = Assert.Single(propertyOfTheOnlyErrorInAnswer.Value.EnumerateArray());
-        Assert.Equal(ApiErrorConfiguration.MessageForRequestThatCannotBeRead, messageOfTheOnlyErrorInAnswer.GetString());
+        var errors = JsonDocument.Parse(responseText).RootElement.GetProperty("errors");
+        var errorProperty = Assert.Single(errors.EnumerateObject());
+        Assert.Equal(ApiErrorConfiguration.GeneralErrorsKey, errorProperty.Name);
+        var errorMessage = Assert.Single(errorProperty.Value.EnumerateArray());
+        Assert.Equal(ApiErrorConfiguration.UnreadableRequestMessage, errorMessage.GetString());
 
-        Assert.DoesNotContain("<script>", textOfTheAnswerToUnreadableRequest);
-        Assert.DoesNotContain("<img", textOfTheAnswerToUnreadableRequest);
-        Assert.DoesNotContain("WalletFlow", textOfTheAnswerToUnreadableRequest);
-        Assert.DoesNotContain("requestSentByTheVisitorToRegister", textOfTheAnswerToUnreadableRequest);
-        Assert.DoesNotContain("System.Text.Json", textOfTheAnswerToUnreadableRequest);
-        Assert.Empty(apiStartedLikeInProductionForThisTest.RepositoryThatKeepsAccountsInMemory.SavedUsers);
-        SecurityHeadersAssertions.CheckThatAnswerCarriesTheExactSecurityHeaders(answerToTheUnreadableRegistrationRequest);
+        Assert.DoesNotContain("<script>", responseText);
+        Assert.DoesNotContain("<img", responseText);
+        Assert.DoesNotContain("WalletFlow", responseText);
+        Assert.DoesNotContain(ReadParameterName(typeof(AccountRegistrationController), nameof(AccountRegistrationController.Register)), responseText);
+        Assert.DoesNotContain("System.Text.Json", responseText);
+        Assert.Empty(productionApi.AccountRepository.SavedUsers);
+        SecurityHeadersAssertions.AssertExactSecurityHeaders(response);
     }
 
     // Un champ d'un mauvais type n'est pas un champ manquant : il donne l'erreur générique, sans citer son chemin JSON.
     [Fact]
     public async Task ConfirmationRouteUsesTheSameFormatForUnreadableRequest()
     {
-        using var apiStartedLikeInProductionForThisTest = new ApiFactoryRunningLikeInProduction();
-        var clientThatCallsTheApiInProductionMode = apiStartedLikeInProductionForThisTest.CreateClient();
+        using var productionApi = new ApiFactoryInProduction();
+        var client = productionApi.CreateClient();
 
-        var answerToTheUnreadableConfirmationRequest = await clientThatCallsTheApiInProductionMode.PostAsync(
-            AddressOfTheAccountConfirmationEndpoint,
+        var response = await client.PostAsync(
+            ConfirmationEndpoint,
             new StringContent("{\"token\":[],\"password\":{}}", Encoding.UTF8, "application/json"));
 
-        var textOfTheAnswerToUnreadableRequest = await CheckThatAnswerIsProblemWithThisFrenchTitleAsync(answerToTheUnreadableConfirmationRequest, HttpStatusCode.BadRequest, ApiErrorConfiguration.TitleOfEveryRefusedRequestAnswer);
-        Assert.DoesNotContain("$", textOfTheAnswerToUnreadableRequest);
-        Assert.DoesNotContain("requestSentByTheVisitorToConfirm", textOfTheAnswerToUnreadableRequest);
-        Assert.Contains(ApiErrorConfiguration.MessageForRequestThatCannotBeRead, textOfTheAnswerToUnreadableRequest);
+        var responseText = await AssertFrenchProblemTitleAsync(response, HttpStatusCode.BadRequest, ApiErrorConfiguration.RefusedRequestTitle);
+        Assert.DoesNotContain("$", responseText);
+        Assert.DoesNotContain(ReadParameterName(typeof(AccountConfirmationController), nameof(AccountConfirmationController.ConfirmAccount)), responseText);
+        Assert.Contains(ApiErrorConfiguration.UnreadableRequestMessage, responseText);
+    }
+
+    // Nom que le code donne au paramètre d'une action : un détail interne, qui ne doit jamais sortir dans une réponse.
+    // Il est lu dans le code : le test reste juste si ce nom change.
+    private static string ReadParameterName(Type controllerType, string actionName)
+    {
+        var action = controllerType.GetMethod(actionName)
+            ?? throw new InvalidOperationException("L'action " + actionName + " n'existe pas.");
+        return action.GetParameters().Single().Name
+            ?? throw new InvalidOperationException("Le paramètre de l'action " + actionName + " n'a pas de nom.");
     }
 }

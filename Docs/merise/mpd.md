@@ -13,10 +13,10 @@ Le choix de PostgreSQL ne vient pas des règles de gestion : il a été fait au 
 |---------------------------|--------------------|-----------------------------------------------------|
 | AN 36 (UUID)              | UUID               | Identifiants, générés par `gen_random_uuid()`       |
 | AN n                      | VARCHAR(n)         | Textes                                              |
-| AN 64 (empreinte SHA-256) | CHAR(64)           | `empreinte_jeton`                                   |
+| AN 64 (empreinte SHA-256) | CHAR(64)           | `empreinte_jeton`, `jeton_appareil`, `id_session`   |
 | AN 45 (adresse IP)        | INET               | `adresse_ip_evenement`, format IPv4 ou IPv6 vérifié |
 | N (montant, 10 chiffres)  | INTEGER            | Montants en centimes                                |
-| N 1 et N 3                | SMALLINT           | `nb_tentatives_echouees`, `nb_blocages`             |
+| N 1                       | SMALLINT           | `nb_tentatives_echouees`, `nb_blocages`             |
 | D                         | DATE               | `date_transaction`, `date_objectif`                 |
 | DH                        | TIMESTAMPTZ        | Dates et heures, avec fuseau horaire                |
 | B                         | BOOLEAN            | Booléens                                            |
@@ -83,7 +83,7 @@ CREATE TABLE utilisateur (
     CONSTRAINT ck_utilisateur_canal CHECK (
         canal_notification IN ('email', 'telephone', 'les_deux')),
     CONSTRAINT ck_utilisateur_tentatives CHECK (nb_tentatives_echouees BETWEEN 0 AND 5),
-    CONSTRAINT ck_utilisateur_blocages CHECK (nb_blocages BETWEEN 0 AND 999)
+    CONSTRAINT ck_utilisateur_blocages CHECK (nb_blocages BETWEEN 0 AND 8)
 );
 
 CREATE TABLE code_secours (
@@ -112,14 +112,14 @@ CREATE TABLE jeton (
 
 CREATE TABLE appareil (
     id_appareil    UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
-    jeton_appareil VARCHAR(64)  NOT NULL UNIQUE,
+    jeton_appareil CHAR(64)     NOT NULL UNIQUE,
     jeton_push     VARCHAR(255),
     id_utilisateur UUID         NOT NULL
         REFERENCES utilisateur (id_utilisateur) ON DELETE CASCADE
 );
 
 CREATE TABLE session (
-    id_session             VARCHAR(128) PRIMARY KEY,
+    id_session             CHAR(64)     PRIMARY KEY,
     date_derniere_activite TIMESTAMPTZ  NOT NULL DEFAULT now(),
     id_utilisateur         UUID         NOT NULL
         REFERENCES utilisateur (id_utilisateur) ON DELETE CASCADE
@@ -346,7 +346,10 @@ CREATE TRIGGER tg_sac_avant_suppression
 -- GR Suppression : effacement définitif d'un compte utilisateur.
 -- Les mouvements de ses sacs sont supprimés avant les sacs eux-mêmes, et ses
 -- événements du journal perdent l'adresse IP (l'identifiant part avec ON DELETE SET NULL).
-CREATE FUNCTION fn_utilisateur_avant_suppression() RETURNS trigger LANGUAGE plpgsql AS $$
+-- SECURITY DEFINER : la fonction a les droits du propriétaire du script, car l'application
+-- ne peut pas modifier le journal elle-même (section 8).
+CREATE FUNCTION fn_utilisateur_avant_suppression() RETURNS trigger LANGUAGE plpgsql
+    SECURITY DEFINER SET search_path = public AS $$
 BEGIN
     DELETE FROM mouvement_sac m
     USING sac s
@@ -385,11 +388,27 @@ CREATE TRIGGER tg_parametrer_controle
 -- 8. Utilisateur de base de données de l'application (SS §7)
 -- Il lit et écrit les données, mais ne peut ni supprimer de table ni modifier
 -- les types d'alerte. Son mot de passe se définit à part, jamais dans ce script.
+-- Il ne peut ni choisir ni changer le rôle d'un utilisateur : le rôle administrateur
+-- ne s'attribue que depuis le serveur, avec un compte administrateur de PostgreSQL (SS §8 et §14).
+-- Il ne peut qu'ajouter des événements au journal de sécurité, jamais les modifier
+-- ni les effacer (SS §11).
 
 CREATE ROLE walletflow_app LOGIN;
 GRANT USAGE ON SCHEMA public TO walletflow_app;
 GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO walletflow_app;
 REVOKE INSERT, UPDATE, DELETE ON type_alerte FROM walletflow_app;
+REVOKE UPDATE, DELETE ON evenement_securite FROM walletflow_app;
+REVOKE INSERT, UPDATE ON utilisateur FROM walletflow_app;
+GRANT INSERT (
+    id_utilisateur, email_utilisateur, mot_de_passe_hash, nom_utilisateur, prenom_utilisateur,
+    email_confirme, double_auth_activee, secret_totp_chiffre, canal_notification,
+    nb_tentatives_echouees, nb_blocages, date_fin_blocage, date_demande_suppression)
+    ON utilisateur TO walletflow_app;
+GRANT UPDATE (
+    email_utilisateur, mot_de_passe_hash, nom_utilisateur, prenom_utilisateur,
+    email_confirme, double_auth_activee, secret_totp_chiffre, canal_notification,
+    nb_tentatives_echouees, nb_blocages, date_fin_blocage, date_demande_suppression)
+    ON utilisateur TO walletflow_app;
 
 COMMIT;
 ```
@@ -405,6 +424,7 @@ COMMIT;
 - Chaque compte et chaque opération reçus de la banque, enregistrés une seule fois (`ux_compte_externe`, `ux_transaction_externe`).
 - Une alerte non désactivable toujours activée (`tg_parametrer_controle`).
 - La suppression d'un sac et l'effacement d'un compte utilisateur (`tg_sac_avant_suppression`, `tg_utilisateur_avant_suppression` et les règles ON DELETE).
+- Le rôle d'un utilisateur, que l'application ne peut ni choisir ni changer, et le journal de sécurité, auquel elle ne peut qu'ajouter des événements (droits de `walletflow_app`, section 8 du script).
 
 **Vérifié par l'application**
 - L'appartenance au même utilisateur : la catégorie d'une transaction et son compte, les deux sacs d'un mouvement (SS §4).

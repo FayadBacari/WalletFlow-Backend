@@ -5,20 +5,20 @@ namespace WalletFlow.Domain.AccountsAndCategories;
 public class BankConnection
 {
     // id_connexion
-    public Guid Id { get; set; } = Guid.NewGuid();
+    public Guid Id { get; init; } = Guid.NewGuid();
 
     // id_connexion_externe : identifiant de la connexion chez le prestataire.
-    public string ExternalConnectionId { get; set; } = string.Empty;
+    public string ExternalConnectionId { get; init; } = string.Empty;
 
     // nom_banque : fourni par le prestataire.
-    public string BankName { get; set; } = string.Empty;
+    public string BankName { get; init; } = string.Empty;
 
     // statut_connexion : active par défaut.
-    public BankConnectionStatus Status { get; set; } = BankConnectionStatus.Active;
+    public BankConnectionStatus Status { get; init; } = BankConnectionStatus.Active;
 
     // date_expiration_autorisation : 180 jours après l'autorisation donnée à la banque.
-    public DateTime AuthorizationExpiresAt { get; set; }
+    public DateTime AuthorizationExpiresAt { get; init; }
 
     // id_utilisateur
-    public Guid UserId { get; set; }
+    public Guid UserId { get; init; }
 }

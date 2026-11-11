@@ -7,77 +7,77 @@ namespace WalletFlow.Infrastructure.Security;
 public class InMemoryUsedAuthenticatorCodesRegister : IUsedAuthenticatorCodesRegister
 {
     // Un code reste valable 90 secondes au plus après le moment où il a servi : 2 minutes de mémoire suffisent donc.
-    public static readonly TimeSpan DurationOfTheMemoryOfOneUsedCode = TimeSpan.FromMinutes(2);
+    public static readonly TimeSpan UsedCodeRetention = TimeSpan.FromMinutes(2);
 
-    private readonly TimeProvider clockThatGivesTheCurrentDateAndTime;
-    private readonly Dictionary<Guid, UsedCodeKeptInMemory> usedCodesKeptByTheIdentifierOfTheirAccount = new Dictionary<Guid, UsedCodeKeptInMemory>();
-    private readonly object lockThatProtectsTheUsedCodes = new object();
+    private readonly TimeProvider clock;
+    private readonly Dictionary<Guid, UsedCode> usedCodesByAccountId = new Dictionary<Guid, UsedCode>();
+    private readonly object usedCodesLock = new object();
 
     // Le nombre de codes gardés en mémoire : il montre que cette mémoire ne grossit pas sans fin.
-    public int NumberOfUsedCodesKeptInMemory
+    public int UsedCodeCount
     {
         get
         {
-            lock (lockThatProtectsTheUsedCodes)
+            lock (usedCodesLock)
             {
-                return usedCodesKeptByTheIdentifierOfTheirAccount.Count;
+                return usedCodesByAccountId.Count;
             }
         }
     }
 
     // Reçoit l'horloge qui mesure la durée de cette mémoire.
-    public InMemoryUsedAuthenticatorCodesRegister(TimeProvider clockThatGivesTheCurrentDateAndTime)
+    public InMemoryUsedAuthenticatorCodesRegister(TimeProvider clock)
     {
-        this.clockThatGivesTheCurrentDateAndTime = clockThatGivesTheCurrentDateAndTime;
+        this.clock = clock;
     }
 
     // Tout se passe sous le verrou : de deux requêtes simultanées avec le même code, une seule peut réussir.
-    public bool TryToRecordThisPeriodAsUsedByThisAccount(Guid identifierOfTheAccountUsingTheCode, long numberOfThePeriodOfTheCode)
+    public bool TryRecordUse(Guid accountId, long period)
     {
-        var currentDateOfTheCodeBeingUsed = clockThatGivesTheCurrentDateAndTime.GetUtcNow();
+        var now = clock.GetUtcNow();
 
-        lock (lockThatProtectsTheUsedCodes)
+        lock (usedCodesLock)
         {
-            RemoveTheUsedCodesThatCanNoLongerBeValid(currentDateOfTheCodeBeingUsed);
+            RemoveExpired(now);
 
-            if (usedCodesKeptByTheIdentifierOfTheirAccount.TryGetValue(identifierOfTheAccountUsingTheCode, out var lastCodeUsedByThisAccount)
-                && lastCodeUsedByThisAccount.NumberOfThePeriodOfTheCode >= numberOfThePeriodOfTheCode)
+            if (usedCodesByAccountId.TryGetValue(accountId, out var lastUsedCode)
+                && lastUsedCode.Period >= period)
             {
                 return false;
             }
 
-            usedCodesKeptByTheIdentifierOfTheirAccount[identifierOfTheAccountUsingTheCode] = new UsedCodeKeptInMemory
+            usedCodesByAccountId[accountId] = new UsedCode
             {
-                NumberOfThePeriodOfTheCode = numberOfThePeriodOfTheCode,
-                DateWhenTheCodeWasUsed = currentDateOfTheCodeBeingUsed
+                Period = period,
+                UsedAt = now
             };
             return true;
         }
     }
 
     // Oublie les codes trop vieux pour être encore valables, pour que la mémoire ne grossisse pas.
-    private void RemoveTheUsedCodesThatCanNoLongerBeValid(DateTimeOffset currentDateOfTheCodeBeingUsed)
+    private void RemoveExpired(DateTimeOffset now)
     {
-        var accountsWhoseUsedCodeIsTooOld = new List<Guid>();
+        var expiredAccountIds = new List<Guid>();
 
-        foreach (var usedCodeOfOneAccountBeingChecked in usedCodesKeptByTheIdentifierOfTheirAccount)
+        foreach (var entry in usedCodesByAccountId)
         {
-            if (currentDateOfTheCodeBeingUsed - usedCodeOfOneAccountBeingChecked.Value.DateWhenTheCodeWasUsed >= DurationOfTheMemoryOfOneUsedCode)
+            if (now - entry.Value.UsedAt >= UsedCodeRetention)
             {
-                accountsWhoseUsedCodeIsTooOld.Add(usedCodeOfOneAccountBeingChecked.Key);
+                expiredAccountIds.Add(entry.Key);
             }
         }
 
-        foreach (var accountWhoseUsedCodeIsForgotten in accountsWhoseUsedCodeIsTooOld)
+        foreach (var accountId in expiredAccountIds)
         {
-            usedCodesKeptByTheIdentifierOfTheirAccount.Remove(accountWhoseUsedCodeIsForgotten);
+            usedCodesByAccountId.Remove(accountId);
         }
     }
 
     // Le dernier code utilisé par un compte.
-    private class UsedCodeKeptInMemory
+    private class UsedCode
     {
-        public required long NumberOfThePeriodOfTheCode { get; init; }
-        public required DateTimeOffset DateWhenTheCodeWasUsed { get; init; }
+        public required long Period { get; init; }
+        public required DateTimeOffset UsedAt { get; init; }
     }
 }

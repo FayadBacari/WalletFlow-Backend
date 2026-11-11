@@ -15,44 +15,44 @@ namespace WalletFlow.Api.Controllers;
 [IgnoreAntiforgeryToken]
 public class TwoFactorLoginController : ControllerBase
 {
-    private readonly TwoFactorLoginService serviceThatFinishesTheLoginsWithACode;
+    private readonly TwoFactorLoginService twoFactorLoginService;
 
     // Reçoit le cas d'utilisation de la fin de la connexion.
-    public TwoFactorLoginController(TwoFactorLoginService serviceThatFinishesTheLoginsWithACode)
+    public TwoFactorLoginController(TwoFactorLoginService twoFactorLoginService)
     {
-        this.serviceThatFinishesTheLoginsWithACode = serviceThatFinishesTheLoginsWithACode;
+        this.twoFactorLoginService = twoFactorLoginService;
     }
 
     // POST api/account/login/two-factor : ouvre la session de la connexion qui attend son code.
     // Un mauvais code répond 400 : le site reste sur le formulaire du code. 401 veut dire qu'il faut revenir au mot de passe.
     [HttpPost("login/two-factor")]
-    [EnableRateLimiting(RateLimitingConfiguration.PolicyNameForTwoFactorCodeAttemptsPerIpAddress)]
-    [RequestSizeLimit(RequestSizeConfiguration.MaximumNumberOfBytesInOneAccountRequest)]
-    public async Task<IActionResult> FinishLoginFromTheVisitorRequest(TwoFactorCodeRequest requestSentByTheVisitorWithItsCode)
+    [EnableRateLimiting(RateLimitingConfiguration.TwoFactorCodePolicy)]
+    [RequestSizeLimit(RequestSizeConfiguration.MaximumAccountRequestBytes)]
+    public async Task<IActionResult> FinishLogin(TwoFactorCodeRequest request)
     {
-        var resultOfTheLoginOfTheVisitor = await serviceThatFinishesTheLoginsWithACode.FinishLoginOfTheVisitorWithThisCodeAsync(new TwoFactorCodeAttemptFromVisitor
+        var result = await twoFactorLoginService.FinishAsync(new TwoFactorCodeAttempt
         {
-            CodeTypedByTheVisitor = requestSentByTheVisitorWithItsCode.Code,
-            IpAddressOfTheVisitor = HttpContext.Connection.RemoteIpAddress,
-            WaitingLoginTokenReadInTheCookie = Request.Cookies[SessionCookiesConfiguration.NameOfTheWaitingLoginCookie],
-            DeviceTokenReadInTheCookie = Request.Cookies[SessionCookiesConfiguration.NameOfTheDeviceTokenCookie],
-            SessionTokenReadInTheCookie = Request.Cookies[SessionCookiesConfiguration.NameOfTheUserSessionCookie]
+            Code = request.Code,
+            IpAddress = HttpContext.Connection.RemoteIpAddress,
+            WaitingLoginToken = Request.Cookies[SessionCookiesConfiguration.WaitingLoginCookieName],
+            DeviceToken = Request.Cookies[SessionCookiesConfiguration.DeviceCookieName],
+            SessionToken = Request.Cookies[SessionCookiesConfiguration.SessionCookieName]
         });
 
-        if (resultOfTheLoginOfTheVisitor.WrongCodeErrorMessage != null)
+        if (result is TwoFactorLoginResult.WrongCode)
         {
-            ModelState.AddModelError(nameof(TwoFactorCodeRequest.Code), resultOfTheLoginOfTheVisitor.WrongCodeErrorMessage);
+            ModelState.AddModelError(nameof(TwoFactorCodeRequest.Code), ErrorMessages.WrongTwoFactorCode);
             return ValidationProblem();
         }
 
-        Response.Cookies.Delete(SessionCookiesConfiguration.NameOfTheWaitingLoginCookie, SessionCookiesConfiguration.CreateOptionsOfTheWaitingLoginCookie());
+        Response.Cookies.Delete(SessionCookiesConfiguration.WaitingLoginCookieName, SessionCookiesConfiguration.CreateWaitingLoginCookieOptions());
 
-        if (!resultOfTheLoginOfTheVisitor.IsLoggedIn)
+        if (result is TwoFactorLoginResult.LoggedIn loggedIn)
         {
-            return Problem(statusCode: StatusCodes.Status401Unauthorized, title: resultOfTheLoginOfTheVisitor.LoginMustRestartErrorMessage);
+            SessionCookiesConfiguration.WriteLoginCookies(Response, loggedIn.SessionToken, loggedIn.DeviceToken);
+            return Ok(new LoginResponse(AccountLoginController.LoggedInMessage, false));
         }
 
-        SessionCookiesConfiguration.WriteLoginCookiesInThisAnswer(Response, resultOfTheLoginOfTheVisitor.SessionTokenToPutInTheCookie!, resultOfTheLoginOfTheVisitor.DeviceTokenToPutInTheCookie!);
-        return Ok(new LoginResponse(AccountLoginController.MessageSentWhenTheVisitorIsLoggedIn, false));
+        return Problem(statusCode: StatusCodes.Status401Unauthorized, title: ErrorMessages.LoginMustRestart);
     }
 }

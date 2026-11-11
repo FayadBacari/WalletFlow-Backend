@@ -7,17 +7,17 @@ namespace WalletFlow.Tests.Api;
 // Valeurs et outils communs aux tests de la récupération et du déblocage.
 public static class RecoveryRequestTestValues
 {
-    public const string AddressOfTheForgotPasswordEndpoint = "/api/account/forgot-password";
-    public const string AddressOfTheResetPasswordEndpoint = "/api/account/reset-password";
-    public const string AddressOfTheAccountUnlockEndpoint = "/api/account/unlock";
-    public const string NewPasswordChosenInTheRecoveryTests = "Nouveau-Mot-De-Passe-2";
+    public const string ForgotPasswordEndpoint = "/api/account/forgot-password";
+    public const string ResetPasswordEndpoint = "/api/account/reset-password";
+    public const string UnlockEndpoint = "/api/account/unlock";
+    public const string NewPassword = "Nouveau-Mot-De-Passe-2";
 
     // Attend qu'une condition devienne vraie : les e-mails sont préparés en arrière-plan, après la réponse de la route.
-    public static async Task WaitUntilThisConditionBecomesTrueAsync(Func<bool> conditionToWaitForInThisTest)
+    public static async Task WaitUntilAsync(Func<bool> condition)
     {
-        for (var numberOfTheCheckBeingDone = 1; numberOfTheCheckBeingDone <= 200; numberOfTheCheckBeingDone++)
+        for (var checkNumber = 1; checkNumber <= 200; checkNumber++)
         {
-            if (conditionToWaitForInThisTest())
+            if (condition())
             {
                 return;
             }
@@ -25,49 +25,49 @@ public static class RecoveryRequestTestValues
             await Task.Delay(TimeSpan.FromMilliseconds(25));
         }
 
-        Assert.True(conditionToWaitForInThisTest(), "La condition attendue n'est jamais devenue vraie.");
+        Assert.True(condition(), "La condition attendue n'est jamais devenue vraie.");
     }
 
     // Envoie une demande de récupération.
-    public static async Task<HttpResponseMessage> SendForgotPasswordRequestToTheApiAsync(HttpClient clientThatCallsTheApiInMemory, string emailAddressTypedInThisTest)
+    public static async Task<HttpResponseMessage> SendForgotPasswordRequestAsync(HttpClient client, string emailAddress)
     {
-        return await clientThatCallsTheApiInMemory.PostAsJsonAsync(AddressOfTheForgotPasswordEndpoint, new { email = emailAddressTypedInThisTest });
+        return await client.PostAsJsonAsync(ForgotPasswordEndpoint, new { email = emailAddress });
     }
 
     // Envoie un nouveau mot de passe avec le jeton du lien.
-    public static async Task<HttpResponseMessage> SendResetPasswordRequestToTheApiAsync(
-        HttpClient clientThatCallsTheApiInMemory,
-        string tokenReadInTheRecoveryLink,
-        string newPasswordTypedInThisTest = NewPasswordChosenInTheRecoveryTests)
+    public static async Task<HttpResponseMessage> SendResetPasswordRequestAsync(
+        HttpClient client,
+        string linkToken,
+        string newPassword = NewPassword)
     {
-        return await clientThatCallsTheApiInMemory.PostAsJsonAsync(AddressOfTheResetPasswordEndpoint, new { token = tokenReadInTheRecoveryLink, newPassword = newPasswordTypedInThisTest });
+        return await client.PostAsJsonAsync(ResetPasswordEndpoint, new { token = linkToken, newPassword = newPassword });
     }
 
     // Envoie le jeton du lien de déblocage.
-    public static async Task<HttpResponseMessage> SendAccountUnlockRequestToTheApiAsync(HttpClient clientThatCallsTheApiInMemory, string tokenReadInTheUnlockLink)
+    public static async Task<HttpResponseMessage> SendUnlockRequestAsync(HttpClient client, string linkToken)
     {
-        return await clientThatCallsTheApiInMemory.PostAsJsonAsync(AddressOfTheAccountUnlockEndpoint, new { token = tokenReadInTheUnlockLink });
+        return await client.PostAsJsonAsync(UnlockEndpoint, new { token = linkToken });
     }
 
     // Demande un lien de récupération, attend l'e-mail, et renvoie le jeton de son lien.
-    public static async Task<string> RequestRecoveryThenReadTheTokenOfTheLinkAsync(
-        ApiFactoryWithFakeRepositoryAndEmails apiStartedInMemoryForThisTest,
-        HttpClient clientThatCallsTheApiInMemory,
-        string emailAddressTypedInThisTest)
+    public static async Task<string> RequestRecoveryThenReadTokenAsync(
+        ApiFactoryWithFakes api,
+        HttpClient client,
+        string emailAddress)
     {
-        var numberOfEmailsBeforeTheRequest = apiStartedInMemoryForThisTest.SenderThatKeepsTheEmailsInMemory.SentEmails.Count;
+        var emailCount = api.EmailSender.SentEmails.Count;
 
-        await SendForgotPasswordRequestToTheApiAsync(clientThatCallsTheApiInMemory, emailAddressTypedInThisTest);
-        await WaitUntilThisConditionBecomesTrueAsync(() => apiStartedInMemoryForThisTest.SenderThatKeepsTheEmailsInMemory.SentEmails.Count > numberOfEmailsBeforeTheRequest);
+        await SendForgotPasswordRequestAsync(client, emailAddress);
+        await WaitUntilAsync(() => api.EmailSender.SentEmails.Count > emailCount);
 
-        return ReadTokenWrittenInTheConfirmationLink(apiStartedInMemoryForThisTest.SenderThatKeepsTheEmailsInMemory.SentEmails.Last().Body);
+        return ReadConfirmationToken(api.EmailSender.SentEmails.Last().Body);
     }
 
     // Lit le premier message d'erreur d'un champ dans la réponse.
-    public static async Task<string?> ReadErrorMessageOfThisRequestFieldAsync(HttpResponseMessage answerOfTheApiToRead, string nameOfTheFieldWithTheError)
+    public static async Task<string?> ReadFieldErrorAsync(HttpResponseMessage response, string fieldName)
     {
-        var jsonDocumentOfTheErrorAnswer = JsonDocument.Parse(await answerOfTheApiToRead.Content.ReadAsStringAsync());
+        var jsonDocument = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
 
-        return jsonDocumentOfTheErrorAnswer.RootElement.GetProperty("errors").GetProperty(nameOfTheFieldWithTheError)[0].GetString();
+        return jsonDocument.RootElement.GetProperty("errors").GetProperty(fieldName)[0].GetString();
     }
 }

@@ -9,12 +9,12 @@ public class UnconfirmedAccountsCleanupServiceTests
     [Fact]
     public async Task CleanupUsesTheCurrentDateOfTheClock()
     {
-        var repositoryThatKeepsAccountsInMemory = new FakeUserAccountRepository();
-        var clockThatOnlyMovesWhenTestsAskIt = new FakeTimeProviderForTests();
-        var serviceBeingTestedWithFakeTools = new UnconfirmedAccountsCleanupService(repositoryThatKeepsAccountsInMemory, clockThatOnlyMovesWhenTestsAskIt);
+        var accountRepository = new FakeUserAccountRepository();
+        var clock = new FakeTimeProvider();
+        var service = new UnconfirmedAccountsCleanupService(accountRepository, clock);
 
-        await serviceBeingTestedWithFakeTools.DeleteUnconfirmedAccountsWithExpiredLinkAsync();
+        await service.DeleteExpiredUnconfirmedAccountsAsync();
 
-        Assert.Equal(clockThatOnlyMovesWhenTestsAskIt.GetUtcNow().UtcDateTime, Assert.Single(repositoryThatKeepsAccountsInMemory.DatesOfTheCleanupsRequested));
+        Assert.Equal(clock.GetUtcNow().UtcDateTime, Assert.Single(accountRepository.CleanupDates));
     }
 }

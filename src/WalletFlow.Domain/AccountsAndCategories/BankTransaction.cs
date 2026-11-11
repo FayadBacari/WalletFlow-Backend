@@ -5,26 +5,26 @@ namespace WalletFlow.Domain.AccountsAndCategories;
 public class BankTransaction
 {
     // id_transaction
-    public Guid Id { get; set; } = Guid.NewGuid();
+    public Guid Id { get; init; } = Guid.NewGuid();
 
     // id_transaction_externe : identifiant de l'opération chez le prestataire.
-    public string ExternalTransactionId { get; set; } = string.Empty;
+    public string ExternalTransactionId { get; init; } = string.Empty;
 
     // date_transaction
-    public DateOnly TransactionDate { get; set; }
+    public DateOnly TransactionDate { get; init; }
 
     // libelle_transaction : contenu non fiable, toujours affiché comme du texte.
-    public string Label { get; set; } = string.Empty;
+    public string Label { get; init; } = string.Empty;
 
     // montant_transaction : en centimes, négatif pour une dépense, positif pour un revenu.
-    public int AmountInCents { get; set; }
+    public int AmountInCents { get; init; }
 
     // est_transfert_interne : un transfert n'est compté ni en dépense ni en revenu.
-    public bool IsInternalTransfer { get; set; } = false;
+    public bool IsInternalTransfer { get; init; } = false;
 
     // id_compte
-    public Guid BankAccountId { get; set; }
+    public Guid BankAccountId { get; init; }
 
     // id_categorie
-    public Guid CategoryId { get; set; }
+    public Guid CategoryId { get; init; }
 }

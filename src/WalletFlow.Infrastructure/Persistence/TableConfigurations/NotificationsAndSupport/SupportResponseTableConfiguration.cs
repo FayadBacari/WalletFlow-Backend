@@ -8,19 +8,19 @@ namespace WalletFlow.Infrastructure.Persistence.TableConfigurations.Notification
 public class SupportResponseTableConfiguration : IEntityTypeConfiguration<SupportResponse>
 {
     // Appelée par EF Core au démarrage (nom imposé par le framework).
-    public void Configure(EntityTypeBuilder<SupportResponse> builderOfTheSupportResponseTableMapping)
+    public void Configure(EntityTypeBuilder<SupportResponse> builder)
     {
-        builderOfTheSupportResponseTableMapping.ToTable("reponse_support");
+        builder.ToTable("reponse_support");
 
         // L'identifiant est créé par l'entité elle-même, jamais par EF Core.
-        builderOfTheSupportResponseTableMapping.HasKey(nameof(SupportResponse.Id));
-        builderOfTheSupportResponseTableMapping.Property(nameof(SupportResponse.Id)).HasColumnName("id_reponse").ValueGeneratedNever();
+        builder.HasKey(nameof(SupportResponse.Id));
+        builder.Property(nameof(SupportResponse.Id)).HasColumnName("id_reponse").ValueGeneratedNever();
 
-        builderOfTheSupportResponseTableMapping.Property(nameof(SupportResponse.Content)).HasColumnName("contenu_reponse");
-        builderOfTheSupportResponseTableMapping.Property(nameof(SupportResponse.SupportRequestId)).HasColumnName("id_demande");
+        builder.Property(nameof(SupportResponse.Content)).HasColumnName("contenu_reponse");
+        builder.Property(nameof(SupportResponse.SupportRequestId)).HasColumnName("id_demande");
 
         // Une réponse suit sa demande : elle disparaît avec elle (ON DELETE CASCADE).
-        builderOfTheSupportResponseTableMapping.HasOne<SupportRequest>().WithMany()
+        builder.HasOne<SupportRequest>().WithMany()
             .HasForeignKey(nameof(SupportResponse.SupportRequestId))
             .OnDelete(DeleteBehavior.Cascade);
     }

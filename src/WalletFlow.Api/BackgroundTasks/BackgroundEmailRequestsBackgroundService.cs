@@ -6,54 +6,54 @@ namespace WalletFlow.Api.BackgroundTasks;
 // Tâche de fond : prépare et envoie les e-mails de récupération et de déblocage, un par un, dans l'ordre de la file.
 public class BackgroundEmailRequestsBackgroundService : BackgroundService
 {
-    private readonly IBackgroundEmailRequestQueue queueOfTheEmailsToPrepareInTheBackground;
-    private readonly IServiceScopeFactory factoryOfTheScopesUsedByTheEmailRequests;
-    private readonly ILogger<BackgroundEmailRequestsBackgroundService> loggerOfTheBackgroundEmailRequests;
+    private readonly IBackgroundEmailRequestQueue emailQueue;
+    private readonly IServiceScopeFactory scopeFactory;
+    private readonly ILogger<BackgroundEmailRequestsBackgroundService> logger;
 
     // Reçoit la file, de quoi créer un accès à la base pour chaque demande, et le journal technique.
     public BackgroundEmailRequestsBackgroundService(
-        IBackgroundEmailRequestQueue queueOfTheEmailsToPrepareInTheBackground,
-        IServiceScopeFactory factoryOfTheScopesUsedByTheEmailRequests,
-        ILogger<BackgroundEmailRequestsBackgroundService> loggerOfTheBackgroundEmailRequests)
+        IBackgroundEmailRequestQueue emailQueue,
+        IServiceScopeFactory scopeFactory,
+        ILogger<BackgroundEmailRequestsBackgroundService> logger)
     {
-        this.queueOfTheEmailsToPrepareInTheBackground = queueOfTheEmailsToPrepareInTheBackground;
-        this.factoryOfTheScopesUsedByTheEmailRequests = factoryOfTheScopesUsedByTheEmailRequests;
-        this.loggerOfTheBackgroundEmailRequests = loggerOfTheBackgroundEmailRequests;
+        this.emailQueue = emailQueue;
+        this.scopeFactory = scopeFactory;
+        this.logger = logger;
     }
 
     // Tourne tant que l'API tourne (nom imposé par le framework).
-    protected override async Task ExecuteAsync(CancellationToken tokenThatStopsTheEmailRequestsTask)
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        while (!tokenThatStopsTheEmailRequestsTask.IsCancellationRequested)
+        while (!stoppingToken.IsCancellationRequested)
         {
-            var nextEmailRequestOfTheQueue = await queueOfTheEmailsToPrepareInTheBackground.WaitForNextEmailRequestOfTheQueueAsync(tokenThatStopsTheEmailRequestsTask);
+            var request = await emailQueue.WaitForNextAsync(stoppingToken);
 
-            await ProcessOneEmailRequestOfTheQueueAsync(nextEmailRequestOfTheQueue);
+            await ProcessNextRequestAsync(request);
         }
     }
 
     // Traite une demande. Une panne ne doit pas arrêter la tâche : les demandes suivantes doivent encore partir.
     // Le journal désigne l'utilisateur par son identifiant, jamais par son adresse (SS §7).
-    public async Task ProcessOneEmailRequestOfTheQueueAsync(BackgroundEmailRequest nextEmailRequestOfTheQueue)
+    public async Task ProcessNextRequestAsync(BackgroundEmailRequest request)
     {
         try
         {
-            using var scopeOfThisBackgroundEmailRequest = factoryOfTheScopesUsedByTheEmailRequests.CreateScope();
-            var serviceThatProcessesTheEmailRequests = scopeOfThisBackgroundEmailRequest.ServiceProvider.GetRequiredService<BackgroundEmailRequestProcessingService>();
+            using var scope = scopeFactory.CreateScope();
+            var processingService = scope.ServiceProvider.GetRequiredService<BackgroundEmailRequestProcessingService>();
 
-            var resultOfTheBackgroundEmailRequest = await serviceThatProcessesTheEmailRequests.ProcessOneBackgroundEmailRequestAsync(nextEmailRequestOfTheQueue);
+            var result = await processingService.ProcessAsync(request);
 
-            if (resultOfTheBackgroundEmailRequest.EmailCouldNotBeSent)
+            if (result.EmailCouldNotBeSent)
             {
-                loggerOfTheBackgroundEmailRequests.LogError(
+                logger.LogError(
                     "Un e-mail de type {TypeDeDemande} n'a pas pu partir pour l'utilisateur {IdentifiantUtilisateur}.",
-                    nextEmailRequestOfTheQueue.TypeOfTheRequestedBackgroundEmail,
-                    resultOfTheBackgroundEmailRequest.UserIdentifierForTheTechnicalLog);
+                    request.Type,
+                    result.UserId);
             }
         }
-        catch (Exception technicalErrorRaisedByTheEmailRequest)
+        catch (Exception exception)
         {
-            loggerOfTheBackgroundEmailRequests.LogError(technicalErrorRaisedByTheEmailRequest, "Le traitement d'une demande d'e-mail a échoué.");
+            logger.LogError(exception, "Le traitement d'une demande d'e-mail a échoué.");
         }
     }
 }

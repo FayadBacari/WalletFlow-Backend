@@ -4,15 +4,15 @@ namespace WalletFlow.Api.Configuration;
 // un cookie sans Secure, avec un domaine, ou sur un autre chemin que / : un sous-domaine ne peut donc pas l'imposer.
 public static class SessionCookiesConfiguration
 {
-    public const string NameOfTheUserSessionCookie = "__Host-walletflow-session";
-    public const string NameOfTheDeviceTokenCookie = "__Host-walletflow-device";
-    public const string NameOfTheWaitingLoginCookie = "__Host-walletflow-two-factor";
+    public const string SessionCookieName = "__Host-walletflow-session";
+    public const string DeviceCookieName = "__Host-walletflow-device";
+    public const string WaitingLoginCookieName = "__Host-walletflow-two-factor";
 
-    public static readonly TimeSpan DurationOfTheDeviceTokenCookie = TimeSpan.FromDays(365);
+    public static readonly TimeSpan DeviceCookieLifetime = TimeSpan.FromDays(365);
 
     // Cookie de session : sans date de fin, il disparaît à la fermeture du navigateur.
     // Les 30 minutes d'inactivité sont contrôlées par le serveur.
-    public static CookieOptions CreateOptionsOfTheUserSessionCookie()
+    public static CookieOptions CreateSessionCookieOptions()
     {
         return new CookieOptions
         {
@@ -24,28 +24,28 @@ public static class SessionCookiesConfiguration
     }
 
     // Cookie d'appareil : durable, pour reconnaître le navigateur à la prochaine connexion (SS §3).
-    public static CookieOptions CreateOptionsOfTheDeviceTokenCookie()
+    public static CookieOptions CreateDeviceCookieOptions()
     {
-        var optionsOfTheDeviceTokenCookie = CreateOptionsOfTheUserSessionCookie();
-        optionsOfTheDeviceTokenCookie.MaxAge = DurationOfTheDeviceTokenCookie;
+        var deviceCookieOptions = CreateSessionCookieOptions();
+        deviceCookieOptions.MaxAge = DeviceCookieLifetime;
 
-        return optionsOfTheDeviceTokenCookie;
+        return deviceCookieOptions;
     }
 
     // Cookie de la connexion qui attend son code : il ne sert que pour les requêtes venues du site lui-même.
     // Sans date de fin, comme celui de la session : les 5 minutes d'attente sont contrôlées par le serveur.
-    public static CookieOptions CreateOptionsOfTheWaitingLoginCookie()
+    public static CookieOptions CreateWaitingLoginCookieOptions()
     {
-        var optionsOfTheWaitingLoginCookie = CreateOptionsOfTheUserSessionCookie();
-        optionsOfTheWaitingLoginCookie.SameSite = SameSiteMode.Strict;
+        var waitingLoginCookieOptions = CreateSessionCookieOptions();
+        waitingLoginCookieOptions.SameSite = SameSiteMode.Strict;
 
-        return optionsOfTheWaitingLoginCookie;
+        return waitingLoginCookieOptions;
     }
 
     // Écrit le cookie de session et le cookie d'appareil, renouvelé à chaque connexion.
-    public static void WriteLoginCookiesInThisAnswer(HttpResponse answerSentForTheSuccessfulLoginRequest, string sessionTokenToPutInTheCookie, string deviceTokenToPutInTheCookie)
+    public static void WriteLoginCookies(HttpResponse response, string sessionToken, string deviceToken)
     {
-        answerSentForTheSuccessfulLoginRequest.Cookies.Append(NameOfTheUserSessionCookie, sessionTokenToPutInTheCookie, CreateOptionsOfTheUserSessionCookie());
-        answerSentForTheSuccessfulLoginRequest.Cookies.Append(NameOfTheDeviceTokenCookie, deviceTokenToPutInTheCookie, CreateOptionsOfTheDeviceTokenCookie());
+        response.Cookies.Append(SessionCookieName, sessionToken, CreateSessionCookieOptions());
+        response.Cookies.Append(DeviceCookieName, deviceToken, CreateDeviceCookieOptions());
     }
 }

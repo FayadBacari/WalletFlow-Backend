@@ -5,23 +5,23 @@ namespace WalletFlow.Domain.BagsAndSuggestions;
 public class SavingsSuggestion
 {
     // id_suggestion
-    public Guid Id { get; set; } = Guid.NewGuid();
+    public Guid Id { get; init; } = Guid.NewGuid();
 
     // regle_suggestion
-    public SuggestionRule Rule { get; set; }
+    public SuggestionRule Rule { get; init; }
 
     // economie_mensuelle : économie estimée par mois, en centimes.
-    public int MonthlySavingsInCents { get; set; }
+    public int MonthlySavingsInCents { get; init; }
 
     // statut_suggestion : proposée par défaut.
-    public SuggestionStatus Status { get; set; } = SuggestionStatus.Proposed;
+    public SuggestionStatus Status { get; init; } = SuggestionStatus.Proposed;
 
     // date_statut_suggestion : une suggestion ignorée ne réapparaît pas pendant 30 jours.
-    public DateTime? StatusChangedAt { get; set; }
+    public DateTime? StatusChangedAt { get; init; }
 
     // id_utilisateur
-    public Guid UserId { get; set; }
+    public Guid UserId { get; init; }
 
     // id_categorie : seulement pour la règle « dépassement de catégorie ».
-    public Guid? CategoryId { get; set; }
+    public Guid? CategoryId { get; init; }
 }

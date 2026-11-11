@@ -8,31 +8,31 @@ namespace WalletFlow.Infrastructure.Emails;
 // le visiteur n'a plus qu'à redemander. La taille est limitée, pour que la mémoire ne puisse pas grossir sans fin.
 public class InMemoryBackgroundEmailRequestQueue : IBackgroundEmailRequestQueue
 {
-    public const int MaximumNumberOfRequestsWaitingInTheQueue = 1000;
+    public const int QueueCapacity = 1000;
 
-    private readonly Channel<BackgroundEmailRequest> channelThatKeepsTheWaitingRequests = Channel.CreateBounded<BackgroundEmailRequest>(MaximumNumberOfRequestsWaitingInTheQueue);
-    private readonly ILogger<InMemoryBackgroundEmailRequestQueue> loggerOfTheBackgroundEmailRequestQueue;
+    private readonly Channel<BackgroundEmailRequest> channel = Channel.CreateBounded<BackgroundEmailRequest>(QueueCapacity);
+    private readonly ILogger<InMemoryBackgroundEmailRequestQueue> logger;
 
     // Reçoit le journal technique.
-    public InMemoryBackgroundEmailRequestQueue(ILogger<InMemoryBackgroundEmailRequestQueue> loggerOfTheBackgroundEmailRequestQueue)
+    public InMemoryBackgroundEmailRequestQueue(ILogger<InMemoryBackgroundEmailRequestQueue> logger)
     {
-        this.loggerOfTheBackgroundEmailRequestQueue = loggerOfTheBackgroundEmailRequestQueue;
+        this.logger = logger;
     }
 
     // Ajoute une demande à la file. Si la file est pleine, la demande est perdue et la panne va au journal technique, sans l'adresse (SS §7).
-    public void AddEmailRequestToTheBackgroundQueue(BackgroundEmailRequest requestToAddToTheBackgroundQueue)
+    public void Add(BackgroundEmailRequest request)
     {
-        if (!channelThatKeepsTheWaitingRequests.Writer.TryWrite(requestToAddToTheBackgroundQueue))
+        if (!channel.Writer.TryWrite(request))
         {
-            loggerOfTheBackgroundEmailRequestQueue.LogError(
+            logger.LogError(
                 "La file des e-mails est pleine : une demande de type {TypeDeDemande} est perdue.",
-                requestToAddToTheBackgroundQueue.TypeOfTheRequestedBackgroundEmail);
+                request.Type);
         }
     }
 
     // Attend la prochaine demande de la file.
-    public ValueTask<BackgroundEmailRequest> WaitForNextEmailRequestOfTheQueueAsync(CancellationToken tokenThatStopsTheWaitForRequests)
+    public ValueTask<BackgroundEmailRequest> WaitForNextAsync(CancellationToken cancellationToken)
     {
-        return channelThatKeepsTheWaitingRequests.Reader.ReadAsync(tokenThatStopsTheWaitForRequests);
+        return channel.Reader.ReadAsync(cancellationToken);
     }
 }

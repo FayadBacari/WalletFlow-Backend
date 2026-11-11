@@ -12,97 +12,105 @@ namespace WalletFlow.Api.Controllers;
 // Leurs réponses contiennent un secret ou des codes de secours : aucun navigateur ni intermédiaire ne doit les garder.
 [ApiController]
 [Route("api/account/two-factor")]
-[EnableRateLimiting(RateLimitingConfiguration.PolicyNameForTwoFactorSettingsRequestsPerIpAddress)]
-[RequestSizeLimit(RequestSizeConfiguration.MaximumNumberOfBytesInOneAccountRequest)]
+[EnableRateLimiting(RateLimitingConfiguration.TwoFactorSettingsPolicy)]
+[RequestSizeLimit(RequestSizeConfiguration.MaximumAccountRequestBytes)]
 [ResponseCache(NoStore = true, Location = ResponseCacheLocation.None)]
 public class TwoFactorSettingsController : ControllerBase
 {
-    public const string MessageSentWhenTheTwoFactorIsDeactivated = "La double authentification est désactivée.";
+    public const string DeactivatedMessage = "La double authentification est désactivée.";
 
-    private readonly TwoFactorActivationService serviceThatActivatesTheTwoFactor;
-    private readonly TwoFactorDeactivationService serviceThatDeactivatesTheTwoFactor;
+    private readonly TwoFactorActivationService activationService;
+    private readonly TwoFactorDeactivationService deactivationService;
 
     // Reçoit les cas d'utilisation du réglage de la double authentification.
-    public TwoFactorSettingsController(TwoFactorActivationService serviceThatActivatesTheTwoFactor, TwoFactorDeactivationService serviceThatDeactivatesTheTwoFactor)
+    public TwoFactorSettingsController(TwoFactorActivationService activationService, TwoFactorDeactivationService deactivationService)
     {
-        this.serviceThatActivatesTheTwoFactor = serviceThatActivatesTheTwoFactor;
-        this.serviceThatDeactivatesTheTwoFactor = serviceThatDeactivatesTheTwoFactor;
+        this.activationService = activationService;
+        this.deactivationService = deactivationService;
     }
 
     // POST api/account/two-factor/start-activation : le mot de passe redemandé donne le secret à ajouter à l'application.
     [HttpPost("start-activation")]
-    public async Task<IActionResult> StartActivationFromTheUserRequest(StartTwoFactorActivationRequest requestSentByTheUserToStartActivation)
+    public async Task<IActionResult> StartActivation(StartTwoFactorActivationRequest request)
     {
-        var resultOfTheStartOfTheActivation = await serviceThatActivatesTheTwoFactor.StartActivationWithThePasswordOfTheUserAsync(
-            ReadIdentifierOfTheLoggedInUserFromTheSession(),
-            requestSentByTheUserToStartActivation.Password,
+        var result = await activationService.StartAsync(
+            ReadUserId(),
+            request.Password,
             HttpContext.Connection.RemoteIpAddress);
 
-        if (resultOfTheStartOfTheActivation.IsActivationStarted)
+        if (result is TwoFactorActivationStartResult.Started started)
         {
-            return Ok(new TwoFactorSecretResponse(resultOfTheStartOfTheActivation.SecretOfTheAuthenticatorApplication!, resultOfTheStartOfTheActivation.LinkThatAddsTheSecretToTheApplication!));
+            return Ok(new TwoFactorSecretResponse(started.Secret, started.SetupLink));
         }
 
-        if (resultOfTheStartOfTheActivation.AlreadyEnabledErrorMessage != null)
+        if (result is TwoFactorActivationStartResult.AlreadyEnabled)
         {
-            return Problem(statusCode: StatusCodes.Status409Conflict, title: resultOfTheStartOfTheActivation.AlreadyEnabledErrorMessage);
+            return Problem(statusCode: StatusCodes.Status409Conflict, title: ErrorMessages.TwoFactorAlreadyEnabled);
         }
 
-        ModelState.AddModelError(nameof(StartTwoFactorActivationRequest.Password), resultOfTheStartOfTheActivation.WrongPasswordErrorMessage!);
+        ModelState.AddModelError(nameof(StartTwoFactorActivationRequest.Password), ErrorMessages.WrongActivationPassword);
         return ValidationProblem();
     }
 
     // POST api/account/two-factor/finish-activation : un premier code juste active tout, et donne les 10 codes de secours.
     [HttpPost("finish-activation")]
-    public async Task<IActionResult> FinishActivationFromTheUserRequest(TwoFactorCodeRequest requestSentByTheUserWithTheFirstCode)
+    public async Task<IActionResult> FinishActivation(TwoFactorCodeRequest request)
     {
-        var resultOfTheEndOfTheActivation = await serviceThatActivatesTheTwoFactor.FinishActivationWithTheFirstCodeOfTheUserAsync(
-            ReadIdentifierOfTheLoggedInUserFromTheSession(),
-            requestSentByTheUserWithTheFirstCode.Code,
+        var result = await activationService.FinishAsync(
+            ReadUserId(),
+            request.Code,
             HttpContext.Connection.RemoteIpAddress);
 
-        if (resultOfTheEndOfTheActivation.IsTwoFactorActivated)
+        if (result is TwoFactorActivationFinishResult.Activated activated)
         {
-            return Ok(new TwoFactorBackupCodesResponse(resultOfTheEndOfTheActivation.BackupCodesToGiveOnlyOnce!));
+            return Ok(new TwoFactorBackupCodesResponse(activated.BackupCodes));
         }
 
-        if (resultOfTheEndOfTheActivation.ActivationMustRestartErrorMessage != null)
+        if (result is TwoFactorActivationFinishResult.ActivationMustRestart)
         {
-            return Problem(statusCode: StatusCodes.Status409Conflict, title: resultOfTheEndOfTheActivation.ActivationMustRestartErrorMessage);
+            return Problem(statusCode: StatusCodes.Status409Conflict, title: ErrorMessages.ActivationMustRestart);
         }
 
-        ModelState.AddModelError(nameof(TwoFactorCodeRequest.Code), resultOfTheEndOfTheActivation.WrongCodeErrorMessage!);
+        ModelState.AddModelError(nameof(TwoFactorCodeRequest.Code), ErrorMessages.WrongTwoFactorCode);
         return ValidationProblem();
     }
 
     // POST api/account/two-factor/deactivate : le mot de passe et un code désactivent tout.
     [HttpPost("deactivate")]
-    public async Task<IActionResult> DeactivateTwoFactorFromTheUserRequest(DeactivateTwoFactorRequest requestSentByTheUserToDeactivate)
+    public async Task<IActionResult> Deactivate(DeactivateTwoFactorRequest request)
     {
-        var resultOfTheDeactivationOfTheTwoFactor = await serviceThatDeactivatesTheTwoFactor.DeactivateTwoFactorWithPasswordAndCodeOfTheUserAsync(
-            ReadIdentifierOfTheLoggedInUserFromTheSession(),
-            requestSentByTheUserToDeactivate.Password,
-            requestSentByTheUserToDeactivate.Code,
+        var result = await deactivationService.DeactivateAsync(
+            ReadUserId(),
+            request.Password,
+            request.Code,
             HttpContext.Connection.RemoteIpAddress);
 
-        if (resultOfTheDeactivationOfTheTwoFactor.IsTwoFactorDeactivated)
+        if (result == TwoFactorDeactivationResult.TwoFactorDeactivated)
         {
-            return Ok(new MessageResponse(MessageSentWhenTheTwoFactorIsDeactivated));
+            return Ok(new MessageResponse(DeactivatedMessage));
         }
 
-        if (resultOfTheDeactivationOfTheTwoFactor.NotEnabledErrorMessage != null)
+        if (result == TwoFactorDeactivationResult.TwoFactorNotEnabled)
         {
-            return Problem(statusCode: StatusCodes.Status409Conflict, title: resultOfTheDeactivationOfTheTwoFactor.NotEnabledErrorMessage);
+            return Problem(statusCode: StatusCodes.Status409Conflict, title: ErrorMessages.TwoFactorNotEnabled);
         }
 
         // Le même message pour les deux champs : l'erreur ne dit pas lequel est faux.
-        ModelState.AddModelError(ApiErrorConfiguration.KeyOfTheErrorsOutsideTheRequestFields, resultOfTheDeactivationOfTheTwoFactor.WrongPasswordOrCodeErrorMessage!);
+        ModelState.AddModelError(ApiErrorConfiguration.GeneralErrorsKey, ErrorMessages.WrongPasswordOrCode);
         return ValidationProblem();
     }
 
     // L'identifiant de l'utilisateur vient toujours de la session, jamais de la requête (SS §4).
-    private Guid ReadIdentifierOfTheLoggedInUserFromTheSession()
+    private Guid ReadUserId()
     {
-        return Guid.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
+        var claimValue = User.FindFirstValue(ClaimTypes.NameIdentifier);
+
+        // Le gestionnaire des sessions écrit toujours cet identifiant : sans lui, la requête n'aurait pas passé l'authentification.
+        if (claimValue == null)
+        {
+            throw new InvalidOperationException("La session ne donne pas l'identifiant de son propriétaire.");
+        }
+
+        return Guid.Parse(claimValue);
     }
 }

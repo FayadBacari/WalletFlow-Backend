@@ -10,23 +10,23 @@ namespace WalletFlow.Infrastructure.Persistence.TableConfigurations.Notification
 public class SupportRequestTableConfiguration : IEntityTypeConfiguration<SupportRequest>
 {
     // Appelée par EF Core au démarrage (nom imposé par le framework).
-    public void Configure(EntityTypeBuilder<SupportRequest> builderOfTheSupportRequestTableMapping)
+    public void Configure(EntityTypeBuilder<SupportRequest> builder)
     {
-        builderOfTheSupportRequestTableMapping.ToTable("demande_support");
+        builder.ToTable("demande_support");
 
         // L'identifiant est créé par l'entité elle-même, jamais par EF Core.
-        builderOfTheSupportRequestTableMapping.HasKey(nameof(SupportRequest.Id));
-        builderOfTheSupportRequestTableMapping.Property(nameof(SupportRequest.Id)).HasColumnName("id_demande").ValueGeneratedNever();
+        builder.HasKey(nameof(SupportRequest.Id));
+        builder.Property(nameof(SupportRequest.Id)).HasColumnName("id_demande").ValueGeneratedNever();
 
-        builderOfTheSupportRequestTableMapping.Property(nameof(SupportRequest.Message)).HasColumnName("message_demande");
-        builderOfTheSupportRequestTableMapping.Property(nameof(SupportRequest.ContactEmail)).HasColumnName("email_contact");
-        builderOfTheSupportRequestTableMapping.Property(nameof(SupportRequest.Status)).HasColumnName("statut_demande")
-            .HasConversion(SupportRequestStatusDatabaseCodes.ConverterBetweenSupportRequestStatusAndDatabaseCode);
-        builderOfTheSupportRequestTableMapping.Property(nameof(SupportRequest.UserId)).HasColumnName("id_utilisateur");
+        builder.Property(nameof(SupportRequest.Message)).HasColumnName("message_demande");
+        builder.Property(nameof(SupportRequest.ContactEmail)).HasColumnName("email_contact");
+        builder.Property(nameof(SupportRequest.Status)).HasColumnName("statut_demande")
+            .HasConversion(SupportRequestStatusDatabaseCodes.Table.Converter);
+        builder.Property(nameof(SupportRequest.UserId)).HasColumnName("id_utilisateur");
 
         // La demande d'un utilisateur disparaît avec lui (ON DELETE CASCADE).
         // Celle d'un visiteur n'a pas d'utilisateur.
-        builderOfTheSupportRequestTableMapping.HasOne<User>().WithMany()
+        builder.HasOne<User>().WithMany()
             .HasForeignKey(nameof(SupportRequest.UserId))
             .OnDelete(DeleteBehavior.Cascade);
     }

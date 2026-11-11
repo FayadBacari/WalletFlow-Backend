@@ -9,147 +9,152 @@ namespace WalletFlow.Application.AccountRecovery;
 // Cas d'utilisation : prépare et envoie un e-mail de récupération ou de déblocage, en arrière-plan (GR Auth, SS §2).
 public class BackgroundEmailRequestProcessingService
 {
-    private readonly IUserAccountRepository repositoryOfTheUserAccountsInDatabase;
-    private readonly ISecurityEventRepository repositoryOfTheSecurityEventsInDatabase;
-    private readonly ISecureTokenGenerator generatorOfTheSecureRandomTokens;
-    private readonly IEmailSender senderOfTheEmailsToTheVisitors;
-    private readonly PublicWebsiteSettings settingsOfThePublicWalletFlowWebsite;
-    private readonly TimeProvider clockThatGivesTheCurrentDateAndTime;
+    private readonly IUserAccountRepository accountRepository;
+    private readonly SecurityJournalService securityJournal;
+    private readonly ISecureTokenGenerator tokenGenerator;
+    private readonly IEmailSender emailSender;
+    private readonly IAccountRecoveryEmails recoveryEmails;
+    private readonly PublicWebsiteSettings websiteSettings;
+    private readonly TimeProvider clock;
 
     // Reçoit les outils dont ces e-mails ont besoin.
     public BackgroundEmailRequestProcessingService(
-        IUserAccountRepository repositoryOfTheUserAccountsInDatabase,
-        ISecurityEventRepository repositoryOfTheSecurityEventsInDatabase,
-        ISecureTokenGenerator generatorOfTheSecureRandomTokens,
-        IEmailSender senderOfTheEmailsToTheVisitors,
-        PublicWebsiteSettings settingsOfThePublicWalletFlowWebsite,
-        TimeProvider clockThatGivesTheCurrentDateAndTime)
+        IUserAccountRepository accountRepository,
+        SecurityJournalService securityJournal,
+        ISecureTokenGenerator tokenGenerator,
+        IEmailSender emailSender,
+        IAccountRecoveryEmails recoveryEmails,
+        PublicWebsiteSettings websiteSettings,
+        TimeProvider clock)
     {
-        this.repositoryOfTheUserAccountsInDatabase = repositoryOfTheUserAccountsInDatabase;
-        this.repositoryOfTheSecurityEventsInDatabase = repositoryOfTheSecurityEventsInDatabase;
-        this.generatorOfTheSecureRandomTokens = generatorOfTheSecureRandomTokens;
-        this.senderOfTheEmailsToTheVisitors = senderOfTheEmailsToTheVisitors;
-        this.settingsOfThePublicWalletFlowWebsite = settingsOfThePublicWalletFlowWebsite;
-        this.clockThatGivesTheCurrentDateAndTime = clockThatGivesTheCurrentDateAndTime;
+        this.accountRepository = accountRepository;
+        this.securityJournal = securityJournal;
+        this.tokenGenerator = tokenGenerator;
+        this.emailSender = emailSender;
+        this.recoveryEmails = recoveryEmails;
+        this.websiteSettings = websiteSettings;
+        this.clock = clock;
     }
 
     // Traite une demande de la file.
-    public async Task<BackgroundEmailRequestResult> ProcessOneBackgroundEmailRequestAsync(BackgroundEmailRequest requestToProcessInTheBackground)
+    public async Task<BackgroundEmailRequestResult> ProcessAsync(BackgroundEmailRequest request)
     {
-        if (requestToProcessInTheBackground.TypeOfTheRequestedBackgroundEmail == BackgroundEmailRequestType.PasswordRecovery)
+        if (request is BackgroundEmailRequest.PasswordRecovery recoveryRequest)
         {
-            return await ProcessOnePasswordRecoveryRequestAsync(requestToProcessInTheBackground);
+            return await ProcessRecoveryAsync(recoveryRequest);
         }
 
-        return await ProcessOneAccountUnlockRequestAsync(requestToProcessInTheBackground);
+        if (request is BackgroundEmailRequest.AccountUnlock unlockRequest)
+        {
+            return await ProcessUnlockAsync(unlockRequest);
+        }
+
+        throw new InvalidOperationException("Cette forme de demande d'e-mail n'est pas prévue.");
     }
 
     // Choisit l'e-mail selon l'état du compte. Une adresse sans compte ne reçoit rien, et laisse une trace sans identifiant.
-    private async Task<BackgroundEmailRequestResult> ProcessOnePasswordRecoveryRequestAsync(BackgroundEmailRequest requestToProcessInTheBackground)
+    private async Task<BackgroundEmailRequestResult> ProcessRecoveryAsync(BackgroundEmailRequest.PasswordRecovery request)
     {
-        var accountUsingTheRequestedEmailAddress = await repositoryOfTheUserAccountsInDatabase.FindUserAccountByEmailAddressAsync(requestToProcessInTheBackground.EmailAddressOfTheRecoveryRequest!);
+        var existingAccount = await accountRepository.FindByEmailAsync(request.EmailAddress);
 
-        if (accountUsingTheRequestedEmailAddress == null)
+        if (existingAccount == null)
         {
-            await SavePasswordRecoveryRequestInTheJournalAsync(SecurityEventResult.Failure, null, requestToProcessInTheBackground);
+            await RecordRecoveryRequestAsync(SecurityEventResult.Failure, null, request);
             return new BackgroundEmailRequestResult();
         }
 
-        if (!accountUsingTheRequestedEmailAddress.IsEmailConfirmed)
+        if (!existingAccount.IsEmailConfirmed)
         {
-            var invitationEmailForTheAddressOwner = AccountRecoveryEmails.CreateInvitationEmailForAddressNotYetConfirmed(accountUsingTheRequestedEmailAddress.Email);
-            return await SendEmailThenSaveRecoveryRequestInTheJournalAsync(invitationEmailForTheAddressOwner, SecurityEventResult.Failure, accountUsingTheRequestedEmailAddress, requestToProcessInTheBackground);
+            var invitationEmail = recoveryEmails.CreateSignupInvitationEmail(existingAccount.Email);
+            return await SendEmailThenRecordRequestAsync(invitationEmail, SecurityEventResult.Failure, existingAccount, request);
         }
 
-        var generatedTokenOfTheRecoveryLink = await ReplaceLinkOfThisTypeForThisAccountAsync(
-            accountUsingTheRequestedEmailAddress.Id,
+        var recoveryToken = await ReplaceLinkAsync(
+            existingAccount.Id,
             EmailTokenType.PasswordRecovery,
-            EmailTokenValidityDurations.ValidityDurationOfThePasswordRecoveryLink);
-        var passwordRecoveryEmailForTheAddressOwner = AccountRecoveryEmails.CreatePasswordRecoveryEmailWithItsLink(
-            accountUsingTheRequestedEmailAddress.Email,
-            settingsOfThePublicWalletFlowWebsite.BuildLinkToThisWebsitePageWithItsToken("/reset-password", generatedTokenOfTheRecoveryLink.TokenGivenOnlyToTheVisitor));
+            EmailTokenValidityDurations.PasswordRecoveryLink);
+        var recoveryEmail = recoveryEmails.CreateRecoveryEmail(
+            existingAccount.Email,
+            websiteSettings.BuildLink("/reset-password", recoveryToken.Token));
 
-        return await SendEmailThenSaveRecoveryRequestInTheJournalAsync(passwordRecoveryEmailForTheAddressOwner, SecurityEventResult.Success, accountUsingTheRequestedEmailAddress, requestToProcessInTheBackground);
+        return await SendEmailThenRecordRequestAsync(recoveryEmail, SecurityEventResult.Success, existingAccount, request);
     }
 
     // Envoie l'e-mail, puis note la demande au journal. Si l'e-mail ne part pas, la demande est notée comme un échec.
-    private async Task<BackgroundEmailRequestResult> SendEmailThenSaveRecoveryRequestInTheJournalAsync(
-        EmailMessageToSend emailMessageToSendToTheAddressOwner,
-        SecurityEventResult resultNotedIfTheEmailLeaves,
-        User accountUsingTheRequestedEmailAddress,
-        BackgroundEmailRequest requestToProcessInTheBackground)
+    private async Task<BackgroundEmailRequestResult> SendEmailThenRecordRequestAsync(
+        EmailMessage message,
+        SecurityEventResult resultIfSent,
+        User existingAccount,
+        BackgroundEmailRequest request)
     {
-        var resultOfTheEmailSendingToTheOwner = await TryToSendEmailToTheAddressOwnerAsync(emailMessageToSendToTheAddressOwner, accountUsingTheRequestedEmailAddress.Id);
-        var resultNotedForThisRecoveryRequest = resultOfTheEmailSendingToTheOwner.EmailCouldNotBeSent ? SecurityEventResult.Failure : resultNotedIfTheEmailLeaves;
+        var sendingResult = await TrySendEmailAsync(message, existingAccount.Id);
+        var eventResult = sendingResult.EmailCouldNotBeSent ? SecurityEventResult.Failure : resultIfSent;
 
-        await SavePasswordRecoveryRequestInTheJournalAsync(resultNotedForThisRecoveryRequest, accountUsingTheRequestedEmailAddress.Id, requestToProcessInTheBackground);
+        await RecordRecoveryRequestAsync(eventResult, existingAccount.Id, request);
 
-        return resultOfTheEmailSendingToTheOwner;
+        return sendingResult;
     }
 
     // Envoie le lien de déblocage, sauf si le compte a disparu ou n'est plus bloqué : il n'y a alors rien à débloquer.
-    private async Task<BackgroundEmailRequestResult> ProcessOneAccountUnlockRequestAsync(BackgroundEmailRequest requestToProcessInTheBackground)
+    private async Task<BackgroundEmailRequestResult> ProcessUnlockAsync(BackgroundEmailRequest.AccountUnlock request)
     {
-        var accountJustLockedByTheLoginAttempt = await repositoryOfTheUserAccountsInDatabase.FindUserAccountByIdentifierAsync(requestToProcessInTheBackground.IdentifierOfTheAccountJustLocked!.Value);
+        var lockedAccount = await accountRepository.FindByIdAsync(request.AccountId);
 
-        if (accountJustLockedByTheLoginAttempt == null
-            || !AccountLockoutRules.CheckThatAccountIsLockedAtThisDate(accountJustLockedByTheLoginAttempt, clockThatGivesTheCurrentDateAndTime.GetUtcNow().UtcDateTime))
+        if (lockedAccount == null
+            || !lockedAccount.IsLockedAt(clock.GetUtcNow().UtcDateTime))
         {
             return new BackgroundEmailRequestResult();
         }
 
-        var generatedTokenOfTheUnlockLink = await ReplaceLinkOfThisTypeForThisAccountAsync(
-            accountJustLockedByTheLoginAttempt.Id,
+        var unlockToken = await ReplaceLinkAsync(
+            lockedAccount.Id,
             EmailTokenType.AccountUnlock,
-            EmailTokenValidityDurations.ValidityDurationOfTheAccountUnlockLink);
-        var accountUnlockEmailForTheAddressOwner = AccountRecoveryEmails.CreateAccountUnlockEmailWithItsLink(
-            accountJustLockedByTheLoginAttempt.Email,
-            settingsOfThePublicWalletFlowWebsite.BuildLinkToThisWebsitePageWithItsToken("/unlock-account", generatedTokenOfTheUnlockLink.TokenGivenOnlyToTheVisitor),
-            AccountLockoutRules.CalculateDurationOfTheLockoutWithThisNumber(accountJustLockedByTheLoginAttempt.LockoutCount));
+            EmailTokenValidityDurations.AccountUnlockLink);
+        var unlockEmail = recoveryEmails.CreateUnlockEmail(
+            lockedAccount.Email,
+            websiteSettings.BuildLink("/unlock-account", unlockToken.Token),
+            AccountLockoutRules.CalculateLockoutDuration(lockedAccount.LockoutCount));
 
-        return await TryToSendEmailToTheAddressOwnerAsync(accountUnlockEmailForTheAddressOwner, accountJustLockedByTheLoginAttempt.Id);
+        return await TrySendEmailAsync(unlockEmail, lockedAccount.Id);
     }
 
     // Tire un nouveau jeton et remplace l'ancien lien du même type, qui ne marche plus (SS §2). Seule l'empreinte va en base.
-    private async Task<GeneratedSecureToken> ReplaceLinkOfThisTypeForThisAccountAsync(Guid identifierOfTheAccountReceivingTheLink, EmailTokenType typeOfTheLinkToReplaceNow, TimeSpan validityDurationOfTheNewLink)
+    private async Task<GeneratedSecureToken> ReplaceLinkAsync(Guid accountId, EmailTokenType linkType, TimeSpan validity)
     {
-        var generatedTokenOfTheNewLink = generatorOfTheSecureRandomTokens.GenerateNewRandomSecureTokenWithItsHash();
+        var linkToken = tokenGenerator.GenerateToken();
 
-        await repositoryOfTheUserAccountsInDatabase.ReplaceEmailTokenOfThisTypeForThisAccountAsync(new EmailToken
+        await accountRepository.ReplaceTokenAsync(new EmailToken
         {
-            Type = typeOfTheLinkToReplaceNow,
-            TokenHash = generatedTokenOfTheNewLink.HashToStoreInTheDatabase,
-            ExpiresAt = clockThatGivesTheCurrentDateAndTime.GetUtcNow().UtcDateTime + validityDurationOfTheNewLink,
-            UserId = identifierOfTheAccountReceivingTheLink
+            Type = linkType,
+            TokenHash = linkToken.Hash,
+            ExpiresAt = clock.GetUtcNow().UtcDateTime + validity,
+            UserId = accountId
         });
 
-        return generatedTokenOfTheNewLink;
+        return linkToken;
     }
 
     // Envoie un e-mail. S'il ne peut pas partir, la panne ira au journal technique : l'annoncer au visiteur révélerait le compte (SS §2).
-    private async Task<BackgroundEmailRequestResult> TryToSendEmailToTheAddressOwnerAsync(EmailMessageToSend emailMessageToSendToTheAddressOwner, Guid identifierOfTheAccountConcernedByTheEmail)
+    private async Task<BackgroundEmailRequestResult> TrySendEmailAsync(EmailMessage message, Guid accountId)
     {
         try
         {
-            await senderOfTheEmailsToTheVisitors.SendEmailToItsRecipientAsync(emailMessageToSendToTheAddressOwner);
+            await emailSender.SendAsync(message);
             return new BackgroundEmailRequestResult();
         }
         catch (EmailCouldNotBeSentException)
         {
-            return new BackgroundEmailRequestResult { EmailCouldNotBeSent = true, UserIdentifierForTheTechnicalLog = identifierOfTheAccountConcernedByTheEmail };
+            return new BackgroundEmailRequestResult { EmailCouldNotBeSent = true, UserId = accountId };
         }
     }
 
     // Écrit la demande de récupération dans le journal de sécurité, sans jamais l'adresse e-mail (SS §7 et §11).
-    private async Task SavePasswordRecoveryRequestInTheJournalAsync(SecurityEventResult resultNotedInTheSecurityJournal, Guid? identifierOfTheAccountIfItExists, BackgroundEmailRequest requestToProcessInTheBackground)
+    private async Task RecordRecoveryRequestAsync(SecurityEventResult eventResult, Guid? accountId, BackgroundEmailRequest request)
     {
-        await repositoryOfTheSecurityEventsInDatabase.SaveSecurityEventInTheJournalAsync(new SecurityEvent
-        {
-            Type = SecurityEventType.PasswordRecovery,
-            Result = resultNotedInTheSecurityJournal,
-            OccurredAt = clockThatGivesTheCurrentDateAndTime.GetUtcNow().UtcDateTime,
-            IpAddress = requestToProcessInTheBackground.IpAddressOfTheRequestingVisitor,
-            UserId = identifierOfTheAccountIfItExists
-        });
+        await securityJournal.SaveEventNowAsync(
+            SecurityEventType.PasswordRecovery,
+            eventResult,
+            accountId,
+            request.IpAddress);
     }
 }

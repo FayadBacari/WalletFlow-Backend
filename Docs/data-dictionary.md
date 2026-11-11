@@ -79,7 +79,7 @@ Les sections 11 à 13 complètent le dictionnaire : données calculées, paramè
 | secret_totp_chiffre      | Secret de double authentification | AN   | 255    | Non    | SS §2, §7       |
 | canal_notification       | Canal de réception des alertes    | AN   | 10     | Oui    | GR Notif        |
 | nb_tentatives_echouees   | Tentatives de connexion échouées  | N    | 1      | Oui    | GR Auth, SS §2  |
-| nb_blocages              | Nombre de blocages successifs     | N    | 3      | Oui    | GR Auth         |
+| nb_blocages              | Nombre de blocages successifs     | N    | 1      | Oui    | GR Auth         |
 | date_fin_blocage         | Fin du blocage en cours           | DH   | —      | Non    | GR Auth         |
 | date_demande_suppression | Date de la demande de suppression | DH   | —      | Non    | GR Suppression  |
 
@@ -157,7 +157,7 @@ Ces données sont techniques. Selon le niveau de détail attendu, elles figurent
 
 | Code                   | Désignation                     | Type | Taille | Oblig. | Source         |
 |------------------------|---------------------------------|------|--------|--------|----------------|
-| id_session             | Identifiant de session          | AN   | 128    | Oui    | SS §3          |
+| id_session             | Identifiant de session          | AN   | 64     | Oui    | SS §3          |
 | date_derniere_activite | Dernière activité de la session | DH   | —      | Oui    | GR Auth, SS §3 |
 
 **Contraintes**

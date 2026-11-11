@@ -4,23 +4,23 @@ namespace WalletFlow.Application.UserAccounts;
 // On ne garde pas l'adresse d'une personne qui ne s'est peut-être jamais inscrite.
 public class UnconfirmedAccountsCleanupService
 {
-    private readonly IUserAccountRepository repositoryOfTheUserAccountsInDatabase;
-    private readonly TimeProvider clockThatGivesTheCurrentDateAndTime;
+    private readonly IUserAccountRepository accountRepository;
+    private readonly TimeProvider clock;
 
     // Reçoit l'accès à la base et l'horloge.
     public UnconfirmedAccountsCleanupService(
-        IUserAccountRepository repositoryOfTheUserAccountsInDatabase,
-        TimeProvider clockThatGivesTheCurrentDateAndTime)
+        IUserAccountRepository accountRepository,
+        TimeProvider clock)
     {
-        this.repositoryOfTheUserAccountsInDatabase = repositoryOfTheUserAccountsInDatabase;
-        this.clockThatGivesTheCurrentDateAndTime = clockThatGivesTheCurrentDateAndTime;
+        this.accountRepository = accountRepository;
+        this.clock = clock;
     }
 
     // Efface les comptes concernés, et renvoie leur nombre.
-    public async Task<int> DeleteUnconfirmedAccountsWithExpiredLinkAsync()
+    public async Task<int> DeleteExpiredUnconfirmedAccountsAsync()
     {
-        var currentDateUsedForTheCleanup = clockThatGivesTheCurrentDateAndTime.GetUtcNow().UtcDateTime;
+        var now = clock.GetUtcNow().UtcDateTime;
 
-        return await repositoryOfTheUserAccountsInDatabase.DeleteUnconfirmedAccountsWithExpiredLinkAsync(currentDateUsedForTheCleanup);
+        return await accountRepository.DeleteExpiredUnconfirmedAccountsAsync(now);
     }
 }

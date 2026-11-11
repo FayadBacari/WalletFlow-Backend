@@ -4,7 +4,7 @@ using WalletFlow.Domain.AccountsAndCategories;
 using WalletFlow.Domain.UsersAndSecurity;
 using WalletFlow.Infrastructure.Persistence;
 using WalletFlow.Infrastructure.Persistence.Repositories;
-using static WalletFlow.Tests.Infrastructure.LocalDatabaseForTheTests;
+using static WalletFlow.Tests.Infrastructure.LocalTestDatabase;
 
 namespace WalletFlow.Tests.Infrastructure;
 
@@ -12,116 +12,135 @@ namespace WalletFlow.Tests.Infrastructure;
 // avec l'utilisateur de l'API. Chaque test travaille dans une transaction annulée à la fin : la base reste vide.
 public class UserSessionRepositoryTests
 {
-    private static readonly DateTime CurrentDateUsedInTheseTests = new DateTime(2026, 11, 4, 12, 0, 0, DateTimeKind.Utc);
+    private static readonly DateTime Now = new DateTime(2026, 11, 4, 12, 0, 0, DateTimeKind.Utc);
 
     // Enregistre un nouveau compte confirmé avec cette adresse, puis oublie les objets gardés en mémoire.
-    private static async Task<User> SaveNewConfirmedAccountWithThisEmailAddressAsync(
-        WalletFlowDatabaseContext databaseContextOfThisRepositoryTest,
-        string emailAddressOfTheNewAccountToSave)
+    private static async Task<User> SaveConfirmedAccountAsync(
+        WalletFlowDatabaseContext databaseContext,
+        string emailAddress)
     {
-        var newAccountToSaveInTheRealDatabase = new User
+        var newAccount = new User
         {
-            Email = emailAddressOfTheNewAccountToSave,
+            Email = emailAddress,
             PasswordHash = "empreinte-de-test",
             IsEmailConfirmed = true
         };
-        databaseContextOfThisRepositoryTest.Users.Add(newAccountToSaveInTheRealDatabase);
-        await databaseContextOfThisRepositoryTest.SaveChangesAsync();
-        databaseContextOfThisRepositoryTest.ChangeTracker.Clear();
+        databaseContext.Users.Add(newAccount);
+        await databaseContext.SaveChangesAsync();
+        databaseContext.ChangeTracker.Clear();
 
-        return newAccountToSaveInTheRealDatabase;
+        return newAccount;
     }
 
     // Crée une session sans l'enregistrer, avec une empreinte de la taille d'un vrai SHA-256.
-    private static UserSession CreateNewSessionForThisUserAccount(User accountThatOwnsTheNewSession, DateTime dateOfTheLastActivityOfTheSession)
+    private static UserSession CreateSession(User account, DateTime lastActivityAt)
     {
         return new UserSession
         {
             Id = Convert.ToHexStringLower(Guid.NewGuid().ToByteArray()) + new string('0', 32),
-            LastActivityAt = dateOfTheLastActivityOfTheSession,
-            UserId = accountThatOwnsTheNewSession.Id
+            LastActivityAt = lastActivityAt,
+            UserId = account.Id
         };
     }
 
     // Crée l'événement d'une connexion réussie, sans l'enregistrer.
-    private static SecurityEvent CreateSecurityEventOfTheSuccessfulLogin(User accountThatHasJustLoggedIn)
+    private static SecurityEvent CreateLoginEvent(User account)
     {
         return new SecurityEvent
         {
             Type = SecurityEventType.Login,
             Result = SecurityEventResult.Success,
-            OccurredAt = CurrentDateUsedInTheseTests,
+            OccurredAt = Now,
             IpAddress = IPAddress.Parse("203.0.113.7"),
-            UserId = accountThatHasJustLoggedIn.Id
+            UserId = account.Id
         };
     }
 
-    // Enregistre directement des sessions déjà créées, puis oublie les objets gardés en mémoire.
-    private static async Task SaveTheseSessionsDirectlyInTheDatabaseAsync(WalletFlowDatabaseContext databaseContextOfThisRepositoryTest, params UserSession[] sessionsToSaveInTheRealDatabase)
+    // Prépare une connexion réussie comme le fait le cas d'utilisation : compteurs remis à zéro, compte contrôlé,
+    // nouvelle session, nouvel appareil s'il y en a un, et événement du journal. Rien n'est encore écrit.
+    private static void PrepareLogin(
+        WalletFlowDatabaseContext databaseContext,
+        User account,
+        UserSession session,
+        Device? device,
+        SecurityEvent securityEvent)
     {
-        databaseContextOfThisRepositoryTest.UserSessions.AddRange(sessionsToSaveInTheRealDatabase);
-        await databaseContextOfThisRepositoryTest.SaveChangesAsync();
-        databaseContextOfThisRepositoryTest.ChangeTracker.Clear();
+        var sessionRepository = new UserSessionRepository(databaseContext);
+
+        account.ResetLoginCounters();
+        new UserAccountRepository(databaseContext).PrepareUnchangedCheck(account);
+        sessionRepository.PrepareSession(session);
+
+        if (device != null)
+        {
+            sessionRepository.PrepareDevice(device);
+        }
+
+        new SecurityEventRepository(databaseContext).PrepareEvent(securityEvent);
+    }
+
+    // Enregistre directement des sessions déjà créées, puis oublie les objets gardés en mémoire.
+    private static async Task SaveSessionsDirectlyAsync(WalletFlowDatabaseContext databaseContext, params UserSession[] sessions)
+    {
+        databaseContext.UserSessions.AddRange(sessions);
+        await databaseContext.SaveChangesAsync();
+        databaseContext.ChangeTracker.Clear();
     }
 
     // Une autre requête change le compteur directement en base : les objets gardés en mémoire ne le voient pas.
-    private static async Task SimulateAnotherRequestCountingOneAttemptAsync(WalletFlowDatabaseContext databaseContextOfThisRepositoryTest, Guid identifierOfTheAccountChangedByTheRequest, short numberOfFailedAttemptsWrittenInDatabase)
+    private static async Task SimulateConcurrentAttemptAsync(WalletFlowDatabaseContext databaseContext, Guid accountId, short failedAttemptCount)
     {
-        await databaseContextOfThisRepositoryTest.Users
-            .Where(userSearchedInTheDatabaseTable => userSearchedInTheDatabaseTable.Id == identifierOfTheAccountChangedByTheRequest)
-            .ExecuteUpdateAsync(setterOfTheColumnsOfTheUser => setterOfTheColumnsOfTheUser.SetProperty(
-                userBeingUpdatedInTheDatabase => userBeingUpdatedInTheDatabase.FailedLoginAttemptCount,
-                numberOfFailedAttemptsWrittenInDatabase));
+        await WriteAsAnotherRequestAsync(databaseContext, () => databaseContext.Users
+            .Where(row => row.Id == accountId)
+            .ExecuteUpdateAsync(setters => setters.SetProperty(
+                row => row.FailedLoginAttemptCount,
+                failedAttemptCount)));
     }
 
     [Fact]
     public async Task SuccessfulLoginIsReallySavedWithItsCountersSessionDeviceAndEvent()
     {
-        await using var databaseContextOfThisRepositoryTest = CreateDatabaseContextConnectedToLocalDatabase();
-        await using var transactionCancelledAtTheEndOfThisTest = await databaseContextOfThisRepositoryTest.Database.BeginTransactionAsync();
-        var repositoryBeingTestedOnTheRealDatabase = new UserSessionRepository(databaseContextOfThisRepositoryTest);
-        var accountSavedInDatabaseByThisTest = await SaveNewConfirmedAccountWithThisEmailAddressAsync(databaseContextOfThisRepositoryTest, "test-session-connexion@exemple.test");
-        var accountReadByThisSuccessfulLogin = await databaseContextOfThisRepositoryTest.Users.SingleAsync(userSearchedInTheDatabaseTable => userSearchedInTheDatabaseTable.Id == accountSavedInDatabaseByThisTest.Id);
-        accountReadByThisSuccessfulLogin.FailedLoginAttemptCount = 0;
-        accountReadByThisSuccessfulLogin.LockoutCount = 0;
-        var newSessionOfTheUserAccount = CreateNewSessionForThisUserAccount(accountSavedInDatabaseByThisTest, CurrentDateUsedInTheseTests);
-        var newDeviceOfTheUserAccount = new Device { DeviceToken = new string('a', 64), UserId = accountSavedInDatabaseByThisTest.Id };
+        await using var databaseContext = CreateDatabaseContext();
+        await using var transaction = await databaseContext.Database.BeginTransactionAsync();
+        var savedAccount = await SaveConfirmedAccountAsync(databaseContext, "test-session-connexion@exemple.test");
+        var account = await databaseContext.Users.SingleAsync(row => row.Id == savedAccount.Id);
+        var session = CreateSession(savedAccount, Now);
+        var device = new Device { DeviceToken = new string('a', 64), UserId = savedAccount.Id };
 
-        var loginWasSavedInTheDatabase = await repositoryBeingTestedOnTheRealDatabase.TryToSaveSuccessfulLoginOfThisAccountAsync(
-            accountReadByThisSuccessfulLogin, newSessionOfTheUserAccount, newDeviceOfTheUserAccount, null, CreateSecurityEventOfTheSuccessfulLogin(accountSavedInDatabaseByThisTest));
+        PrepareLogin(databaseContext, account, session, device, CreateLoginEvent(savedAccount));
+        var saved = await TrySaveChangesAsync(databaseContext);
 
-        Assert.True(loginWasSavedInTheDatabase);
+        Assert.True(saved);
 
         // On oublie les objets en mémoire : tout ce qui suit est vraiment relu dans la base.
-        databaseContextOfThisRepositoryTest.ChangeTracker.Clear();
-        var sessionReadBackFromTheRealDatabase = await databaseContextOfThisRepositoryTest.UserSessions.SingleAsync(sessionSearchedInTheDatabaseTable =>
-            sessionSearchedInTheDatabaseTable.UserId == accountSavedInDatabaseByThisTest.Id);
-        Assert.Equal(newSessionOfTheUserAccount.Id, sessionReadBackFromTheRealDatabase.Id);
-        Assert.Equal(CurrentDateUsedInTheseTests, sessionReadBackFromTheRealDatabase.LastActivityAt);
+        databaseContext.ChangeTracker.Clear();
+        var reloadedSession = await databaseContext.UserSessions.SingleAsync(row =>
+            row.UserId == savedAccount.Id);
+        Assert.Equal(session.Id, reloadedSession.Id);
+        Assert.Equal(Now, reloadedSession.LastActivityAt);
 
-        var deviceReadBackFromTheRealDatabase = await databaseContextOfThisRepositoryTest.Devices.SingleAsync(deviceSearchedInTheDatabaseTable =>
-            deviceSearchedInTheDatabaseTable.UserId == accountSavedInDatabaseByThisTest.Id);
-        Assert.Equal(new string('a', 64), deviceReadBackFromTheRealDatabase.DeviceToken);
+        var reloadedDevice = await databaseContext.Devices.SingleAsync(row =>
+            row.UserId == savedAccount.Id);
+        Assert.Equal(new string('a', 64), reloadedDevice.DeviceToken);
 
-        var eventReadBackFromTheRealDatabase = await databaseContextOfThisRepositoryTest.SecurityEvents.SingleAsync(eventSearchedInTheDatabaseTable =>
-            eventSearchedInTheDatabaseTable.UserId == accountSavedInDatabaseByThisTest.Id);
-        Assert.Equal(SecurityEventType.Login, eventReadBackFromTheRealDatabase.Type);
-        Assert.Equal(IPAddress.Parse("203.0.113.7"), eventReadBackFromTheRealDatabase.IpAddress);
+        var reloadedEvent = await databaseContext.SecurityEvents.SingleAsync(row =>
+            row.UserId == savedAccount.Id);
+        Assert.Equal(SecurityEventType.Login, reloadedEvent.Type);
+        Assert.Equal(IPAddress.Parse("203.0.113.7"), reloadedEvent.IpAddress);
     }
 
     [Fact]
     public async Task SuccessfulLoginWithoutNewDeviceSavesNoDevice()
     {
-        await using var databaseContextOfThisRepositoryTest = CreateDatabaseContextConnectedToLocalDatabase();
-        await using var transactionCancelledAtTheEndOfThisTest = await databaseContextOfThisRepositoryTest.Database.BeginTransactionAsync();
-        var repositoryBeingTestedOnTheRealDatabase = new UserSessionRepository(databaseContextOfThisRepositoryTest);
-        var accountSavedInDatabaseByThisTest = await SaveNewConfirmedAccountWithThisEmailAddressAsync(databaseContextOfThisRepositoryTest, "test-session-sans-appareil@exemple.test");
-        var accountReadByThisSuccessfulLogin = await new UserAccountRepository(databaseContextOfThisRepositoryTest).FindUserAccountByIdentifierAsync(accountSavedInDatabaseByThisTest.Id);
+        await using var databaseContext = CreateDatabaseContext();
+        await using var transaction = await databaseContext.Database.BeginTransactionAsync();
+        var savedAccount = await SaveConfirmedAccountAsync(databaseContext, "test-session-sans-appareil@exemple.test");
+        var account = await new UserAccountRepository(databaseContext).FindByIdAsync(savedAccount.Id);
 
-        await repositoryBeingTestedOnTheRealDatabase.TryToSaveSuccessfulLoginOfThisAccountAsync(
-            accountReadByThisSuccessfulLogin!, CreateNewSessionForThisUserAccount(accountSavedInDatabaseByThisTest, CurrentDateUsedInTheseTests), null, null, CreateSecurityEventOfTheSuccessfulLogin(accountSavedInDatabaseByThisTest));
+        PrepareLogin(databaseContext, account!, CreateSession(savedAccount, Now), null, CreateLoginEvent(savedAccount));
+        await TrySaveChangesAsync(databaseContext);
 
-        Assert.Equal(0, await databaseContextOfThisRepositoryTest.Devices.CountAsync(deviceSearchedInTheDatabaseTable => deviceSearchedInTheDatabaseTable.UserId == accountSavedInDatabaseByThisTest.Id));
+        Assert.Equal(0, await databaseContext.Devices.CountAsync(row => row.UserId == savedAccount.Id));
     }
 
     // Tout ou rien : un conflit sur le compte n'enregistre ni la session, ni l'appareil, ni l'événement.
@@ -129,78 +148,79 @@ public class UserSessionRepositoryTests
     [Fact]
     public async Task ConflictOnTheCountersSavesNothingOfTheLoginAndTheLoginCanBeSavedAfterwards()
     {
-        await using var databaseContextOfThisRepositoryTest = CreateDatabaseContextConnectedToLocalDatabase();
-        await using var transactionCancelledAtTheEndOfThisTest = await databaseContextOfThisRepositoryTest.Database.BeginTransactionAsync();
-        var repositoryBeingTestedOnTheRealDatabase = new UserSessionRepository(databaseContextOfThisRepositoryTest);
-        var accountRepositoryUsedByThisDatabaseTest = new UserAccountRepository(databaseContextOfThisRepositoryTest);
-        var accountSavedInDatabaseByThisTest = await SaveNewConfirmedAccountWithThisEmailAddressAsync(databaseContextOfThisRepositoryTest, "test-session-conflit@exemple.test");
-        var accountReadJustBeforeTheConflict = await accountRepositoryUsedByThisDatabaseTest.FindUserAccountByIdentifierAsync(accountSavedInDatabaseByThisTest.Id);
-        await SimulateAnotherRequestCountingOneAttemptAsync(databaseContextOfThisRepositoryTest, accountSavedInDatabaseByThisTest.Id, 1);
-        var newSessionOfTheUserAccount = CreateNewSessionForThisUserAccount(accountSavedInDatabaseByThisTest, CurrentDateUsedInTheseTests);
-        var newDeviceOfTheUserAccount = new Device { DeviceToken = new string('b', 64), UserId = accountSavedInDatabaseByThisTest.Id };
-        var securityEventOfTheSuccessfulUserLogin = CreateSecurityEventOfTheSuccessfulLogin(accountSavedInDatabaseByThisTest);
+        await using var databaseContext = CreateDatabaseContext();
+        await using var transaction = await databaseContext.Database.BeginTransactionAsync();
+        var accountRepository = new UserAccountRepository(databaseContext);
+        var savedAccount = await SaveConfirmedAccountAsync(databaseContext, "test-session-conflit@exemple.test");
+        var account = await accountRepository.FindByIdAsync(savedAccount.Id);
+        await SimulateConcurrentAttemptAsync(databaseContext, savedAccount.Id, 1);
+        var session = CreateSession(savedAccount, Now);
+        var device = new Device { DeviceToken = new string('b', 64), UserId = savedAccount.Id };
+        var securityEvent = CreateLoginEvent(savedAccount);
 
         // Le compteur lu est 0, mais la base contient 1 : cette écriture doit être refusée.
-        accountReadJustBeforeTheConflict!.LockoutCount = 2;
-        var firstTryWasSavedInTheDatabase = await repositoryBeingTestedOnTheRealDatabase.TryToSaveSuccessfulLoginOfThisAccountAsync(
-            accountReadJustBeforeTheConflict, newSessionOfTheUserAccount, newDeviceOfTheUserAccount, null, securityEventOfTheSuccessfulUserLogin);
+        PrepareLogin(databaseContext, account!, session, device, securityEvent);
+        var firstSaved = await TrySaveChangesAsync(databaseContext);
 
-        Assert.False(firstTryWasSavedInTheDatabase);
-        Assert.Equal(0, await databaseContextOfThisRepositoryTest.UserSessions.CountAsync(sessionSearchedInTheDatabaseTable => sessionSearchedInTheDatabaseTable.UserId == accountSavedInDatabaseByThisTest.Id));
-        Assert.Equal(0, await databaseContextOfThisRepositoryTest.Devices.CountAsync(deviceSearchedInTheDatabaseTable => deviceSearchedInTheDatabaseTable.UserId == accountSavedInDatabaseByThisTest.Id));
-        Assert.Equal(0, await databaseContextOfThisRepositoryTest.SecurityEvents.CountAsync(eventSearchedInTheDatabaseTable => eventSearchedInTheDatabaseTable.UserId == accountSavedInDatabaseByThisTest.Id));
+        Assert.False(firstSaved);
+        Assert.Equal(0, await databaseContext.UserSessions.CountAsync(row => row.UserId == savedAccount.Id));
+        Assert.Equal(0, await databaseContext.Devices.CountAsync(row => row.UserId == savedAccount.Id));
+        Assert.Equal(0, await databaseContext.SecurityEvents.CountAsync(row => row.UserId == savedAccount.Id));
 
-        var accountReadAgainAfterTheConflict = await accountRepositoryUsedByThisDatabaseTest.FindUserAccountByIdentifierAsync(accountSavedInDatabaseByThisTest.Id);
-        Assert.Equal(1, accountReadAgainAfterTheConflict!.FailedLoginAttemptCount);
-        Assert.Equal(0, accountReadAgainAfterTheConflict.LockoutCount);
+        var reloadedAccount = await accountRepository.FindByIdAsync(savedAccount.Id);
+        Assert.Equal(1, reloadedAccount!.FailedLoginAttemptCount);
+        Assert.Equal(0, reloadedAccount.LockoutCount);
 
-        AccountLockoutRules.ResetLoginCountersAfterSuccessfulLogin(accountReadAgainAfterTheConflict);
-        var secondTryWasSavedInTheDatabase = await repositoryBeingTestedOnTheRealDatabase.TryToSaveSuccessfulLoginOfThisAccountAsync(
-            accountReadAgainAfterTheConflict, newSessionOfTheUserAccount, newDeviceOfTheUserAccount, null, securityEventOfTheSuccessfulUserLogin);
+        PrepareLogin(databaseContext, reloadedAccount, session, device, securityEvent);
+        var secondSaved = await TrySaveChangesAsync(databaseContext);
 
-        Assert.True(secondTryWasSavedInTheDatabase);
-        Assert.Equal(1, await databaseContextOfThisRepositoryTest.UserSessions.CountAsync(sessionSearchedInTheDatabaseTable => sessionSearchedInTheDatabaseTable.UserId == accountSavedInDatabaseByThisTest.Id));
+        Assert.True(secondSaved);
+        Assert.Equal(1, await databaseContext.UserSessions.CountAsync(row => row.UserId == savedAccount.Id));
     }
 
     [Fact]
     public async Task LoginCountersAreReallySavedInTheDatabase()
     {
-        await using var databaseContextOfThisRepositoryTest = CreateDatabaseContextConnectedToLocalDatabase();
-        await using var transactionCancelledAtTheEndOfThisTest = await databaseContextOfThisRepositoryTest.Database.BeginTransactionAsync();
-        var accountRepositoryUsedByThisDatabaseTest = new UserAccountRepository(databaseContextOfThisRepositoryTest);
-        var accountSavedInDatabaseByThisTest = await SaveNewConfirmedAccountWithThisEmailAddressAsync(databaseContextOfThisRepositoryTest, "test-compteurs-enregistres@exemple.test");
-        var accountReadByThisLoginAttempt = await accountRepositoryUsedByThisDatabaseTest.FindUserAccountByIdentifierAsync(accountSavedInDatabaseByThisTest.Id);
-        accountReadByThisLoginAttempt!.FailedLoginAttemptCount = 5;
-        accountReadByThisLoginAttempt.LockoutCount = 8;
-        accountReadByThisLoginAttempt.LockoutEndsAt = CurrentDateUsedInTheseTests.AddHours(24);
+        await using var databaseContext = CreateDatabaseContext();
+        await using var transaction = await databaseContext.Database.BeginTransactionAsync();
+        var accountRepository = new UserAccountRepository(databaseContext);
+        var savedAccount = await SaveConfirmedAccountAsync(databaseContext, "test-compteurs-enregistres@exemple.test");
+        await databaseContext.Users
+            .Where(row => row.Id == savedAccount.Id)
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(row => row.FailedLoginAttemptCount, (short)4)
+                .SetProperty(row => row.LockoutCount, (short)7));
+        var account = await accountRepository.FindByIdAsync(savedAccount.Id);
 
-        var countersWereSavedInTheDatabase = await accountRepositoryUsedByThisDatabaseTest.TryToSaveLoginCountersOfThisAccountAsync(accountReadByThisLoginAttempt);
+        // Le 5e essai bloque le compte pour la 8e fois : 15 minutes × 2^7 dépasse 24 heures, le blocage dure donc 24 heures.
+        account!.CountLoginAttempt(Now);
+        var saved = await TrySaveChangesAsync(databaseContext);
 
-        Assert.True(countersWereSavedInTheDatabase);
-        databaseContextOfThisRepositoryTest.ChangeTracker.Clear();
-        var accountReadBackFromTheRealDatabase = await accountRepositoryUsedByThisDatabaseTest.FindUserAccountByIdentifierAsync(accountSavedInDatabaseByThisTest.Id);
-        Assert.Equal(5, accountReadBackFromTheRealDatabase!.FailedLoginAttemptCount);
-        Assert.Equal(8, accountReadBackFromTheRealDatabase.LockoutCount);
-        Assert.Equal(CurrentDateUsedInTheseTests.AddHours(24), accountReadBackFromTheRealDatabase.LockoutEndsAt);
+        Assert.True(saved);
+        databaseContext.ChangeTracker.Clear();
+        var reloadedAccount = await accountRepository.FindByIdAsync(savedAccount.Id);
+        Assert.Equal(5, reloadedAccount!.FailedLoginAttemptCount);
+        Assert.Equal(8, reloadedAccount.LockoutCount);
+        Assert.Equal(Now.AddHours(24), reloadedAccount.LockoutEndsAt);
     }
 
     // Deux requêtes lisent le même compteur : la seconde ne doit pas écraser l'essai compté par la première.
     [Fact]
     public async Task CountersAreNotSavedWhenAnotherRequestJustChangedThem()
     {
-        await using var databaseContextOfThisRepositoryTest = CreateDatabaseContextConnectedToLocalDatabase();
-        await using var transactionCancelledAtTheEndOfThisTest = await databaseContextOfThisRepositoryTest.Database.BeginTransactionAsync();
-        var accountRepositoryUsedByThisDatabaseTest = new UserAccountRepository(databaseContextOfThisRepositoryTest);
-        var accountSavedInDatabaseByThisTest = await SaveNewConfirmedAccountWithThisEmailAddressAsync(databaseContextOfThisRepositoryTest, "test-compteurs-conflit@exemple.test");
-        var accountReadJustBeforeTheConflict = await accountRepositoryUsedByThisDatabaseTest.FindUserAccountByIdentifierAsync(accountSavedInDatabaseByThisTest.Id);
-        await SimulateAnotherRequestCountingOneAttemptAsync(databaseContextOfThisRepositoryTest, accountSavedInDatabaseByThisTest.Id, 3);
+        await using var databaseContext = CreateDatabaseContext();
+        await using var transaction = await databaseContext.Database.BeginTransactionAsync();
+        var accountRepository = new UserAccountRepository(databaseContext);
+        var savedAccount = await SaveConfirmedAccountAsync(databaseContext, "test-compteurs-conflit@exemple.test");
+        var account = await accountRepository.FindByIdAsync(savedAccount.Id);
+        await SimulateConcurrentAttemptAsync(databaseContext, savedAccount.Id, 3);
 
-        accountReadJustBeforeTheConflict!.FailedLoginAttemptCount = 1;
-        var countersWereSavedInTheDatabase = await accountRepositoryUsedByThisDatabaseTest.TryToSaveLoginCountersOfThisAccountAsync(accountReadJustBeforeTheConflict);
+        account!.CountLoginAttempt(Now);
+        var saved = await TrySaveChangesAsync(databaseContext);
 
-        Assert.False(countersWereSavedInTheDatabase);
-        var accountReadAgainAfterTheConflict = await accountRepositoryUsedByThisDatabaseTest.FindUserAccountByIdentifierAsync(accountSavedInDatabaseByThisTest.Id);
-        Assert.Equal(3, accountReadAgainAfterTheConflict!.FailedLoginAttemptCount);
+        Assert.False(saved);
+        var reloadedAccount = await accountRepository.FindByIdAsync(savedAccount.Id);
+        Assert.Equal(3, reloadedAccount!.FailedLoginAttemptCount);
     }
 
     // Une récupération vient de changer le mot de passe : la connexion en cours ne doit rien enregistrer,
@@ -208,28 +228,56 @@ public class UserSessionRepositoryTests
     [Fact]
     public async Task LoginIsNotSavedWhenThePasswordJustChangedEvenWithUnchangedCounters()
     {
-        await using var databaseContextOfThisRepositoryTest = CreateDatabaseContextConnectedToLocalDatabase();
-        await using var transactionCancelledAtTheEndOfThisTest = await databaseContextOfThisRepositoryTest.Database.BeginTransactionAsync();
-        var repositoryBeingTestedOnTheRealDatabase = new UserSessionRepository(databaseContextOfThisRepositoryTest);
-        var accountSavedInDatabaseByThisTest = await SaveNewConfirmedAccountWithThisEmailAddressAsync(databaseContextOfThisRepositoryTest, "test-session-mot-de-passe-change@exemple.test");
-        var accountReadByThisSuccessfulLogin = await new UserAccountRepository(databaseContextOfThisRepositoryTest).FindUserAccountByIdentifierAsync(accountSavedInDatabaseByThisTest.Id);
+        await using var databaseContext = CreateDatabaseContext();
+        await using var transaction = await databaseContext.Database.BeginTransactionAsync();
+        var savedAccount = await SaveConfirmedAccountAsync(databaseContext, "test-session-mot-de-passe-change@exemple.test");
+        var account = await new UserAccountRepository(databaseContext).FindByIdAsync(savedAccount.Id);
 
-        await databaseContextOfThisRepositoryTest.Users
-            .Where(userSearchedInTheDatabaseTable => userSearchedInTheDatabaseTable.Id == accountSavedInDatabaseByThisTest.Id)
-            .ExecuteUpdateAsync(setterOfTheColumnsOfTheUser => setterOfTheColumnsOfTheUser.SetProperty(
-                userBeingUpdatedInTheDatabase => userBeingUpdatedInTheDatabase.PasswordHash,
-                "empreinte-du-nouveau-mot-de-passe"));
+        await WriteAsAnotherRequestAsync(databaseContext, () => databaseContext.Users
+            .Where(row => row.Id == savedAccount.Id)
+            .ExecuteUpdateAsync(setters => setters.SetProperty(
+                row => row.PasswordHash,
+                "empreinte-du-nouveau-mot-de-passe")));
 
-        var loginWasSavedInTheDatabase = await repositoryBeingTestedOnTheRealDatabase.TryToSaveSuccessfulLoginOfThisAccountAsync(
-            accountReadByThisSuccessfulLogin!,
-            CreateNewSessionForThisUserAccount(accountSavedInDatabaseByThisTest, CurrentDateUsedInTheseTests),
+        PrepareLogin(
+            databaseContext,
+            account!,
+            CreateSession(savedAccount, Now),
             null,
-            null,
-            CreateSecurityEventOfTheSuccessfulLogin(accountSavedInDatabaseByThisTest));
+            CreateLoginEvent(savedAccount));
+        var saved = await TrySaveChangesAsync(databaseContext);
 
-        Assert.False(loginWasSavedInTheDatabase);
-        Assert.Equal(0, await databaseContextOfThisRepositoryTest.UserSessions.CountAsync(sessionSearchedInTheDatabaseTable => sessionSearchedInTheDatabaseTable.UserId == accountSavedInDatabaseByThisTest.Id));
-        Assert.Equal(0, await databaseContextOfThisRepositoryTest.SecurityEvents.CountAsync(eventSearchedInTheDatabaseTable => eventSearchedInTheDatabaseTable.UserId == accountSavedInDatabaseByThisTest.Id));
+        Assert.False(saved);
+        Assert.Equal(0, await databaseContext.UserSessions.CountAsync(row => row.UserId == savedAccount.Id));
+        Assert.Equal(0, await databaseContext.SecurityEvents.CountAsync(row => row.UserId == savedAccount.Id));
+    }
+
+    // Une autre requête change une colonne que la connexion ne regarde pas, comme le nom : la connexion recommence quand même,
+    // car la version de la ligne couvre toutes les colonnes. Une règle future sur n'importe quelle colonne est donc protégée.
+    [Fact]
+    public async Task LoginIsNotSavedWhenAnyColumnOfTheAccountJustChanged()
+    {
+        await using var databaseContext = CreateDatabaseContext();
+        await using var transaction = await databaseContext.Database.BeginTransactionAsync();
+        var savedAccount = await SaveConfirmedAccountAsync(databaseContext, "test-session-nom-change@exemple.test");
+        var account = await new UserAccountRepository(databaseContext).FindByIdAsync(savedAccount.Id);
+
+        await WriteAsAnotherRequestAsync(databaseContext, () => databaseContext.Users
+            .Where(row => row.Id == savedAccount.Id)
+            .ExecuteUpdateAsync(setters => setters.SetProperty(
+                row => row.LastName,
+                "Nom-d-une-autre-requete")));
+
+        PrepareLogin(
+            databaseContext,
+            account!,
+            CreateSession(savedAccount, Now),
+            null,
+            CreateLoginEvent(savedAccount));
+        var saved = await TrySaveChangesAsync(databaseContext);
+
+        Assert.False(saved);
+        Assert.Equal(0, await databaseContext.UserSessions.CountAsync(row => row.UserId == savedAccount.Id));
     }
 
     // À chaque blocage, le compteur revient à 5 : une requête qui a lu le blocage précédent ne doit pas effacer le nouveau.
@@ -237,170 +285,188 @@ public class UserSessionRepositoryTests
     [Fact]
     public async Task CountersAreNotSavedWhenANewLockoutHappenedWithTheSameCounter()
     {
-        await using var databaseContextOfThisRepositoryTest = CreateDatabaseContextConnectedToLocalDatabase();
-        await using var transactionCancelledAtTheEndOfThisTest = await databaseContextOfThisRepositoryTest.Database.BeginTransactionAsync();
-        var accountRepositoryUsedByThisDatabaseTest = new UserAccountRepository(databaseContextOfThisRepositoryTest);
-        var accountSavedInDatabaseByThisTest = await SaveNewConfirmedAccountWithThisEmailAddressAsync(databaseContextOfThisRepositoryTest, "test-compteurs-nouveau-blocage@exemple.test");
-        var endOfTheFirstLockoutInThisTest = CurrentDateUsedInTheseTests;
-        var endOfTheSecondLockoutInThisTest = CurrentDateUsedInTheseTests.AddMinutes(30);
-        await databaseContextOfThisRepositoryTest.Users
-            .Where(userSearchedInTheDatabaseTable => userSearchedInTheDatabaseTable.Id == accountSavedInDatabaseByThisTest.Id)
-            .ExecuteUpdateAsync(setterOfTheColumnsOfTheUser => setterOfTheColumnsOfTheUser
-                .SetProperty(userBeingUpdatedInTheDatabase => userBeingUpdatedInTheDatabase.FailedLoginAttemptCount, (short)5)
-                .SetProperty(userBeingUpdatedInTheDatabase => userBeingUpdatedInTheDatabase.LockoutEndsAt, endOfTheFirstLockoutInThisTest));
-        var accountReadWithTheFirstLockout = await accountRepositoryUsedByThisDatabaseTest.FindUserAccountByIdentifierAsync(accountSavedInDatabaseByThisTest.Id);
+        await using var databaseContext = CreateDatabaseContext();
+        await using var transaction = await databaseContext.Database.BeginTransactionAsync();
+        var accountRepository = new UserAccountRepository(databaseContext);
+        var savedAccount = await SaveConfirmedAccountAsync(databaseContext, "test-compteurs-nouveau-blocage@exemple.test");
+        var firstLockoutEnd = Now;
+        var secondLockoutEnd = Now.AddMinutes(30);
+        await databaseContext.Users
+            .Where(row => row.Id == savedAccount.Id)
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(row => row.FailedLoginAttemptCount, (short)5)
+                .SetProperty(row => row.LockoutEndsAt, firstLockoutEnd));
+        var account = await accountRepository.FindByIdAsync(savedAccount.Id);
 
-        await databaseContextOfThisRepositoryTest.Users
-            .Where(userSearchedInTheDatabaseTable => userSearchedInTheDatabaseTable.Id == accountSavedInDatabaseByThisTest.Id)
-            .ExecuteUpdateAsync(setterOfTheColumnsOfTheUser => setterOfTheColumnsOfTheUser
-                .SetProperty(userBeingUpdatedInTheDatabase => userBeingUpdatedInTheDatabase.LockoutEndsAt, endOfTheSecondLockoutInThisTest));
+        await WriteAsAnotherRequestAsync(databaseContext, () => databaseContext.Users
+            .Where(row => row.Id == savedAccount.Id)
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(row => row.LockoutEndsAt, secondLockoutEnd)));
 
-        AccountLockoutRules.CountOneLoginAttemptAndLockAccountOnTheLastOne(accountReadWithTheFirstLockout!, CurrentDateUsedInTheseTests);
-        var countersWereSavedInTheDatabase = await accountRepositoryUsedByThisDatabaseTest.TryToSaveLoginCountersOfThisAccountAsync(accountReadWithTheFirstLockout!);
+        account!.CountLoginAttempt(Now);
+        var saved = await TrySaveChangesAsync(databaseContext);
 
-        Assert.False(countersWereSavedInTheDatabase);
-        var accountReadAgainAfterTheConflict = await accountRepositoryUsedByThisDatabaseTest.FindUserAccountByIdentifierAsync(accountSavedInDatabaseByThisTest.Id);
-        Assert.Equal(endOfTheSecondLockoutInThisTest, accountReadAgainAfterTheConflict!.LockoutEndsAt);
-        Assert.Equal(5, accountReadAgainAfterTheConflict.FailedLoginAttemptCount);
+        Assert.False(saved);
+        var reloadedAccount = await accountRepository.FindByIdAsync(savedAccount.Id);
+        Assert.Equal(secondLockoutEnd, reloadedAccount!.LockoutEndsAt);
+        Assert.Equal(5, reloadedAccount.FailedLoginAttemptCount);
     }
 
     [Fact]
     public async Task DeviceTokenBelongsOnlyToItsOwnAccount()
     {
-        await using var databaseContextOfThisRepositoryTest = CreateDatabaseContextConnectedToLocalDatabase();
-        await using var transactionCancelledAtTheEndOfThisTest = await databaseContextOfThisRepositoryTest.Database.BeginTransactionAsync();
-        var repositoryBeingTestedOnTheRealDatabase = new UserSessionRepository(databaseContextOfThisRepositoryTest);
-        var firstAccountSavedByThisTest = await SaveNewConfirmedAccountWithThisEmailAddressAsync(databaseContextOfThisRepositoryTest, "test-appareil-premier@exemple.test");
-        var secondAccountSavedByThisTest = await SaveNewConfirmedAccountWithThisEmailAddressAsync(databaseContextOfThisRepositoryTest, "test-appareil-second@exemple.test");
-        var hashOfTheDeviceTokenSavedByThisTest = new string('c', 64);
-        databaseContextOfThisRepositoryTest.Devices.Add(new Device { DeviceToken = hashOfTheDeviceTokenSavedByThisTest, UserId = firstAccountSavedByThisTest.Id });
-        await databaseContextOfThisRepositoryTest.SaveChangesAsync();
+        await using var databaseContext = CreateDatabaseContext();
+        await using var transaction = await databaseContext.Database.BeginTransactionAsync();
+        var repository = new UserSessionRepository(databaseContext);
+        var firstAccount = await SaveConfirmedAccountAsync(databaseContext, "test-appareil-premier@exemple.test");
+        var secondAccount = await SaveConfirmedAccountAsync(databaseContext, "test-appareil-second@exemple.test");
+        var deviceTokenHash = new string('c', 64);
+        databaseContext.Devices.Add(new Device { DeviceToken = deviceTokenHash, UserId = firstAccount.Id });
+        await databaseContext.SaveChangesAsync();
 
-        Assert.True(await repositoryBeingTestedOnTheRealDatabase.CheckThatDeviceTokenBelongsToThisAccountAsync(hashOfTheDeviceTokenSavedByThisTest, firstAccountSavedByThisTest.Id));
-        Assert.False(await repositoryBeingTestedOnTheRealDatabase.CheckThatDeviceTokenBelongsToThisAccountAsync(hashOfTheDeviceTokenSavedByThisTest, secondAccountSavedByThisTest.Id));
-        Assert.False(await repositoryBeingTestedOnTheRealDatabase.CheckThatDeviceTokenBelongsToThisAccountAsync(new string('d', 64), firstAccountSavedByThisTest.Id));
+        Assert.True(await repository.DeviceBelongsToAccountAsync(deviceTokenHash, firstAccount.Id));
+        Assert.False(await repository.DeviceBelongsToAccountAsync(deviceTokenHash, secondAccount.Id));
+        Assert.False(await repository.DeviceBelongsToAccountAsync(new string('d', 64), firstAccount.Id));
     }
 
     [Fact]
     public async Task SessionIsFoundByItsHashAndUnknownHashFindsNothing()
     {
-        await using var databaseContextOfThisRepositoryTest = CreateDatabaseContextConnectedToLocalDatabase();
-        await using var transactionCancelledAtTheEndOfThisTest = await databaseContextOfThisRepositoryTest.Database.BeginTransactionAsync();
-        var repositoryBeingTestedOnTheRealDatabase = new UserSessionRepository(databaseContextOfThisRepositoryTest);
-        var accountSavedInDatabaseByThisTest = await SaveNewConfirmedAccountWithThisEmailAddressAsync(databaseContextOfThisRepositoryTest, "test-session-recherche@exemple.test");
-        var sessionSavedInDatabaseByThisTest = CreateNewSessionForThisUserAccount(accountSavedInDatabaseByThisTest, CurrentDateUsedInTheseTests);
-        await SaveTheseSessionsDirectlyInTheDatabaseAsync(databaseContextOfThisRepositoryTest, sessionSavedInDatabaseByThisTest);
+        await using var databaseContext = CreateDatabaseContext();
+        await using var transaction = await databaseContext.Database.BeginTransactionAsync();
+        var repository = new UserSessionRepository(databaseContext);
+        var savedAccount = await SaveConfirmedAccountAsync(databaseContext, "test-session-recherche@exemple.test");
+        var savedSession = CreateSession(savedAccount, Now);
+        await SaveSessionsDirectlyAsync(databaseContext, savedSession);
 
-        var sessionFoundInTheRealDatabase = await repositoryBeingTestedOnTheRealDatabase.FindUserSessionByItsHashAsync(sessionSavedInDatabaseByThisTest.Id);
+        var session = await repository.FindAsync(savedSession.Id);
 
-        Assert.Equal(accountSavedInDatabaseByThisTest.Id, sessionFoundInTheRealDatabase!.UserId);
-        Assert.Null(await repositoryBeingTestedOnTheRealDatabase.FindUserSessionByItsHashAsync(new string('e', 64)));
+        Assert.Equal(savedAccount.Id, session!.UserId);
+        Assert.Null(await repository.FindAsync(new string('e', 64)));
     }
 
     [Fact]
     public async Task ActivityOfTheSessionIsReallyRecordedInTheDatabase()
     {
-        await using var databaseContextOfThisRepositoryTest = CreateDatabaseContextConnectedToLocalDatabase();
-        await using var transactionCancelledAtTheEndOfThisTest = await databaseContextOfThisRepositoryTest.Database.BeginTransactionAsync();
-        var repositoryBeingTestedOnTheRealDatabase = new UserSessionRepository(databaseContextOfThisRepositoryTest);
-        var accountSavedInDatabaseByThisTest = await SaveNewConfirmedAccountWithThisEmailAddressAsync(databaseContextOfThisRepositoryTest, "test-session-activite@exemple.test");
-        var sessionUsedByThisHttpRequest = CreateNewSessionForThisUserAccount(accountSavedInDatabaseByThisTest, CurrentDateUsedInTheseTests);
-        var sessionOfAnotherBrowserOfTheUser = CreateNewSessionForThisUserAccount(accountSavedInDatabaseByThisTest, CurrentDateUsedInTheseTests);
-        await SaveTheseSessionsDirectlyInTheDatabaseAsync(databaseContextOfThisRepositoryTest, sessionUsedByThisHttpRequest, sessionOfAnotherBrowserOfTheUser);
+        await using var databaseContext = CreateDatabaseContext();
+        await using var transaction = await databaseContext.Database.BeginTransactionAsync();
+        var repository = new UserSessionRepository(databaseContext);
+        var savedAccount = await SaveConfirmedAccountAsync(databaseContext, "test-session-activite@exemple.test");
+        var session = CreateSession(savedAccount, Now);
+        var otherSession = CreateSession(savedAccount, Now);
+        await SaveSessionsDirectlyAsync(databaseContext, session, otherSession);
 
-        await repositoryBeingTestedOnTheRealDatabase.RecordActivityOfThisUserSessionAsync(sessionUsedByThisHttpRequest.Id, CurrentDateUsedInTheseTests.AddMinutes(10));
+        await repository.RecordActivityAsync(session.Id, Now.AddMinutes(10));
 
-        var sessionUsedAndReadBackFromDatabase = await repositoryBeingTestedOnTheRealDatabase.FindUserSessionByItsHashAsync(sessionUsedByThisHttpRequest.Id);
-        var sessionOfAnotherBrowserReadBack = await repositoryBeingTestedOnTheRealDatabase.FindUserSessionByItsHashAsync(sessionOfAnotherBrowserOfTheUser.Id);
-        Assert.Equal(CurrentDateUsedInTheseTests.AddMinutes(10), sessionUsedAndReadBackFromDatabase!.LastActivityAt);
-        Assert.Equal(CurrentDateUsedInTheseTests, sessionOfAnotherBrowserReadBack!.LastActivityAt);
+        var reloadedSession = await repository.FindAsync(session.Id);
+        var reloadedOtherSession = await repository.FindAsync(otherSession.Id);
+        Assert.Equal(Now.AddMinutes(10), reloadedSession!.LastActivityAt);
+        Assert.Equal(Now, reloadedOtherSession!.LastActivityAt);
+    }
+
+    // Deux requêtes écrivent leur activité dans le désordre : la plus ancienne ne doit pas raccourcir la session.
+    [Fact]
+    public async Task OlderActivityNeverReplacesANewerOneInTheDatabase()
+    {
+        await using var databaseContext = CreateDatabaseContext();
+        await using var transaction = await databaseContext.Database.BeginTransactionAsync();
+        var repository = new UserSessionRepository(databaseContext);
+        var savedAccount = await SaveConfirmedAccountAsync(databaseContext, "test-session-activite-desordre@exemple.test");
+        var session = CreateSession(savedAccount, Now);
+        await SaveSessionsDirectlyAsync(databaseContext, session);
+
+        await repository.RecordActivityAsync(session.Id, Now.AddMinutes(10));
+        await repository.RecordActivityAsync(session.Id, Now.AddMinutes(5));
+
+        var reloadedSession = await repository.FindAsync(session.Id);
+        Assert.Equal(Now.AddMinutes(10), reloadedSession!.LastActivityAt);
     }
 
     // Se déconnecter sur un appareil ne déconnecte pas les autres.
     [Fact]
     public async Task DeletingOneSessionKeepsTheOtherSessionsOfTheAccount()
     {
-        await using var databaseContextOfThisRepositoryTest = CreateDatabaseContextConnectedToLocalDatabase();
-        await using var transactionCancelledAtTheEndOfThisTest = await databaseContextOfThisRepositoryTest.Database.BeginTransactionAsync();
-        var repositoryBeingTestedOnTheRealDatabase = new UserSessionRepository(databaseContextOfThisRepositoryTest);
-        var accountSavedInDatabaseByThisTest = await SaveNewConfirmedAccountWithThisEmailAddressAsync(databaseContextOfThisRepositoryTest, "test-session-suppression@exemple.test");
-        var sessionToDeleteByThisTest = CreateNewSessionForThisUserAccount(accountSavedInDatabaseByThisTest, CurrentDateUsedInTheseTests);
-        var sessionOfAnotherBrowserOfTheUser = CreateNewSessionForThisUserAccount(accountSavedInDatabaseByThisTest, CurrentDateUsedInTheseTests);
-        await SaveTheseSessionsDirectlyInTheDatabaseAsync(databaseContextOfThisRepositoryTest, sessionToDeleteByThisTest, sessionOfAnotherBrowserOfTheUser);
+        await using var databaseContext = CreateDatabaseContext();
+        await using var transaction = await databaseContext.Database.BeginTransactionAsync();
+        var repository = new UserSessionRepository(databaseContext);
+        var savedAccount = await SaveConfirmedAccountAsync(databaseContext, "test-session-suppression@exemple.test");
+        var session = CreateSession(savedAccount, Now);
+        var otherSession = CreateSession(savedAccount, Now);
+        await SaveSessionsDirectlyAsync(databaseContext, session, otherSession);
 
-        await repositoryBeingTestedOnTheRealDatabase.DeleteUserSessionByItsHashAsync(sessionToDeleteByThisTest.Id);
+        await repository.DeleteAsync(session.Id);
 
-        Assert.Null(await repositoryBeingTestedOnTheRealDatabase.FindUserSessionByItsHashAsync(sessionToDeleteByThisTest.Id));
-        Assert.NotNull(await repositoryBeingTestedOnTheRealDatabase.FindUserSessionByItsHashAsync(sessionOfAnotherBrowserOfTheUser.Id));
+        Assert.Null(await repository.FindAsync(session.Id));
+        Assert.NotNull(await repository.FindAsync(otherSession.Id));
     }
 
     [Fact]
     public async Task CleanupDeletesOnlySessionsInactiveSinceTheDate()
     {
-        await using var databaseContextOfThisRepositoryTest = CreateDatabaseContextConnectedToLocalDatabase();
-        await using var transactionCancelledAtTheEndOfThisTest = await databaseContextOfThisRepositoryTest.Database.BeginTransactionAsync();
-        var repositoryBeingTestedOnTheRealDatabase = new UserSessionRepository(databaseContextOfThisRepositoryTest);
-        var accountSavedInDatabaseByThisTest = await SaveNewConfirmedAccountWithThisEmailAddressAsync(databaseContextOfThisRepositoryTest, "test-session-effacement@exemple.test");
-        var sessionInactiveExactlySinceTheDate = CreateNewSessionForThisUserAccount(accountSavedInDatabaseByThisTest, CurrentDateUsedInTheseTests);
-        var sessionActiveOneSecondAfterTheDate = CreateNewSessionForThisUserAccount(accountSavedInDatabaseByThisTest, CurrentDateUsedInTheseTests.AddSeconds(1));
-        await SaveTheseSessionsDirectlyInTheDatabaseAsync(databaseContextOfThisRepositoryTest, sessionInactiveExactlySinceTheDate, sessionActiveOneSecondAfterTheDate);
+        await using var databaseContext = CreateDatabaseContext();
+        await using var transaction = await databaseContext.Database.BeginTransactionAsync();
+        var repository = new UserSessionRepository(databaseContext);
+        var savedAccount = await SaveConfirmedAccountAsync(databaseContext, "test-session-effacement@exemple.test");
+        var expiredSession = CreateSession(savedAccount, Now);
+        var activeSession = CreateSession(savedAccount, Now.AddSeconds(1));
+        await SaveSessionsDirectlyAsync(databaseContext, expiredSession, activeSession);
 
-        var numberOfSessionsDeletedByThisCleanup = await repositoryBeingTestedOnTheRealDatabase.DeleteUserSessionsInactiveSinceThisDateAsync(CurrentDateUsedInTheseTests);
+        var deletedCount = await repository.DeleteInactiveSinceAsync(Now);
 
-        Assert.True(numberOfSessionsDeletedByThisCleanup >= 1);
-        Assert.Null(await repositoryBeingTestedOnTheRealDatabase.FindUserSessionByItsHashAsync(sessionInactiveExactlySinceTheDate.Id));
-        Assert.NotNull(await repositoryBeingTestedOnTheRealDatabase.FindUserSessionByItsHashAsync(sessionActiveOneSecondAfterTheDate.Id));
+        Assert.True(deletedCount >= 1);
+        Assert.Null(await repository.FindAsync(expiredSession.Id));
+        Assert.NotNull(await repository.FindAsync(activeSession.Id));
     }
 
     // SS §3 : après une récupération, toutes les sessions du compte sont fermées, et seulement les siennes.
     [Fact]
     public async Task DeletingEverySessionOfOneAccountKeepsTheSessionsOfOtherAccounts()
     {
-        await using var databaseContextOfThisRepositoryTest = CreateDatabaseContextConnectedToLocalDatabase();
-        await using var transactionCancelledAtTheEndOfThisTest = await databaseContextOfThisRepositoryTest.Database.BeginTransactionAsync();
-        var repositoryBeingTestedOnTheRealDatabase = new UserSessionRepository(databaseContextOfThisRepositoryTest);
-        var accountDisconnectedEverywhereByThisTest = await SaveNewConfirmedAccountWithThisEmailAddressAsync(databaseContextOfThisRepositoryTest, "test-session-toutes-fermees@exemple.test");
-        var accountThatKeepsItsSessionInThisTest = await SaveNewConfirmedAccountWithThisEmailAddressAsync(databaseContextOfThisRepositoryTest, "test-session-gardee@exemple.test");
-        var firstSessionOfTheDisconnectedAccount = CreateNewSessionForThisUserAccount(accountDisconnectedEverywhereByThisTest, CurrentDateUsedInTheseTests);
-        var secondSessionOfTheDisconnectedAccount = CreateNewSessionForThisUserAccount(accountDisconnectedEverywhereByThisTest, CurrentDateUsedInTheseTests);
-        var sessionOfTheOtherAccountInThisTest = CreateNewSessionForThisUserAccount(accountThatKeepsItsSessionInThisTest, CurrentDateUsedInTheseTests);
-        await SaveTheseSessionsDirectlyInTheDatabaseAsync(databaseContextOfThisRepositoryTest, firstSessionOfTheDisconnectedAccount, secondSessionOfTheDisconnectedAccount, sessionOfTheOtherAccountInThisTest);
+        await using var databaseContext = CreateDatabaseContext();
+        await using var transaction = await databaseContext.Database.BeginTransactionAsync();
+        var repository = new UserSessionRepository(databaseContext);
+        var disconnectedAccount = await SaveConfirmedAccountAsync(databaseContext, "test-session-toutes-fermees@exemple.test");
+        var account = await SaveConfirmedAccountAsync(databaseContext, "test-session-gardee@exemple.test");
+        var firstSession = CreateSession(disconnectedAccount, Now);
+        var secondSession = CreateSession(disconnectedAccount, Now);
+        var otherSession = CreateSession(account, Now);
+        await SaveSessionsDirectlyAsync(databaseContext, firstSession, secondSession, otherSession);
 
-        await repositoryBeingTestedOnTheRealDatabase.DeleteAllUserSessionsOfThisAccountAsync(accountDisconnectedEverywhereByThisTest.Id);
+        await repository.DeleteAllForUserAsync(disconnectedAccount.Id);
 
-        Assert.Null(await repositoryBeingTestedOnTheRealDatabase.FindUserSessionByItsHashAsync(firstSessionOfTheDisconnectedAccount.Id));
-        Assert.Null(await repositoryBeingTestedOnTheRealDatabase.FindUserSessionByItsHashAsync(secondSessionOfTheDisconnectedAccount.Id));
-        Assert.NotNull(await repositoryBeingTestedOnTheRealDatabase.FindUserSessionByItsHashAsync(sessionOfTheOtherAccountInThisTest.Id));
+        Assert.Null(await repository.FindAsync(firstSession.Id));
+        Assert.Null(await repository.FindAsync(secondSession.Id));
+        Assert.NotNull(await repository.FindAsync(otherSession.Id));
     }
 
     // Quand le compte disparaît, ses sessions et ses appareils partent avec lui (MPD) : la session ne vaut plus rien.
     [Fact]
     public async Task ErasingTheAccountErasesItsSessionsAndItsDevices()
     {
-        await using var databaseContextOfThisRepositoryTest = CreateDatabaseContextConnectedToLocalDatabase();
-        await using var transactionCancelledAtTheEndOfThisTest = await databaseContextOfThisRepositoryTest.Database.BeginTransactionAsync();
-        var repositoryBeingTestedOnTheRealDatabase = new UserSessionRepository(databaseContextOfThisRepositoryTest);
-        var accountSavedInDatabaseByThisTest = await SaveNewConfirmedAccountWithThisEmailAddressAsync(databaseContextOfThisRepositoryTest, "test-session-compte-efface@exemple.test");
-        var sessionSavedInDatabaseByThisTest = CreateNewSessionForThisUserAccount(accountSavedInDatabaseByThisTest, CurrentDateUsedInTheseTests);
-        databaseContextOfThisRepositoryTest.Devices.Add(new Device { DeviceToken = new string('f', 64), UserId = accountSavedInDatabaseByThisTest.Id });
-        await SaveTheseSessionsDirectlyInTheDatabaseAsync(databaseContextOfThisRepositoryTest, sessionSavedInDatabaseByThisTest);
+        await using var databaseContext = CreateDatabaseContext();
+        await using var transaction = await databaseContext.Database.BeginTransactionAsync();
+        var repository = new UserSessionRepository(databaseContext);
+        var savedAccount = await SaveConfirmedAccountAsync(databaseContext, "test-session-compte-efface@exemple.test");
+        var savedSession = CreateSession(savedAccount, Now);
+        databaseContext.Devices.Add(new Device { DeviceToken = new string('f', 64), UserId = savedAccount.Id });
+        await SaveSessionsDirectlyAsync(databaseContext, savedSession);
 
-        await databaseContextOfThisRepositoryTest.Users
-            .Where(userSearchedInTheDatabaseTable => userSearchedInTheDatabaseTable.Id == accountSavedInDatabaseByThisTest.Id)
+        await databaseContext.Users
+            .Where(row => row.Id == savedAccount.Id)
             .ExecuteDeleteAsync();
 
-        Assert.Null(await repositoryBeingTestedOnTheRealDatabase.FindUserSessionByItsHashAsync(sessionSavedInDatabaseByThisTest.Id));
-        Assert.Equal(0, await databaseContextOfThisRepositoryTest.Devices.CountAsync(deviceSearchedInTheDatabaseTable => deviceSearchedInTheDatabaseTable.UserId == accountSavedInDatabaseByThisTest.Id));
+        Assert.Null(await repository.FindAsync(savedSession.Id));
+        Assert.Equal(0, await databaseContext.Devices.CountAsync(row => row.UserId == savedAccount.Id));
     }
 
     // Le compteur ne peut pas dépasser 5 en base : c'est le dernier filet si le code se trompe (MPD).
     [Fact]
     public async Task DatabaseRefusesACounterAboveFiveFailedAttempts()
     {
-        await using var databaseContextOfThisRepositoryTest = CreateDatabaseContextConnectedToLocalDatabase();
-        await using var transactionCancelledAtTheEndOfThisTest = await databaseContextOfThisRepositoryTest.Database.BeginTransactionAsync();
-        var accountSavedInDatabaseByThisTest = await SaveNewConfirmedAccountWithThisEmailAddressAsync(databaseContextOfThisRepositoryTest, "test-compteur-limite@exemple.test");
+        await using var databaseContext = CreateDatabaseContext();
+        await using var transaction = await databaseContext.Database.BeginTransactionAsync();
+        var savedAccount = await SaveConfirmedAccountAsync(databaseContext, "test-compteur-limite@exemple.test");
 
-        await Assert.ThrowsAsync<Npgsql.PostgresException>(() => SimulateAnotherRequestCountingOneAttemptAsync(databaseContextOfThisRepositoryTest, accountSavedInDatabaseByThisTest.Id, 6));
+        await Assert.ThrowsAsync<Npgsql.PostgresException>(() => SimulateConcurrentAttemptAsync(databaseContext, savedAccount.Id, 6));
     }
 }

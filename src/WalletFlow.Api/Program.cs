@@ -4,168 +4,184 @@ using Microsoft.AspNetCore.Mvc.Authorization;
 using WalletFlow.Api.Authentication;
 using WalletFlow.Api.BackgroundTasks;
 using WalletFlow.Api.Configuration;
+using WalletFlow.Api.Filters;
 using WalletFlow.Api.Middlewares;
 using WalletFlow.Application.AccountRecovery;
 using WalletFlow.Application.Configuration;
+using WalletFlow.Application.Persistence;
+using WalletFlow.Application.Security;
 using WalletFlow.Application.TwoFactorAuthentication;
 using WalletFlow.Application.UserAccounts;
 using WalletFlow.Application.UserSessions;
 using WalletFlow.Infrastructure;
 
 // Prépare l'application web de l'API WalletFlow.
-var builderOfTheWalletFlowWebApplication = WebApplication.CreateBuilder(args);
+var builder = WebApplication.CreateBuilder(args);
 
 // La chaîne de connexion vient des secrets (user-secrets en développement, variables
 // d'environnement en production), jamais du code ni de Git (SS §7).
-var connectionStringOfTheWalletFlowDatabase =
-    builderOfTheWalletFlowWebApplication.Configuration.GetConnectionString("WalletFlowDatabase");
-if (string.IsNullOrWhiteSpace(connectionStringOfTheWalletFlowDatabase))
+var connectionString =
+    builder.Configuration.GetConnectionString("WalletFlowDatabase");
+if (string.IsNullOrWhiteSpace(connectionString))
 {
     throw new InvalidOperationException(
         "La chaîne de connexion « WalletFlowDatabase » est absente. En développement, ajoute-la avec dotnet user-secrets.");
 }
-builderOfTheWalletFlowWebApplication.Services.AddWalletFlowDatabaseAccessToTheServices(connectionStringOfTheWalletFlowDatabase);
+builder.Services.AddWalletFlowDatabase(connectionString);
 
 // L'horloge de l'application : les tests peuvent la remplacer pour vérifier les durées sans attendre.
-builderOfTheWalletFlowWebApplication.Services.AddSingleton(TimeProvider.System);
+builder.Services.AddSingleton(TimeProvider.System);
+
+// Chaque réponse de la connexion et de l'inscription dure au moins ce temps : son temps de réponse ne révèle donc pas si un compte utilise l'adresse (SS §2).
+// Le réglage est lu au démarrage : une valeur illisible empêche l'API de démarrer.
+var minimumDuration = MinimumAnswerDurationFilter.ReadMinimumDuration(builder.Configuration);
+builder.Services.AddSingleton(serviceProvider =>
+    new MinimumAnswerDurationFilter(minimumDuration, serviceProvider.GetRequiredService<TimeProvider>()));
 
 // Hachage des mots de passe, création des jetons et limites par adresse e-mail (SS §2 et §6).
-builderOfTheWalletFlowWebApplication.Services.AddWalletFlowSecurityToolsToTheServices();
+builder.Services.AddWalletFlowSecurityTools();
 
 // La clé qui chiffre les secrets de double authentification vient des secrets, jamais du code ni de Git (SS §2 et §7).
 // Sans elle, aucun compte avec double authentification ne pourrait utiliser son application : l'API refuse donc de démarrer.
-var encryptionKeyOfTheTotpSecrets = builderOfTheWalletFlowWebApplication.Configuration["TwoFactorSecretEncryptionKey"];
-if (string.IsNullOrWhiteSpace(encryptionKeyOfTheTotpSecrets))
+var totpEncryptionKey = builder.Configuration["TwoFactorSecretEncryptionKey"];
+if (string.IsNullOrWhiteSpace(totpEncryptionKey))
 {
     throw new InvalidOperationException(
         "Le réglage « TwoFactorSecretEncryptionKey » est absent. En développement, ajoute-le avec dotnet user-secrets.");
 }
-builderOfTheWalletFlowWebApplication.Services.AddTotpSecretEncryptionToTheServices(encryptionKeyOfTheTotpSecrets);
+builder.Services.AddTotpSecretEncryption(totpEncryptionKey);
 
 // File des e-mails préparés en arrière-plan : le temps de réponse des routes ne révèle aucun compte (SS §2).
-builderOfTheWalletFlowWebApplication.Services.AddBackgroundEmailRequestQueueToTheServices();
+builder.Services.AddEmailQueue();
+
+// Texte des e-mails envoyés aux utilisateurs.
+builder.Services.AddEmailTexts();
 
 // En développement, les e-mails sont écrits dans un dossier local. L'envoi réel sera branché
 // avant la mise en production : d'ici là, l'API refuse de démarrer sans ce réglage.
-var localEmailsFolderFromTheConfiguration = builderOfTheWalletFlowWebApplication.Configuration["LocalEmailsFolder"];
-if (string.IsNullOrWhiteSpace(localEmailsFolderFromTheConfiguration))
+var emailsFolder = builder.Configuration["LocalEmailsFolder"];
+if (string.IsNullOrWhiteSpace(emailsFolder))
 {
     throw new InvalidOperationException(
         "Le réglage « LocalEmailsFolder » est absent : aucun moyen d'envoyer les e-mails n'est configuré.");
 }
-builderOfTheWalletFlowWebApplication.Services.AddEmailsWrittenToLocalFolderToTheServices(
-    Path.GetFullPath(Path.Combine(builderOfTheWalletFlowWebApplication.Environment.ContentRootPath, localEmailsFolderFromTheConfiguration)));
+builder.Services.AddLocalFolderEmails(
+    Path.GetFullPath(Path.Combine(builder.Environment.ContentRootPath, emailsFolder)));
 
 // Adresse publique du site, qui sert à construire les liens envoyés par e-mail (SS §9).
-builderOfTheWalletFlowWebApplication.Services.AddSingleton(
-    new PublicWebsiteSettings(builderOfTheWalletFlowWebApplication.Configuration["PublicWebsiteAddress"]));
+builder.Services.AddSingleton(
+    new PublicWebsiteSettings(builder.Configuration["PublicWebsiteAddress"]));
+
+// Outils communs de la couche Application : enregistrement avec réessai, et journal de sécurité.
+builder.Services.AddScoped<DatabaseChangesSavingService>();
+builder.Services.AddScoped<SecurityJournalService>();
 
 // Cas d'utilisation de la couche Application.
-builderOfTheWalletFlowWebApplication.Services.AddScoped<AccountRegistrationService>();
-builderOfTheWalletFlowWebApplication.Services.AddScoped<AccountConfirmationService>();
-builderOfTheWalletFlowWebApplication.Services.AddScoped<UnconfirmedAccountsCleanupService>();
-builderOfTheWalletFlowWebApplication.Services.AddScoped<UserSessionOpeningService>();
-builderOfTheWalletFlowWebApplication.Services.AddScoped<AccountLoginService>();
-builderOfTheWalletFlowWebApplication.Services.AddScoped<UserSessionService>();
-builderOfTheWalletFlowWebApplication.Services.AddScoped<ExpiredUserSessionsCleanupService>();
-builderOfTheWalletFlowWebApplication.Services.AddScoped<PasswordRecoveryRequestService>();
-builderOfTheWalletFlowWebApplication.Services.AddScoped<BackgroundEmailRequestProcessingService>();
-builderOfTheWalletFlowWebApplication.Services.AddScoped<PasswordResetService>();
-builderOfTheWalletFlowWebApplication.Services.AddScoped<AccountUnlockService>();
-builderOfTheWalletFlowWebApplication.Services.AddScoped<TwoFactorCodeCheckingService>();
-builderOfTheWalletFlowWebApplication.Services.AddScoped<TwoFactorLoginService>();
-builderOfTheWalletFlowWebApplication.Services.AddScoped<TwoFactorActivationService>();
-builderOfTheWalletFlowWebApplication.Services.AddScoped<TwoFactorDeactivationService>();
+builder.Services.AddScoped<AccountRegistrationService>();
+builder.Services.AddScoped<AccountConfirmationService>();
+builder.Services.AddScoped<UnconfirmedAccountsCleanupService>();
+builder.Services.AddScoped<UserSessionOpeningService>();
+builder.Services.AddScoped<AccountLoginService>();
+builder.Services.AddScoped<UserSessionService>();
+builder.Services.AddScoped<ExpiredUserSessionsCleanupService>();
+builder.Services.AddScoped<PasswordRecoveryRequestService>();
+builder.Services.AddScoped<BackgroundEmailRequestProcessingService>();
+builder.Services.AddScoped<PasswordResetService>();
+builder.Services.AddScoped<AccountUnlockService>();
+builder.Services.AddScoped<TwoFactorCodeCheckingService>();
+builder.Services.AddScoped<TwoFactorLoginService>();
+builder.Services.AddScoped<TwoFactorActivationService>();
+builder.Services.AddScoped<TwoFactorDeactivationService>();
 
 // Tâches de fond : effacent chaque jour les comptes non confirmés dont le lien a expiré (GR Auth) et les sessions expirées,
 // et préparent les e-mails de récupération et de déblocage.
-builderOfTheWalletFlowWebApplication.Services.AddHostedService<UnconfirmedAccountsCleanupBackgroundService>();
-builderOfTheWalletFlowWebApplication.Services.AddHostedService<ExpiredUserSessionsCleanupBackgroundService>();
-builderOfTheWalletFlowWebApplication.Services.AddHostedService<BackgroundEmailRequestsBackgroundService>();
+builder.Services.AddHostedService<UnconfirmedAccountsCleanupBackgroundService>();
+builder.Services.AddHostedService<ExpiredUserSessionsCleanupBackgroundService>();
+builder.Services.AddHostedService<BackgroundEmailRequestsBackgroundService>();
 
 // Limites de débit des points d'entrée sensibles (SS §6).
-builderOfTheWalletFlowWebApplication.Services.AddWalletFlowRateLimitingToTheServices();
+builder.Services.AddWalletFlowRateLimiting();
 
 // L'utilisateur est reconnu par son cookie de session, gardée côté serveur (SS §3).
-builderOfTheWalletFlowWebApplication.Services
-    .AddAuthentication(UserSessionAuthenticationHandler.NameOfTheUserSessionAuthenticationScheme)
-    .AddScheme<AuthenticationSchemeOptions, UserSessionAuthenticationHandler>(UserSessionAuthenticationHandler.NameOfTheUserSessionAuthenticationScheme, null);
-builderOfTheWalletFlowWebApplication.Services.AddAuthorization();
+builder.Services
+    .AddAuthentication(UserSessionAuthenticationHandler.SchemeName)
+    .AddScheme<AuthenticationSchemeOptions, UserSessionAuthenticationHandler>(UserSessionAuthenticationHandler.SchemeName, null);
+builder.Services.AddAuthorization();
 
 // Jeton anti-CSRF fourni par ASP.NET Core (SS §6).
-builderOfTheWalletFlowWebApplication.Services.AddAntiforgery(AntiforgeryConfiguration.ApplyOptionsOfTheCsrfToken);
+builder.Services.AddAntiforgery(AntiforgeryConfiguration.ApplyOptions);
 
 // Les contrôleurs reçoivent les requêtes HTTP et appellent la couche Application.
 // Une requête refusée reçoit toujours le même format d'erreur, sans aucun nom interne du code (SS §10).
 // AddControllersWithViews plutôt que AddControllers : le filtre anti-CSRF d'ASP.NET Core en fait partie. L'API n'a aucune vue.
-builderOfTheWalletFlowWebApplication.Services
-    .AddControllersWithViews(optionsOfTheControllersOfTheApi =>
+builder.Services
+    .AddControllersWithViews(options =>
     {
         // Toute route demande une session et le jeton anti-CSRF, même si on oublie de le demander :
         // une route publique doit le dire avec [AllowAnonymous] et [IgnoreAntiforgeryToken] (SS §4 et §6).
-        optionsOfTheControllersOfTheApi.Filters.Add(new AuthorizeFilter());
-        optionsOfTheControllersOfTheApi.Filters.Add(new AutoValidateAntiforgeryTokenAttribute());
+        options.Filters.Add(new AuthorizeFilter());
+        options.Filters.Add(new AutoValidateAntiforgeryTokenAttribute());
     })
-    .ConfigureApiBehaviorOptions(optionsOfTheAutomaticControllerBehavior =>
+    .ConfigureApiBehaviorOptions(options =>
     {
-        optionsOfTheAutomaticControllerBehavior.InvalidModelStateResponseFactory = ApiErrorConfiguration.CreateAnswerForTheRefusedRequest;
+        options.InvalidModelStateResponseFactory = ApiErrorConfiguration.CreateRefusedRequestAnswer;
     })
-    .AddJsonOptions(optionsOfTheJsonRequestBodiesFromVisitors =>
+    .AddJsonOptions(options =>
     {
-        optionsOfTheJsonRequestBodiesFromVisitors.AllowInputFormatterExceptionMessages = false;
+        options.AllowInputFormatterExceptionMessages = false;
     });
 
 // Décrit l'API au format OpenAPI (publié seulement en développement).
-builderOfTheWalletFlowWebApplication.Services.AddOpenApi();
+builder.Services.AddOpenApi();
 
 // Les erreurs sont renvoyées au format « problem details », en français et sans détail technique (SS §10).
-builderOfTheWalletFlowWebApplication.Services.AddProblemDetails(optionsOfTheProblemDetailsAnswers =>
+builder.Services.AddProblemDetails(options =>
 {
-    optionsOfTheProblemDetailsAnswers.CustomizeProblemDetails = ApiErrorConfiguration.TranslateTheTitleOfTheProblemIntoFrench;
+    options.CustomizeProblemDetails = ApiErrorConfiguration.TranslateTitle;
 });
 
 // HSTS : le navigateur n'utilise plus que HTTPS pendant un an, sous-domaines compris (SS §6).
-builderOfTheWalletFlowWebApplication.Services.AddHsts(optionsOfTheStrictTransportSecurityHeader =>
+builder.Services.AddHsts(options =>
 {
-    optionsOfTheStrictTransportSecurityHeader.MaxAge = TimeSpan.FromDays(365);
-    optionsOfTheStrictTransportSecurityHeader.IncludeSubDomains = true;
+    options.MaxAge = TimeSpan.FromDays(365);
+    options.IncludeSubDomains = true;
 });
 
-var walletFlowWebApplicationReadyToHandleRequests = builderOfTheWalletFlowWebApplication.Build();
+var app = builder.Build();
 
-if (walletFlowWebApplicationReadyToHandleRequests.Environment.IsDevelopment())
+if (app.Environment.IsDevelopment())
 {
     // En développement : la description OpenAPI est publiée,
     // et ASP.NET Core affiche déjà de lui-même le détail des erreurs.
-    walletFlowWebApplicationReadyToHandleRequests.MapOpenApi();
+    app.MapOpenApi();
 }
 else
 {
     // En production : des messages d'erreur génériques, et HSTS (SS §6 et §10).
-    walletFlowWebApplicationReadyToHandleRequests.UseExceptionHandler(new ExceptionHandlerOptions
+    app.UseExceptionHandler(new ExceptionHandlerOptions
     {
-        StatusCodeSelector = ErrorStatusCodeConfiguration.ChooseStatusCodeForTheCaughtException
+        StatusCodeSelector = ErrorStatusCodeConfiguration.ChooseStatusCode
     });
-    walletFlowWebApplicationReadyToHandleRequests.UseHsts();
+    app.UseHsts();
 }
 
 // Ajoute les en-têtes de sécurité à chaque réponse (SS §6).
-walletFlowWebApplicationReadyToHandleRequests.UseMiddleware<SecurityHeadersMiddleware>();
+app.UseMiddleware<SecurityHeadersMiddleware>();
 
 // Donne le même format aux erreurs sans contenu, comme une adresse inconnue ou le dépassement d'une limite.
-walletFlowWebApplicationReadyToHandleRequests.UseStatusCodePages();
+app.UseStatusCodePages();
 
 // Redirige toute requête HTTP vers HTTPS (SS §7).
-walletFlowWebApplicationReadyToHandleRequests.UseHttpsRedirection();
+app.UseHttpsRedirection();
 
 // Applique les limites de débit (SS §6), avant toute lecture de la base.
-walletFlowWebApplicationReadyToHandleRequests.UseRateLimiter();
+app.UseRateLimiter();
 
 // Reconnaît l'utilisateur à partir de son cookie, puis applique le contrôle d'accès (SS §3 et §4).
-walletFlowWebApplicationReadyToHandleRequests.UseAuthentication();
-walletFlowWebApplicationReadyToHandleRequests.UseAuthorization();
+app.UseAuthentication();
+app.UseAuthorization();
 
 // Relie chaque route à son contrôleur.
-walletFlowWebApplicationReadyToHandleRequests.MapControllers();
+app.MapControllers();
 
-walletFlowWebApplicationReadyToHandleRequests.Run();
+app.Run();

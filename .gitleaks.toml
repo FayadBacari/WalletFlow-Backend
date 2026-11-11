@@ -1,0 +1,17 @@
+# Règles de gitleaks pour WalletFlow (SS §10) : toutes les règles par défaut. Seules ces valeurs d'exemple, publiques,
+# sont acceptées : les mots de passe inventés des tests et des requêtes de démonstration, et le secret d'exemple de la RFC 6238.
+# Une exception se donne valeur par valeur, jamais pour un dossier entier : un vrai secret écrit dans un test serait trouvé.
+title = "Règles de gitleaks pour WalletFlow"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Valeurs d'exemple publiques des tests et des requêtes de démonstration"
+regexTarget = "secret"
+regexes = [
+    '''^Exemple-De-Mot-De-Passe-\d$''',
+    '''^Nouveau-Mot-De-Passe-\d$''',
+    '''^Mot-De-Passe-De-L-Inconnu-\d$''',
+    '''^GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ$''',
+]

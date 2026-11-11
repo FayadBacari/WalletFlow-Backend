@@ -5,8 +5,8 @@ namespace WalletFlow.Application.Emails;
 public class EmailCouldNotBeSentException : Exception
 {
     // Garde l'erreur technique d'origine.
-    public EmailCouldNotBeSentException(Exception technicalErrorRaisedWhileSendingTheEmail)
-        : base("L'e-mail n'a pas pu partir.", technicalErrorRaisedWhileSendingTheEmail)
+    public EmailCouldNotBeSentException(Exception cause)
+        : base("L'e-mail n'a pas pu partir.", cause)
     {
     }
 }

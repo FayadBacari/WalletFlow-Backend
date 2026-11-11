@@ -1,5 +1,7 @@
 using System.Net;
 using WalletFlow.Application.UserSessions;
+using WalletFlow.Application.Persistence;
+using WalletFlow.Application.Security;
 using WalletFlow.Domain.UsersAndSecurity;
 using WalletFlow.Infrastructure.Security;
 using WalletFlow.Tests.Fakes;
@@ -10,107 +12,119 @@ namespace WalletFlow.Tests.Application;
 // Seuls les jetons sont les vrais : il faut que chaque jeton soit différent pour comparer session et appareil.
 public class AccountLoginServiceTests
 {
-    private const string EmailAddressOfTheAccountInTheseTests = "utilisateur@exemple.test";
-    private const string PasswordOfTheAccountInTheseTests = "Mot-De-Passe-Valide-1";
-    private const string WrongPasswordTypedInTheseTests = "Mauvais-Mot-De-Passe-2";
+    private const string AccountEmail = "utilisateur@exemple.test";
+    private const string AccountPassword = "Mot-De-Passe-Valide-1";
+    private const string WrongPassword = "Mauvais-Mot-De-Passe-2";
 
-    private static readonly IPAddress IpAddressOfTheVisitorInTheseTests = IPAddress.Parse("203.0.113.7");
+    private static readonly IPAddress IpAddress = IPAddress.Parse("203.0.113.7");
 
-    private readonly FakeUserAccountRepository repositoryThatKeepsAccountsInMemory = new FakeUserAccountRepository();
-    private readonly FakeSecurityEventRepository repositoryThatKeepsSecurityEventsInMemory = new FakeSecurityEventRepository();
-    private readonly FakeUserSessionRepository repositoryThatKeepsSessionsInMemory;
-    private readonly FakeTwoFactorAuthenticationRepository repositoryThatKeepsTwoFactorDataInMemory;
-    private readonly InMemoryLoginsWaitingForTheirCodeStore storeOfTheLoginsWaitingForTheirCode;
-    private readonly FakeBackgroundEmailRequestQueue queueThatKeepsTheEmailRequestsInMemory = new FakeBackgroundEmailRequestQueue();
-    private readonly FakePasswordHasher hasherThatCountsTheComparedPasswords = new FakePasswordHasher();
-    private readonly RandomSecureTokenGenerator realGeneratorOfTheTokensInTheseTests = new RandomSecureTokenGenerator();
-    private readonly FakeTimeProviderForTests clockThatOnlyMovesWhenTestsAskIt = new FakeTimeProviderForTests();
+    private readonly FakeUserAccountRepository accountRepository = new FakeUserAccountRepository();
+    private readonly FakeSecurityEventRepository securityEventRepository = new FakeSecurityEventRepository();
+    private readonly FakeUserSessionRepository sessionRepository = new FakeUserSessionRepository();
+    private readonly FakeTwoFactorAuthenticationRepository twoFactorRepository = new FakeTwoFactorAuthenticationRepository();
+    private readonly FakeDatabaseUnitOfWork unitOfWork;
+    private readonly InMemoryWaitingLoginStore waitingLoginStore;
+    private readonly FakeBackgroundEmailRequestQueue emailQueue = new FakeBackgroundEmailRequestQueue();
+    private readonly FakePasswordHasher passwordHasher = new FakePasswordHasher();
+    private readonly RandomSecureTokenGenerator tokenGenerator = new RandomSecureTokenGenerator();
+    private readonly FakeTimeProvider clock = new FakeTimeProvider();
 
-    // Relie les faux accès au faux journal de sécurité.
+    // Relie les faux accès à la fausse unité de travail, qui garde leurs changements ensemble.
     public AccountLoginServiceTests()
     {
-        repositoryThatKeepsSessionsInMemory = new FakeUserSessionRepository(repositoryThatKeepsSecurityEventsInMemory);
-        repositoryThatKeepsTwoFactorDataInMemory = new FakeTwoFactorAuthenticationRepository(repositoryThatKeepsAccountsInMemory, repositoryThatKeepsSecurityEventsInMemory);
-        storeOfTheLoginsWaitingForTheirCode = new InMemoryLoginsWaitingForTheirCodeStore(clockThatOnlyMovesWhenTestsAskIt);
+        unitOfWork = new FakeDatabaseUnitOfWork(
+            accountRepository,
+            sessionRepository,
+            twoFactorRepository,
+            securityEventRepository);
+        waitingLoginStore = new InMemoryWaitingLoginStore(clock);
     }
 
     // Crée le service à tester, avec ses faux outils.
-    private AccountLoginService CreateLoginServiceWithFakeTools()
+    private AccountLoginService CreateLoginService()
     {
+        var savingService = new DatabaseChangesSavingService(unitOfWork);
+        var securityJournal = new SecurityJournalService(securityEventRepository, clock);
+
         return new AccountLoginService(
-            repositoryThatKeepsAccountsInMemory,
-            repositoryThatKeepsSecurityEventsInMemory,
-            queueThatKeepsTheEmailRequestsInMemory,
-            hasherThatCountsTheComparedPasswords,
-            realGeneratorOfTheTokensInTheseTests,
-            storeOfTheLoginsWaitingForTheirCode,
+            accountRepository,
+            savingService,
+            securityJournal,
+            emailQueue,
+            passwordHasher,
+            tokenGenerator,
+            waitingLoginStore,
             new UserSessionOpeningService(
-                repositoryThatKeepsAccountsInMemory,
-                repositoryThatKeepsSessionsInMemory,
-                repositoryThatKeepsTwoFactorDataInMemory,
-                realGeneratorOfTheTokensInTheseTests,
-                clockThatOnlyMovesWhenTestsAskIt),
-            clockThatOnlyMovesWhenTestsAskIt);
+                accountRepository,
+                sessionRepository,
+                twoFactorRepository,
+                savingService,
+                securityJournal,
+                tokenGenerator,
+                clock),
+            clock);
     }
 
     // Ajoute à la fausse base un compte avec l'adresse de ces tests.
-    private User AddAccountToTheFakeDatabase(bool emailAddressOfTheAccountIsConfirmed = true)
+    private User AddAccount(
+        bool isEmailConfirmed = true,
+        short failedAttemptCount = 0,
+        short lockoutCount = 0)
     {
-        var accountAddedToTheFakeDatabase = new User
+        var account = new User
         {
-            Email = EmailAddressOfTheAccountInTheseTests,
-            PasswordHash = FakePasswordHasher.PrefixOfTheFakePasswordHashes + PasswordOfTheAccountInTheseTests,
-            IsEmailConfirmed = emailAddressOfTheAccountIsConfirmed
+            Email = AccountEmail,
+            PasswordHash = FakePasswordHasher.HashPrefix + AccountPassword,
+            IsEmailConfirmed = isEmailConfirmed,
+            FailedLoginAttemptCount = failedAttemptCount,
+            LockoutCount = lockoutCount
         };
-        repositoryThatKeepsAccountsInMemory.SavedUsers.Add(accountAddedToTheFakeDatabase);
+        accountRepository.SavedUsers.Add(account);
 
-        return accountAddedToTheFakeDatabase;
+        return account;
     }
 
     // Fait une tentative de connexion, sans cookie déjà présent.
-    private async Task<AccountLoginResult> TryToLogInWithThisEmailAddressAndPasswordAsync(string emailAddressTypedInThisTest, string passwordTypedByTheVisitorInThisTest)
+    private async Task<AccountLoginResult> LogInAsync(string emailAddress, string password)
     {
-        return await CreateLoginServiceWithFakeTools().LogVisitorInWithEmailAddressAndPasswordAsync(new LoginAttemptFromVisitor
+        return await CreateLoginService().LogInAsync(new LoginAttempt
         {
-            EmailAddressTypedByTheVisitor = emailAddressTypedInThisTest,
-            PasswordTextTypedByTheVisitor = passwordTypedByTheVisitorInThisTest,
-            IpAddressOfTheVisitor = IpAddressOfTheVisitorInTheseTests
+            EmailAddress = emailAddress,
+            Password = password,
+            IpAddress = IpAddress
         });
     }
 
     // Fait cette série de mauvais essais sur le compte de ces tests.
-    private async Task TryWrongPasswordThisNumberOfTimesAsync(int numberOfWrongPasswordsToTry)
+    private async Task TryWrongPasswordAsync(int wrongPasswordCount)
     {
-        for (var numberOfTheWrongPasswordBeingTried = 1; numberOfTheWrongPasswordBeingTried <= numberOfWrongPasswordsToTry; numberOfTheWrongPasswordBeingTried++)
+        for (var attemptNumber = 1; attemptNumber <= wrongPasswordCount; attemptNumber++)
         {
-            await TryToLogInWithThisEmailAddressAndPasswordAsync(EmailAddressOfTheAccountInTheseTests, WrongPasswordTypedInTheseTests);
+            await LogInAsync(AccountEmail, WrongPassword);
         }
     }
 
     // Vérifie que la connexion est refusée avec le message générique, sans session.
-    private void CheckThatLoginWasRefusedWithTheGenericMessage(AccountLoginResult resultOfTheLoginToCheck)
+    private void AssertGenericRefusal(AccountLoginResult result)
     {
-        Assert.False(resultOfTheLoginToCheck.IsLoggedIn);
-        Assert.Equal("Identifiants incorrects", resultOfTheLoginToCheck.WrongCredentialsErrorMessage);
-        Assert.Null(resultOfTheLoginToCheck.EmailAddressNotConfirmedErrorMessage);
-        Assert.Null(resultOfTheLoginToCheck.DeviceTokenToPutInTheCookie);
-        Assert.Empty(repositoryThatKeepsSessionsInMemory.SavedSessions);
+        Assert.IsType<AccountLoginResult.WrongCredentials>(result);
+        Assert.Empty(sessionRepository.SavedSessions);
     }
 
     // Compte les événements de ce type et de ce résultat dans le faux journal.
-    private int CountSecurityEventsOfThisTypeAndResult(SecurityEventType typeOfTheEventsToCount, SecurityEventResult resultOfTheEventsToCount)
+    private int CountSecurityEvents(SecurityEventType type, SecurityEventResult result)
     {
-        var numberOfEventsFoundInTheJournal = 0;
+        var eventCount = 0;
 
-        foreach (var securityEventKeptInTheJournal in repositoryThatKeepsSecurityEventsInMemory.SavedSecurityEvents)
+        foreach (var securityEvent in securityEventRepository.SavedSecurityEvents)
         {
-            if (securityEventKeptInTheJournal.Type == typeOfTheEventsToCount && securityEventKeptInTheJournal.Result == resultOfTheEventsToCount)
+            if (securityEvent.Type == type && securityEvent.Result == result)
             {
-                numberOfEventsFoundInTheJournal = numberOfEventsFoundInTheJournal + 1;
+                eventCount = eventCount + 1;
             }
         }
 
-        return numberOfEventsFoundInTheJournal;
+        return eventCount;
     }
 
     // --- Connexion réussie
@@ -118,83 +132,81 @@ public class AccountLoginServiceTests
     [Fact]
     public async Task RightPasswordOpensSessionAndStoresOnlyTheHashOfItsToken()
     {
-        var accountBeingTestedInThisLogin = AddAccountToTheFakeDatabase();
+        var account = AddAccount();
 
-        var resultOfTheLoginOfTheAccount = await TryToLogInWithThisEmailAddressAndPasswordAsync(EmailAddressOfTheAccountInTheseTests, PasswordOfTheAccountInTheseTests);
+        var result = await LogInAsync(AccountEmail, AccountPassword);
 
-        Assert.True(resultOfTheLoginOfTheAccount.IsLoggedIn);
-        var sessionSavedInMemoryForTheAccount = Assert.Single(repositoryThatKeepsSessionsInMemory.SavedSessions);
-        Assert.Equal(accountBeingTestedInThisLogin.Id, sessionSavedInMemoryForTheAccount.UserId);
-        Assert.Equal(clockThatOnlyMovesWhenTestsAskIt.GetUtcNow().UtcDateTime, sessionSavedInMemoryForTheAccount.LastActivityAt);
-        Assert.NotEqual(resultOfTheLoginOfTheAccount.SessionTokenToPutInTheCookie, sessionSavedInMemoryForTheAccount.Id);
-        Assert.Equal(realGeneratorOfTheTokensInTheseTests.ConvertSecureTokenIntoItsHash(resultOfTheLoginOfTheAccount.SessionTokenToPutInTheCookie!), sessionSavedInMemoryForTheAccount.Id);
+        Assert.IsType<AccountLoginResult.LoggedIn>(result);
+        var session = Assert.Single(sessionRepository.SavedSessions);
+        Assert.Equal(account.Id, session.UserId);
+        Assert.Equal(clock.GetUtcNow().UtcDateTime, session.LastActivityAt);
+        Assert.NotEqual(Assert.IsType<AccountLoginResult.LoggedIn>(result).SessionToken, session.Id);
+        Assert.Equal(tokenGenerator.HashToken(Assert.IsType<AccountLoginResult.LoggedIn>(result).SessionToken), session.Id);
     }
 
     // SS §3 : un nouvel identifiant à chaque connexion, pour qu'un attaquant ne puisse pas imposer le sien.
     [Fact]
     public async Task EveryLoginGetsANewSessionToken()
     {
-        AddAccountToTheFakeDatabase();
+        AddAccount();
 
-        var resultOfTheFirstLoginOfTheAccount = await TryToLogInWithThisEmailAddressAndPasswordAsync(EmailAddressOfTheAccountInTheseTests, PasswordOfTheAccountInTheseTests);
-        var resultOfTheSecondLoginOfTheAccount = await TryToLogInWithThisEmailAddressAndPasswordAsync(EmailAddressOfTheAccountInTheseTests, PasswordOfTheAccountInTheseTests);
+        var firstResult = await LogInAsync(AccountEmail, AccountPassword);
+        var secondResult = await LogInAsync(AccountEmail, AccountPassword);
 
-        Assert.NotEqual(resultOfTheFirstLoginOfTheAccount.SessionTokenToPutInTheCookie, resultOfTheSecondLoginOfTheAccount.SessionTokenToPutInTheCookie);
-        Assert.Equal(2, repositoryThatKeepsSessionsInMemory.SavedSessions.Count);
+        Assert.NotEqual(Assert.IsType<AccountLoginResult.LoggedIn>(firstResult).SessionToken, Assert.IsType<AccountLoginResult.LoggedIn>(secondResult).SessionToken);
+        Assert.Equal(2, sessionRepository.SavedSessions.Count);
     }
 
     // L'adresse tapée avec des majuscules et des espaces désigne le même compte.
     [Fact]
     public async Task EmailAddressIsSearchedInItsStoredForm()
     {
-        AddAccountToTheFakeDatabase();
+        AddAccount();
 
-        var resultOfTheLoginOfTheAccount = await TryToLogInWithThisEmailAddressAndPasswordAsync(" Utilisateur@Exemple.TEST ", PasswordOfTheAccountInTheseTests);
+        var result = await LogInAsync(" Utilisateur@Exemple.TEST ", AccountPassword);
 
-        Assert.True(resultOfTheLoginOfTheAccount.IsLoggedIn);
+        Assert.IsType<AccountLoginResult.LoggedIn>(result);
     }
 
     [Fact]
     public async Task SuccessfulLoginResetsTheCountersOfTheAccount()
     {
-        var accountBeingTestedInThisLogin = AddAccountToTheFakeDatabase();
-        accountBeingTestedInThisLogin.FailedLoginAttemptCount = 3;
-        accountBeingTestedInThisLogin.LockoutCount = 2;
+        var account = AddAccount(failedAttemptCount: 3, lockoutCount: 2);
 
-        await TryToLogInWithThisEmailAddressAndPasswordAsync(EmailAddressOfTheAccountInTheseTests, PasswordOfTheAccountInTheseTests);
+        await LogInAsync(AccountEmail, AccountPassword);
 
-        Assert.Equal(0, accountBeingTestedInThisLogin.FailedLoginAttemptCount);
-        Assert.Equal(0, accountBeingTestedInThisLogin.LockoutCount);
+        Assert.Equal(0, account.FailedLoginAttemptCount);
+        Assert.Equal(0, account.LockoutCount);
     }
 
     // Le 5e essai est compté avant la vérification : avec le bon mot de passe, le compte ne doit pas rester bloqué.
     [Fact]
     public async Task RightPasswordOnTheFifthAttemptLogsInAndLeavesNoLockout()
     {
-        var accountBeingTestedInThisLogin = AddAccountToTheFakeDatabase();
-        await TryWrongPasswordThisNumberOfTimesAsync(4);
+        var account = AddAccount();
+        await TryWrongPasswordAsync(4);
 
-        var resultOfTheLoginOfTheAccount = await TryToLogInWithThisEmailAddressAndPasswordAsync(EmailAddressOfTheAccountInTheseTests, PasswordOfTheAccountInTheseTests);
+        var result = await LogInAsync(AccountEmail, AccountPassword);
 
-        Assert.True(resultOfTheLoginOfTheAccount.IsLoggedIn);
-        Assert.Null(accountBeingTestedInThisLogin.LockoutEndsAt);
-        Assert.Equal(0, accountBeingTestedInThisLogin.LockoutCount);
-        Assert.Equal(0, CountSecurityEventsOfThisTypeAndResult(SecurityEventType.Lockout, SecurityEventResult.Success));
+        Assert.IsType<AccountLoginResult.LoggedIn>(result);
+        Assert.Null(account.LockoutEndsAt);
+        Assert.Equal(0, account.LockoutCount);
+        Assert.Equal(0, CountSecurityEvents(SecurityEventType.Lockout, SecurityEventResult.Success));
     }
 
     [Fact]
     public async Task SuccessfulLoginIsWrittenInTheJournalWithItsDateUserAndIpAddress()
     {
-        var accountBeingTestedInThisLogin = AddAccountToTheFakeDatabase();
+        var account = AddAccount();
 
-        await TryToLogInWithThisEmailAddressAndPasswordAsync(EmailAddressOfTheAccountInTheseTests, PasswordOfTheAccountInTheseTests);
+        await LogInAsync(AccountEmail, AccountPassword);
 
-        var securityEventOfTheSuccessfulUserLogin = Assert.Single(repositoryThatKeepsSecurityEventsInMemory.SavedSecurityEvents);
-        Assert.Equal(SecurityEventType.Login, securityEventOfTheSuccessfulUserLogin.Type);
-        Assert.Equal(SecurityEventResult.Success, securityEventOfTheSuccessfulUserLogin.Result);
-        Assert.Equal(accountBeingTestedInThisLogin.Id, securityEventOfTheSuccessfulUserLogin.UserId);
-        Assert.Equal(IpAddressOfTheVisitorInTheseTests, securityEventOfTheSuccessfulUserLogin.IpAddress);
-        Assert.Equal(clockThatOnlyMovesWhenTestsAskIt.GetUtcNow().UtcDateTime, securityEventOfTheSuccessfulUserLogin.OccurredAt);
+        var securityEvent = Assert.Single(securityEventRepository.SavedSecurityEvents);
+        Assert.Equal(SecurityEventType.Login, securityEvent.Type);
+        Assert.Equal(SecurityEventResult.Success, securityEvent.Result);
+        Assert.Equal(account.Id, securityEvent.UserId);
+        Assert.Equal(IpAddress, securityEvent.IpAddress);
+        Assert.Equal(clock.GetUtcNow().UtcDateTime, securityEvent.OccurredAt);
     }
 
     // --- Mauvais identifiants
@@ -202,34 +214,34 @@ public class AccountLoginServiceTests
     [Fact]
     public async Task WrongPasswordGetsTheGenericMessageAndCountsOneAttempt()
     {
-        var accountBeingTestedInThisLogin = AddAccountToTheFakeDatabase();
+        var account = AddAccount();
 
-        var resultOfTheLoginOfTheAccount = await TryToLogInWithThisEmailAddressAndPasswordAsync(EmailAddressOfTheAccountInTheseTests, WrongPasswordTypedInTheseTests);
+        var result = await LogInAsync(AccountEmail, WrongPassword);
 
-        CheckThatLoginWasRefusedWithTheGenericMessage(resultOfTheLoginOfTheAccount);
-        Assert.Equal(1, accountBeingTestedInThisLogin.FailedLoginAttemptCount);
-        Assert.Equal(1, repositoryThatKeepsAccountsInMemory.NumberOfLoginCountersSaved);
+        AssertGenericRefusal(result);
+        Assert.Equal(1, account.FailedLoginAttemptCount);
+        Assert.Equal(1, accountRepository.LoginCounterSaveCount);
 
-        var securityEventOfTheFailedLogin = Assert.Single(repositoryThatKeepsSecurityEventsInMemory.SavedSecurityEvents);
-        Assert.Equal(SecurityEventType.Login, securityEventOfTheFailedLogin.Type);
-        Assert.Equal(SecurityEventResult.Failure, securityEventOfTheFailedLogin.Result);
-        Assert.Equal(accountBeingTestedInThisLogin.Id, securityEventOfTheFailedLogin.UserId);
-        Assert.Equal(IpAddressOfTheVisitorInTheseTests, securityEventOfTheFailedLogin.IpAddress);
+        var securityEvent = Assert.Single(securityEventRepository.SavedSecurityEvents);
+        Assert.Equal(SecurityEventType.Login, securityEvent.Type);
+        Assert.Equal(SecurityEventResult.Failure, securityEvent.Result);
+        Assert.Equal(account.Id, securityEvent.UserId);
+        Assert.Equal(IpAddress, securityEvent.IpAddress);
     }
 
     // Sans ce calcul, une réponse plus rapide révélerait quelles adresses n'ont pas de compte (SS §2).
     [Fact]
     public async Task UnknownEmailAddressGetsTheSameMessageAndStillComputesOneHash()
     {
-        var resultOfTheLoginWithUnknownAddress = await TryToLogInWithThisEmailAddressAndPasswordAsync("inconnu@exemple.test", PasswordOfTheAccountInTheseTests);
+        var result = await LogInAsync("inconnu@exemple.test", AccountPassword);
 
-        CheckThatLoginWasRefusedWithTheGenericMessage(resultOfTheLoginWithUnknownAddress);
-        Assert.Equal(1, hasherThatCountsTheComparedPasswords.NumberOfPasswordsHashed);
+        AssertGenericRefusal(result);
+        Assert.Equal(1, passwordHasher.HashedPasswordCount);
 
-        var securityEventOfTheFailedLogin = Assert.Single(repositoryThatKeepsSecurityEventsInMemory.SavedSecurityEvents);
-        Assert.Equal(SecurityEventResult.Failure, securityEventOfTheFailedLogin.Result);
-        Assert.Null(securityEventOfTheFailedLogin.UserId);
-        Assert.Equal(IpAddressOfTheVisitorInTheseTests, securityEventOfTheFailedLogin.IpAddress);
+        var securityEvent = Assert.Single(securityEventRepository.SavedSecurityEvents);
+        Assert.Equal(SecurityEventResult.Failure, securityEvent.Result);
+        Assert.Null(securityEvent.UserId);
+        Assert.Equal(IpAddress, securityEvent.IpAddress);
     }
 
     // Une adresse mal formée ne doit jamais arriver à la base : le caractère nul y provoquerait une erreur.
@@ -237,13 +249,13 @@ public class AccountLoginServiceTests
     [InlineData("sans-arobase")]
     [InlineData("nul\0caractere@exemple.test")]
     [InlineData("")]
-    public async Task MalformedEmailAddressIsNeverSentToTheDatabase(string malformedEmailAddressTypedInThisTest)
+    public async Task MalformedEmailAddressIsNeverSentToTheDatabase(string malformedEmailAddress)
     {
-        var resultOfTheLoginWithMalformedAddress = await TryToLogInWithThisEmailAddressAndPasswordAsync(malformedEmailAddressTypedInThisTest, PasswordOfTheAccountInTheseTests);
+        var result = await LogInAsync(malformedEmailAddress, AccountPassword);
 
-        CheckThatLoginWasRefusedWithTheGenericMessage(resultOfTheLoginWithMalformedAddress);
-        Assert.Equal(0, repositoryThatKeepsAccountsInMemory.NumberOfSearchesByEmailAddress);
-        Assert.Equal(1, hasherThatCountsTheComparedPasswords.NumberOfPasswordsHashed);
+        AssertGenericRefusal(result);
+        Assert.Equal(0, accountRepository.EmailSearchCount);
+        Assert.Equal(1, passwordHasher.HashedPasswordCount);
     }
 
     // --- Compte non confirmé
@@ -252,44 +264,42 @@ public class AccountLoginServiceTests
     [Fact]
     public async Task UnconfirmedAccountWithRightPasswordIsInvitedToConfirmWithoutSession()
     {
-        var accountBeingTestedInThisLogin = AddAccountToTheFakeDatabase(emailAddressOfTheAccountIsConfirmed: false);
+        var account = AddAccount(isEmailConfirmed: false);
 
-        var resultOfTheLoginOfTheAccount = await TryToLogInWithThisEmailAddressAndPasswordAsync(EmailAddressOfTheAccountInTheseTests, PasswordOfTheAccountInTheseTests);
+        var result = await LogInAsync(AccountEmail, AccountPassword);
 
-        Assert.False(resultOfTheLoginOfTheAccount.IsLoggedIn);
-        Assert.Equal(AccountLoginService.ErrorMessageForEmailAddressNotConfirmed, resultOfTheLoginOfTheAccount.EmailAddressNotConfirmedErrorMessage);
-        Assert.Null(resultOfTheLoginOfTheAccount.WrongCredentialsErrorMessage);
-        Assert.Empty(repositoryThatKeepsSessionsInMemory.SavedSessions);
-        Assert.Equal(0, accountBeingTestedInThisLogin.FailedLoginAttemptCount);
-        Assert.Equal(1, CountSecurityEventsOfThisTypeAndResult(SecurityEventType.Login, SecurityEventResult.Failure));
+        Assert.IsType<AccountLoginResult.EmailAddressNotConfirmed>(result);
+        Assert.Empty(sessionRepository.SavedSessions);
+        Assert.Equal(0, account.FailedLoginAttemptCount);
+        Assert.Equal(1, CountSecurityEvents(SecurityEventType.Login, SecurityEventResult.Failure));
     }
 
     [Fact]
     public async Task UnconfirmedAccountWithWrongPasswordGetsTheGenericMessage()
     {
-        var accountBeingTestedInThisLogin = AddAccountToTheFakeDatabase(emailAddressOfTheAccountIsConfirmed: false);
+        var account = AddAccount(isEmailConfirmed: false);
 
-        var resultOfTheLoginOfTheAccount = await TryToLogInWithThisEmailAddressAndPasswordAsync(EmailAddressOfTheAccountInTheseTests, WrongPasswordTypedInTheseTests);
+        var result = await LogInAsync(AccountEmail, WrongPassword);
 
-        CheckThatLoginWasRefusedWithTheGenericMessage(resultOfTheLoginOfTheAccount);
-        var securityEventOfTheFailedLogin = Assert.Single(repositoryThatKeepsSecurityEventsInMemory.SavedSecurityEvents);
-        Assert.Equal(SecurityEventResult.Failure, securityEventOfTheFailedLogin.Result);
-        Assert.Equal(accountBeingTestedInThisLogin.Id, securityEventOfTheFailedLogin.UserId);
+        AssertGenericRefusal(result);
+        var securityEvent = Assert.Single(securityEventRepository.SavedSecurityEvents);
+        Assert.Equal(SecurityEventResult.Failure, securityEvent.Result);
+        Assert.Equal(account.Id, securityEvent.UserId);
     }
 
     // Un compte non confirmé n'est jamais bloqué : ses essais ne comptent pas (SS §2).
     [Fact]
     public async Task UnconfirmedAccountIsNeverLockedHoweverManyWrongPasswordsAreTried()
     {
-        var accountBeingTestedInThisLogin = AddAccountToTheFakeDatabase(emailAddressOfTheAccountIsConfirmed: false);
+        var account = AddAccount(isEmailConfirmed: false);
 
-        await TryWrongPasswordThisNumberOfTimesAsync(6);
+        await TryWrongPasswordAsync(6);
 
-        Assert.Equal(0, accountBeingTestedInThisLogin.FailedLoginAttemptCount);
-        Assert.Equal(0, accountBeingTestedInThisLogin.LockoutCount);
-        Assert.Null(accountBeingTestedInThisLogin.LockoutEndsAt);
-        Assert.Equal(0, repositoryThatKeepsAccountsInMemory.NumberOfLoginCountersSaved);
-        Assert.Equal(0, CountSecurityEventsOfThisTypeAndResult(SecurityEventType.Lockout, SecurityEventResult.Success));
+        Assert.Equal(0, account.FailedLoginAttemptCount);
+        Assert.Equal(0, account.LockoutCount);
+        Assert.Null(account.LockoutEndsAt);
+        Assert.Equal(0, accountRepository.LoginCounterSaveCount);
+        Assert.Equal(0, CountSecurityEvents(SecurityEventType.Lockout, SecurityEventResult.Success));
     }
 
     // --- Blocage
@@ -297,125 +307,125 @@ public class AccountLoginServiceTests
     [Fact]
     public async Task FifthWrongPasswordLocksTheAccountAndWritesOneLockoutEvent()
     {
-        var accountBeingTestedInThisLogin = AddAccountToTheFakeDatabase();
+        var account = AddAccount();
 
-        await TryWrongPasswordThisNumberOfTimesAsync(5);
+        await TryWrongPasswordAsync(5);
 
-        Assert.Equal(clockThatOnlyMovesWhenTestsAskIt.GetUtcNow().UtcDateTime.AddMinutes(15), accountBeingTestedInThisLogin.LockoutEndsAt);
-        Assert.Equal(1, CountSecurityEventsOfThisTypeAndResult(SecurityEventType.Lockout, SecurityEventResult.Success));
-        Assert.Equal(5, CountSecurityEventsOfThisTypeAndResult(SecurityEventType.Login, SecurityEventResult.Failure));
+        Assert.Equal(clock.GetUtcNow().UtcDateTime.AddMinutes(15), account.LockoutEndsAt);
+        Assert.Equal(1, CountSecurityEvents(SecurityEventType.Lockout, SecurityEventResult.Success));
+        Assert.Equal(5, CountSecurityEvents(SecurityEventType.Login, SecurityEventResult.Failure));
     }
 
     [Fact]
     public async Task FourWrongPasswordsDoNotWriteAnyLockoutEvent()
     {
-        var accountBeingTestedInThisLogin = AddAccountToTheFakeDatabase();
+        var account = AddAccount();
 
-        await TryWrongPasswordThisNumberOfTimesAsync(4);
+        await TryWrongPasswordAsync(4);
 
-        Assert.Null(accountBeingTestedInThisLogin.LockoutEndsAt);
-        Assert.Equal(0, CountSecurityEventsOfThisTypeAndResult(SecurityEventType.Lockout, SecurityEventResult.Success));
+        Assert.Null(account.LockoutEndsAt);
+        Assert.Equal(0, CountSecurityEvents(SecurityEventType.Lockout, SecurityEventResult.Success));
     }
 
     // Pendant le blocage, le message reste générique, même avec le bon mot de passe (SS §2).
     [Fact]
     public async Task RightPasswordDuringTheLockoutGetsTheGenericMessageWithoutChangingTheAccount()
     {
-        var accountBeingTestedInThisLogin = AddAccountToTheFakeDatabase();
-        await TryWrongPasswordThisNumberOfTimesAsync(5);
-        var endOfTheLockoutBeforeThisAttempt = accountBeingTestedInThisLogin.LockoutEndsAt;
+        var account = AddAccount();
+        await TryWrongPasswordAsync(5);
+        var lockoutEndBefore = account.LockoutEndsAt;
 
-        var resultOfTheLoginDuringTheLockout = await TryToLogInWithThisEmailAddressAndPasswordAsync(EmailAddressOfTheAccountInTheseTests, PasswordOfTheAccountInTheseTests);
+        var result = await LogInAsync(AccountEmail, AccountPassword);
 
-        CheckThatLoginWasRefusedWithTheGenericMessage(resultOfTheLoginDuringTheLockout);
-        Assert.Equal(endOfTheLockoutBeforeThisAttempt, accountBeingTestedInThisLogin.LockoutEndsAt);
-        Assert.Equal(5, accountBeingTestedInThisLogin.FailedLoginAttemptCount);
-        Assert.Equal(1, accountBeingTestedInThisLogin.LockoutCount);
+        AssertGenericRefusal(result);
+        Assert.Equal(lockoutEndBefore, account.LockoutEndsAt);
+        Assert.Equal(5, account.FailedLoginAttemptCount);
+        Assert.Equal(1, account.LockoutCount);
     }
 
     // Sans cette vérification, une réponse plus rapide révélerait que le compte existe et qu'il est bloqué.
     [Fact]
     public async Task PasswordIsStillComparedOnceDuringTheLockout()
     {
-        AddAccountToTheFakeDatabase();
-        await TryWrongPasswordThisNumberOfTimesAsync(5);
-        var numberOfPasswordsComparedBeforeThisAttempt = hasherThatCountsTheComparedPasswords.NumberOfPasswordsCompared;
+        AddAccount();
+        await TryWrongPasswordAsync(5);
+        var comparedCountBefore = passwordHasher.VerifiedPasswordCount;
 
-        await TryToLogInWithThisEmailAddressAndPasswordAsync(EmailAddressOfTheAccountInTheseTests, WrongPasswordTypedInTheseTests);
+        await LogInAsync(AccountEmail, WrongPassword);
 
-        Assert.Equal(numberOfPasswordsComparedBeforeThisAttempt + 1, hasherThatCountsTheComparedPasswords.NumberOfPasswordsCompared);
+        Assert.Equal(comparedCountBefore + 1, passwordHasher.VerifiedPasswordCount);
     }
 
     // Les essais pendant le blocage ne prolongent rien, mais ils restent visibles dans le journal.
     [Fact]
     public async Task AttemptsDuringTheLockoutAreNotCountedButAreWrittenInTheJournal()
     {
-        var accountBeingTestedInThisLogin = AddAccountToTheFakeDatabase();
-        await TryWrongPasswordThisNumberOfTimesAsync(5);
-        var numberOfCountersSavedBeforeTheLockout = repositoryThatKeepsAccountsInMemory.NumberOfLoginCountersSaved;
+        var account = AddAccount();
+        await TryWrongPasswordAsync(5);
+        var savedCountBefore = accountRepository.LoginCounterSaveCount;
 
-        await TryWrongPasswordThisNumberOfTimesAsync(3);
+        await TryWrongPasswordAsync(3);
 
-        Assert.Equal(numberOfCountersSavedBeforeTheLockout, repositoryThatKeepsAccountsInMemory.NumberOfLoginCountersSaved);
-        Assert.Equal(1, accountBeingTestedInThisLogin.LockoutCount);
-        Assert.Equal(1, CountSecurityEventsOfThisTypeAndResult(SecurityEventType.Lockout, SecurityEventResult.Success));
-        Assert.Equal(8, CountSecurityEventsOfThisTypeAndResult(SecurityEventType.Login, SecurityEventResult.Failure));
+        Assert.Equal(savedCountBefore, accountRepository.LoginCounterSaveCount);
+        Assert.Equal(1, account.LockoutCount);
+        Assert.Equal(1, CountSecurityEvents(SecurityEventType.Lockout, SecurityEventResult.Success));
+        Assert.Equal(8, CountSecurityEvents(SecurityEventType.Login, SecurityEventResult.Failure));
     }
 
     [Fact]
     public async Task AccountOpensAgainAtTheExactEndOfTheLockout()
     {
-        AddAccountToTheFakeDatabase();
-        await TryWrongPasswordThisNumberOfTimesAsync(5);
+        AddAccount();
+        await TryWrongPasswordAsync(5);
 
-        clockThatOnlyMovesWhenTestsAskIt.MoveFakeClockForwardByThisDuration(TimeSpan.FromMinutes(15));
-        var resultOfTheLoginAfterTheLockout = await TryToLogInWithThisEmailAddressAndPasswordAsync(EmailAddressOfTheAccountInTheseTests, PasswordOfTheAccountInTheseTests);
+        clock.Advance(TimeSpan.FromMinutes(15));
+        var result = await LogInAsync(AccountEmail, AccountPassword);
 
-        Assert.True(resultOfTheLoginAfterTheLockout.IsLoggedIn);
+        Assert.IsType<AccountLoginResult.LoggedIn>(result);
     }
 
     [Fact]
     public async Task AccountStaysLockedJustBeforeTheEndOfTheLockout()
     {
-        AddAccountToTheFakeDatabase();
-        await TryWrongPasswordThisNumberOfTimesAsync(5);
+        AddAccount();
+        await TryWrongPasswordAsync(5);
 
-        clockThatOnlyMovesWhenTestsAskIt.MoveFakeClockForwardByThisDuration(TimeSpan.FromMinutes(15) - TimeSpan.FromSeconds(1));
-        var resultOfTheLoginBeforeTheEnd = await TryToLogInWithThisEmailAddressAndPasswordAsync(EmailAddressOfTheAccountInTheseTests, PasswordOfTheAccountInTheseTests);
+        clock.Advance(TimeSpan.FromMinutes(15) - TimeSpan.FromSeconds(1));
+        var result = await LogInAsync(AccountEmail, AccountPassword);
 
-        CheckThatLoginWasRefusedWithTheGenericMessage(resultOfTheLoginBeforeTheEnd);
+        AssertGenericRefusal(result);
     }
 
     [Fact]
     public async Task AfterTheLockoutFiveNewWrongPasswordsLockTheAccountForThirtyMinutes()
     {
-        var accountBeingTestedInThisLogin = AddAccountToTheFakeDatabase();
-        await TryWrongPasswordThisNumberOfTimesAsync(5);
-        clockThatOnlyMovesWhenTestsAskIt.MoveFakeClockForwardByThisDuration(TimeSpan.FromMinutes(15));
+        var account = AddAccount();
+        await TryWrongPasswordAsync(5);
+        clock.Advance(TimeSpan.FromMinutes(15));
 
-        await TryWrongPasswordThisNumberOfTimesAsync(4);
-        Assert.Equal(4, accountBeingTestedInThisLogin.FailedLoginAttemptCount);
-        Assert.Null(accountBeingTestedInThisLogin.LockoutEndsAt);
+        await TryWrongPasswordAsync(4);
+        Assert.Equal(4, account.FailedLoginAttemptCount);
+        Assert.Null(account.LockoutEndsAt);
 
-        await TryWrongPasswordThisNumberOfTimesAsync(1);
+        await TryWrongPasswordAsync(1);
 
-        Assert.Equal(2, accountBeingTestedInThisLogin.LockoutCount);
-        Assert.Equal(clockThatOnlyMovesWhenTestsAskIt.GetUtcNow().UtcDateTime.AddMinutes(30), accountBeingTestedInThisLogin.LockoutEndsAt);
-        Assert.Equal(2, CountSecurityEventsOfThisTypeAndResult(SecurityEventType.Lockout, SecurityEventResult.Success));
+        Assert.Equal(2, account.LockoutCount);
+        Assert.Equal(clock.GetUtcNow().UtcDateTime.AddMinutes(30), account.LockoutEndsAt);
+        Assert.Equal(2, CountSecurityEvents(SecurityEventType.Lockout, SecurityEventResult.Success));
     }
 
     // C'est ce qui limite vraiment les requêtes simultanées : l'essai doit déjà être enregistré quand le mot de passe est comparé.
     [Fact]
     public async Task AttemptIsAlreadySavedWhenThePasswordIsCompared()
     {
-        AddAccountToTheFakeDatabase();
-        var numberOfCountersSavedWhenThePasswordIsCompared = -1;
-        hasherThatCountsTheComparedPasswords.ActionRunWhenOnePasswordIsCompared = () =>
-            numberOfCountersSavedWhenThePasswordIsCompared = repositoryThatKeepsAccountsInMemory.NumberOfLoginCountersSaved;
+        AddAccount();
+        var savedCountAtComparison = -1;
+        passwordHasher.OnPasswordVerified = () =>
+            savedCountAtComparison = accountRepository.LoginCounterSaveCount;
 
-        await TryToLogInWithThisEmailAddressAndPasswordAsync(EmailAddressOfTheAccountInTheseTests, WrongPasswordTypedInTheseTests);
+        await LogInAsync(AccountEmail, WrongPassword);
 
-        Assert.Equal(1, numberOfCountersSavedWhenThePasswordIsCompared);
+        Assert.Equal(1, savedCountAtComparison);
     }
 
     // --- Requêtes simultanées et pannes
@@ -424,102 +434,102 @@ public class AccountLoginServiceTests
     [Fact]
     public async Task ConflictWhileCountingRereadsTheAccountAndLosesNoAttempt()
     {
-        var accountBeingTestedInThisLogin = AddAccountToTheFakeDatabase();
-        repositoryThatKeepsAccountsInMemory.NumberOfConflictsBeforeTheLoginCountersAreSaved = 1;
+        var account = AddAccount();
+        accountRepository.LoginCounterConflicts = 1;
 
-        await TryToLogInWithThisEmailAddressAndPasswordAsync(EmailAddressOfTheAccountInTheseTests, WrongPasswordTypedInTheseTests);
+        await LogInAsync(AccountEmail, WrongPassword);
 
-        Assert.Equal(2, accountBeingTestedInThisLogin.FailedLoginAttemptCount);
-        Assert.Equal(1, repositoryThatKeepsAccountsInMemory.NumberOfLoginCountersSaved);
+        Assert.Equal(2, account.FailedLoginAttemptCount);
+        Assert.Equal(1, accountRepository.LoginCounterSaveCount);
     }
 
     // Si l'essai n'a pas pu être compté, le mot de passe ne donne pas de session, même s'il est bon.
     [Fact]
     public async Task TooManyConflictsWhileCountingRefuseTheLoginEvenWithTheRightPassword()
     {
-        AddAccountToTheFakeDatabase();
-        repositoryThatKeepsAccountsInMemory.NumberOfConflictsBeforeTheLoginCountersAreSaved = 1000;
+        AddAccount();
+        accountRepository.LoginCounterConflicts = 1000;
 
-        var resultOfTheLoginDuringTheConflicts = await TryToLogInWithThisEmailAddressAndPasswordAsync(EmailAddressOfTheAccountInTheseTests, PasswordOfTheAccountInTheseTests);
+        var result = await LogInAsync(AccountEmail, AccountPassword);
 
-        CheckThatLoginWasRefusedWithTheGenericMessage(resultOfTheLoginDuringTheConflicts);
-        Assert.Equal(990, repositoryThatKeepsAccountsInMemory.NumberOfConflictsBeforeTheLoginCountersAreSaved);
+        AssertGenericRefusal(result);
+        Assert.Equal(990, accountRepository.LoginCounterConflicts);
     }
 
     // Une autre requête a changé le compte pendant le hachage : le bon mot de passe doit quand même connecter.
     [Fact]
     public async Task ConflictWhileSavingTheLoginTriesAgainAndStillLogsIn()
     {
-        AddAccountToTheFakeDatabase();
-        repositoryThatKeepsSessionsInMemory.NumberOfConflictsBeforeTheLoginIsSaved = 3;
+        AddAccount();
+        sessionRepository.LoginConflicts = 3;
 
-        var resultOfTheLoginDuringTheConflicts = await TryToLogInWithThisEmailAddressAndPasswordAsync(EmailAddressOfTheAccountInTheseTests, PasswordOfTheAccountInTheseTests);
+        var result = await LogInAsync(AccountEmail, AccountPassword);
 
-        Assert.True(resultOfTheLoginDuringTheConflicts.IsLoggedIn);
-        Assert.Single(repositoryThatKeepsSessionsInMemory.SavedSessions);
-        Assert.Equal(1, CountSecurityEventsOfThisTypeAndResult(SecurityEventType.Login, SecurityEventResult.Success));
+        Assert.IsType<AccountLoginResult.LoggedIn>(result);
+        Assert.Single(sessionRepository.SavedSessions);
+        Assert.Equal(1, CountSecurityEvents(SecurityEventType.Login, SecurityEventResult.Success));
     }
 
     [Fact]
     public async Task TooManyConflictsWhileSavingTheLoginRefuseTheLogin()
     {
-        AddAccountToTheFakeDatabase();
-        repositoryThatKeepsSessionsInMemory.NumberOfConflictsBeforeTheLoginIsSaved = 1000;
+        AddAccount();
+        sessionRepository.LoginConflicts = 1000;
 
-        var resultOfTheLoginDuringTheConflicts = await TryToLogInWithThisEmailAddressAndPasswordAsync(EmailAddressOfTheAccountInTheseTests, PasswordOfTheAccountInTheseTests);
+        var result = await LogInAsync(AccountEmail, AccountPassword);
 
-        CheckThatLoginWasRefusedWithTheGenericMessage(resultOfTheLoginDuringTheConflicts);
-        Assert.Equal(990, repositoryThatKeepsSessionsInMemory.NumberOfConflictsBeforeTheLoginIsSaved);
-        Assert.Equal(0, CountSecurityEventsOfThisTypeAndResult(SecurityEventType.Login, SecurityEventResult.Success));
+        AssertGenericRefusal(result);
+        Assert.Equal(990, sessionRepository.LoginConflicts);
+        Assert.Equal(0, CountSecurityEvents(SecurityEventType.Login, SecurityEventResult.Success));
     }
 
     [Fact]
     public async Task AccountErasedBeforeTheAttemptIsCountedIsRefused()
     {
-        AddAccountToTheFakeDatabase();
-        repositoryThatKeepsAccountsInMemory.NumberOfSearchesByIdentifierBeforeTheAccountDisappears = 0;
+        AddAccount();
+        accountRepository.SearchesBeforeAccountDisappears = 0;
 
-        var resultOfTheLoginOfTheErasedAccount = await TryToLogInWithThisEmailAddressAndPasswordAsync(EmailAddressOfTheAccountInTheseTests, PasswordOfTheAccountInTheseTests);
+        var result = await LogInAsync(AccountEmail, AccountPassword);
 
-        CheckThatLoginWasRefusedWithTheGenericMessage(resultOfTheLoginOfTheErasedAccount);
+        AssertGenericRefusal(result);
     }
 
     [Fact]
     public async Task AccountErasedBeforeTheLoginIsSavedIsRefused()
     {
-        AddAccountToTheFakeDatabase();
-        repositoryThatKeepsAccountsInMemory.NumberOfSearchesByIdentifierBeforeTheAccountDisappears = 1;
+        AddAccount();
+        accountRepository.SearchesBeforeAccountDisappears = 1;
 
-        var resultOfTheLoginOfTheErasedAccount = await TryToLogInWithThisEmailAddressAndPasswordAsync(EmailAddressOfTheAccountInTheseTests, PasswordOfTheAccountInTheseTests);
+        var result = await LogInAsync(AccountEmail, AccountPassword);
 
-        CheckThatLoginWasRefusedWithTheGenericMessage(resultOfTheLoginOfTheErasedAccount);
+        AssertGenericRefusal(result);
     }
 
     // Une panne de la base ne doit jamais ouvrir de session.
     [Fact]
     public async Task DatabaseFailureWhileSavingTheLoginIsNotHiddenAndOpensNoSession()
     {
-        AddAccountToTheFakeDatabase();
-        repositoryThatKeepsSessionsInMemory.DatabaseIsDownDuringThisTest = true;
+        AddAccount();
+        sessionRepository.IsDown = true;
 
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            TryToLogInWithThisEmailAddressAndPasswordAsync(EmailAddressOfTheAccountInTheseTests, PasswordOfTheAccountInTheseTests));
+            LogInAsync(AccountEmail, AccountPassword));
 
-        Assert.Empty(repositoryThatKeepsSessionsInMemory.SavedSessions);
+        Assert.Empty(sessionRepository.SavedSessions);
     }
 
     // Une récupération passe pendant le hachage : le mot de passe vérifié n'est plus le bon, aucune session ne doit s'ouvrir (SS §3).
     [Fact]
     public async Task PasswordChangedWhileItIsBeingCheckedOpensNoSession()
     {
-        var accountBeingTestedInThisLogin = AddAccountToTheFakeDatabase();
-        hasherThatCountsTheComparedPasswords.ActionRunWhenOnePasswordIsCompared = () =>
-            accountBeingTestedInThisLogin.PasswordHash = "empreinte-du-nouveau-mot-de-passe";
+        var account = AddAccount();
+        passwordHasher.OnPasswordVerified = () =>
+            account.ReplacePasswordHash("empreinte-du-nouveau-mot-de-passe");
 
-        var resultOfTheLoginDuringTheRecovery = await TryToLogInWithThisEmailAddressAndPasswordAsync(EmailAddressOfTheAccountInTheseTests, PasswordOfTheAccountInTheseTests);
+        var result = await LogInAsync(AccountEmail, AccountPassword);
 
         // La comparaison dit vrai, car elle porte sur l'ancienne empreinte : seul le contrôle qui la suit refuse la session.
-        CheckThatLoginWasRefusedWithTheGenericMessage(resultOfTheLoginDuringTheRecovery);
+        AssertGenericRefusal(result);
     }
 
     // --- E-mail de déblocage
@@ -527,72 +537,71 @@ public class AccountLoginServiceTests
     [Fact]
     public async Task FifthWrongPasswordAsksForOneUnlockEmailWithTheAccountAndIpAddress()
     {
-        var accountBeingTestedInThisLogin = AddAccountToTheFakeDatabase();
+        var account = AddAccount();
 
-        await TryWrongPasswordThisNumberOfTimesAsync(5);
+        await TryWrongPasswordAsync(5);
 
-        var requestOfTheAccountUnlockEmail = Assert.Single(queueThatKeepsTheEmailRequestsInMemory.RequestsAddedToTheBackgroundQueue);
-        Assert.Equal(WalletFlow.Application.AccountRecovery.BackgroundEmailRequestType.AccountUnlock, requestOfTheAccountUnlockEmail.TypeOfTheRequestedBackgroundEmail);
-        Assert.Equal(accountBeingTestedInThisLogin.Id, requestOfTheAccountUnlockEmail.IdentifierOfTheAccountJustLocked);
-        Assert.Equal(IpAddressOfTheVisitorInTheseTests, requestOfTheAccountUnlockEmail.IpAddressOfTheRequestingVisitor);
+        var unlockRequest = Assert.IsType<WalletFlow.Application.AccountRecovery.BackgroundEmailRequest.AccountUnlock>(Assert.Single(emailQueue.AddedRequests));
+        Assert.Equal(account.Id, unlockRequest.AccountId);
+        Assert.Equal(IpAddress, unlockRequest.IpAddress);
     }
 
     [Fact]
     public async Task FourWrongPasswordsAskForNoUnlockEmail()
     {
-        AddAccountToTheFakeDatabase();
+        AddAccount();
 
-        await TryWrongPasswordThisNumberOfTimesAsync(4);
+        await TryWrongPasswordAsync(4);
 
-        Assert.Empty(queueThatKeepsTheEmailRequestsInMemory.RequestsAddedToTheBackgroundQueue);
+        Assert.Empty(emailQueue.AddedRequests);
     }
 
     // SS §2 : un seul e-mail par blocage, pour qu'un attaquant ne puisse pas inonder la boîte de la victime.
     [Fact]
     public async Task AttemptsDuringTheLockoutAskForNoOtherUnlockEmail()
     {
-        AddAccountToTheFakeDatabase();
-        await TryWrongPasswordThisNumberOfTimesAsync(5);
+        AddAccount();
+        await TryWrongPasswordAsync(5);
 
-        await TryWrongPasswordThisNumberOfTimesAsync(3);
-        await TryToLogInWithThisEmailAddressAndPasswordAsync(EmailAddressOfTheAccountInTheseTests, PasswordOfTheAccountInTheseTests);
+        await TryWrongPasswordAsync(3);
+        await LogInAsync(AccountEmail, AccountPassword);
 
-        Assert.Single(queueThatKeepsTheEmailRequestsInMemory.RequestsAddedToTheBackgroundQueue);
+        Assert.Single(emailQueue.AddedRequests);
     }
 
     [Fact]
     public async Task EveryNewLockoutAsksForItsOwnUnlockEmail()
     {
-        AddAccountToTheFakeDatabase();
-        await TryWrongPasswordThisNumberOfTimesAsync(5);
-        clockThatOnlyMovesWhenTestsAskIt.MoveFakeClockForwardByThisDuration(TimeSpan.FromMinutes(15));
+        AddAccount();
+        await TryWrongPasswordAsync(5);
+        clock.Advance(TimeSpan.FromMinutes(15));
 
-        await TryWrongPasswordThisNumberOfTimesAsync(5);
+        await TryWrongPasswordAsync(5);
 
-        Assert.Equal(2, queueThatKeepsTheEmailRequestsInMemory.RequestsAddedToTheBackgroundQueue.Count);
+        Assert.Equal(2, emailQueue.AddedRequests.Count);
     }
 
     // Le bon mot de passe au 5e essai annule le blocage : il n'y a rien à débloquer.
     [Fact]
     public async Task RightPasswordOnTheFifthAttemptAsksForNoUnlockEmail()
     {
-        AddAccountToTheFakeDatabase();
-        await TryWrongPasswordThisNumberOfTimesAsync(4);
+        AddAccount();
+        await TryWrongPasswordAsync(4);
 
-        await TryToLogInWithThisEmailAddressAndPasswordAsync(EmailAddressOfTheAccountInTheseTests, PasswordOfTheAccountInTheseTests);
+        await LogInAsync(AccountEmail, AccountPassword);
 
-        Assert.Empty(queueThatKeepsTheEmailRequestsInMemory.RequestsAddedToTheBackgroundQueue);
+        Assert.Empty(emailQueue.AddedRequests);
     }
 
     // SS §2 : un compte non confirmé n'est jamais bloqué, et aucun e-mail de déblocage ne part.
     [Fact]
     public async Task UnconfirmedAccountNeverAsksForAnUnlockEmail()
     {
-        AddAccountToTheFakeDatabase(emailAddressOfTheAccountIsConfirmed: false);
+        AddAccount(isEmailConfirmed: false);
 
-        await TryWrongPasswordThisNumberOfTimesAsync(6);
+        await TryWrongPasswordAsync(6);
 
-        Assert.Empty(queueThatKeepsTheEmailRequestsInMemory.RequestsAddedToTheBackgroundQueue);
+        Assert.Empty(emailQueue.AddedRequests);
     }
 
     // --- Appareils
@@ -600,69 +609,69 @@ public class AccountLoginServiceTests
     [Fact]
     public async Task FirstLoginRegistersTheDeviceWithOnlyTheHashOfItsToken()
     {
-        var accountBeingTestedInThisLogin = AddAccountToTheFakeDatabase();
+        var account = AddAccount();
 
-        var resultOfTheLoginOfTheAccount = await TryToLogInWithThisEmailAddressAndPasswordAsync(EmailAddressOfTheAccountInTheseTests, PasswordOfTheAccountInTheseTests);
+        var result = await LogInAsync(AccountEmail, AccountPassword);
 
-        var deviceSavedInMemoryForTheAccount = Assert.Single(repositoryThatKeepsSessionsInMemory.SavedDevices);
-        Assert.Equal(accountBeingTestedInThisLogin.Id, deviceSavedInMemoryForTheAccount.UserId);
-        Assert.Equal(realGeneratorOfTheTokensInTheseTests.ConvertSecureTokenIntoItsHash(resultOfTheLoginOfTheAccount.DeviceTokenToPutInTheCookie!), deviceSavedInMemoryForTheAccount.DeviceToken);
-        Assert.NotEqual(resultOfTheLoginOfTheAccount.DeviceTokenToPutInTheCookie, deviceSavedInMemoryForTheAccount.DeviceToken);
-        Assert.NotEqual(resultOfTheLoginOfTheAccount.SessionTokenToPutInTheCookie, resultOfTheLoginOfTheAccount.DeviceTokenToPutInTheCookie);
+        var device = Assert.Single(sessionRepository.SavedDevices);
+        Assert.Equal(account.Id, device.UserId);
+        Assert.Equal(tokenGenerator.HashToken(Assert.IsType<AccountLoginResult.LoggedIn>(result).DeviceToken), device.DeviceToken);
+        Assert.NotEqual(Assert.IsType<AccountLoginResult.LoggedIn>(result).DeviceToken, device.DeviceToken);
+        Assert.NotEqual(Assert.IsType<AccountLoginResult.LoggedIn>(result).SessionToken, Assert.IsType<AccountLoginResult.LoggedIn>(result).DeviceToken);
     }
 
     // Fait une connexion réussie avec ces cookies déjà présents dans le navigateur.
-    private async Task<AccountLoginResult> LogInWithTheseCookiesAlreadyInTheBrowserAsync(string? deviceTokenAlreadyInTheBrowser, string? sessionTokenAlreadyInTheBrowser)
+    private async Task<AccountLoginResult> LogInWithCookiesAsync(string? deviceToken, string? sessionToken)
     {
-        return await CreateLoginServiceWithFakeTools().LogVisitorInWithEmailAddressAndPasswordAsync(new LoginAttemptFromVisitor
+        return await CreateLoginService().LogInAsync(new LoginAttempt
         {
-            EmailAddressTypedByTheVisitor = EmailAddressOfTheAccountInTheseTests,
-            PasswordTextTypedByTheVisitor = PasswordOfTheAccountInTheseTests,
-            IpAddressOfTheVisitor = IpAddressOfTheVisitorInTheseTests,
-            DeviceTokenReadInTheCookie = deviceTokenAlreadyInTheBrowser,
-            SessionTokenReadInTheCookie = sessionTokenAlreadyInTheBrowser
+            EmailAddress = AccountEmail,
+            Password = AccountPassword,
+            IpAddress = IpAddress,
+            DeviceToken = deviceToken,
+            SessionToken = sessionToken
         });
     }
 
     [Fact]
     public async Task KnownDeviceKeepsItsTokenAndAddsNothing()
     {
-        AddAccountToTheFakeDatabase();
-        var resultOfTheFirstLoginOfTheAccount = await LogInWithTheseCookiesAlreadyInTheBrowserAsync(null, null);
+        AddAccount();
+        var firstResult = await LogInWithCookiesAsync(null, null);
 
-        var resultOfTheSecondLoginOfTheAccount = await LogInWithTheseCookiesAlreadyInTheBrowserAsync(resultOfTheFirstLoginOfTheAccount.DeviceTokenToPutInTheCookie, null);
+        var secondResult = await LogInWithCookiesAsync(Assert.IsType<AccountLoginResult.LoggedIn>(firstResult).DeviceToken, null);
 
-        Assert.Equal(resultOfTheFirstLoginOfTheAccount.DeviceTokenToPutInTheCookie, resultOfTheSecondLoginOfTheAccount.DeviceTokenToPutInTheCookie);
-        Assert.Single(repositoryThatKeepsSessionsInMemory.SavedDevices);
+        Assert.Equal(Assert.IsType<AccountLoginResult.LoggedIn>(firstResult).DeviceToken, Assert.IsType<AccountLoginResult.LoggedIn>(secondResult).DeviceToken);
+        Assert.Single(sessionRepository.SavedDevices);
     }
 
     [Fact]
     public async Task UnknownDeviceTokenIsReplacedByANewOne()
     {
-        AddAccountToTheFakeDatabase();
+        AddAccount();
 
-        var resultOfTheLoginOfTheAccount = await LogInWithTheseCookiesAlreadyInTheBrowserAsync("jeton-d-appareil-invente", null);
+        var result = await LogInWithCookiesAsync("jeton-d-appareil-invente", null);
 
-        Assert.NotEqual("jeton-d-appareil-invente", resultOfTheLoginOfTheAccount.DeviceTokenToPutInTheCookie);
-        Assert.Single(repositoryThatKeepsSessionsInMemory.SavedDevices);
+        Assert.NotEqual("jeton-d-appareil-invente", Assert.IsType<AccountLoginResult.LoggedIn>(result).DeviceToken);
+        Assert.Single(sessionRepository.SavedDevices);
     }
 
     // Le jeton d'un autre compte ne rend pas l'appareil connu pour celui-ci.
     [Fact]
     public async Task DeviceTokenOfAnotherAccountIsReplacedByANewOne()
     {
-        AddAccountToTheFakeDatabase();
-        var deviceTokenOfTheOtherAccount = "jeton-d-appareil-d-un-autre-compte";
-        repositoryThatKeepsSessionsInMemory.SavedDevices.Add(new Device
+        AddAccount();
+        var otherDeviceToken = "jeton-d-appareil-d-un-autre-compte";
+        sessionRepository.SavedDevices.Add(new Device
         {
-            DeviceToken = realGeneratorOfTheTokensInTheseTests.ConvertSecureTokenIntoItsHash(deviceTokenOfTheOtherAccount),
+            DeviceToken = tokenGenerator.HashToken(otherDeviceToken),
             UserId = Guid.NewGuid()
         });
 
-        var resultOfTheLoginOfTheAccount = await LogInWithTheseCookiesAlreadyInTheBrowserAsync(deviceTokenOfTheOtherAccount, null);
+        var result = await LogInWithCookiesAsync(otherDeviceToken, null);
 
-        Assert.NotEqual(deviceTokenOfTheOtherAccount, resultOfTheLoginOfTheAccount.DeviceTokenToPutInTheCookie);
-        Assert.Equal(2, repositoryThatKeepsSessionsInMemory.SavedDevices.Count);
+        Assert.NotEqual(otherDeviceToken, Assert.IsType<AccountLoginResult.LoggedIn>(result).DeviceToken);
+        Assert.Equal(2, sessionRepository.SavedDevices.Count);
     }
 
     // --- Ancienne session du navigateur
@@ -670,30 +679,30 @@ public class AccountLoginServiceTests
     [Fact]
     public async Task SuccessfulLoginClosesTheOldSessionOfThisBrowser()
     {
-        AddAccountToTheFakeDatabase();
-        var resultOfTheFirstLoginOfTheAccount = await LogInWithTheseCookiesAlreadyInTheBrowserAsync(null, null);
+        AddAccount();
+        var firstResult = await LogInWithCookiesAsync(null, null);
 
-        var resultOfTheSecondLoginOfTheAccount = await LogInWithTheseCookiesAlreadyInTheBrowserAsync(null, resultOfTheFirstLoginOfTheAccount.SessionTokenToPutInTheCookie);
+        var secondResult = await LogInWithCookiesAsync(null, Assert.IsType<AccountLoginResult.LoggedIn>(firstResult).SessionToken);
 
-        var sessionStillOpenAfterTheSecondLogin = Assert.Single(repositoryThatKeepsSessionsInMemory.SavedSessions);
-        Assert.Equal(realGeneratorOfTheTokensInTheseTests.ConvertSecureTokenIntoItsHash(resultOfTheSecondLoginOfTheAccount.SessionTokenToPutInTheCookie!), sessionStillOpenAfterTheSecondLogin.Id);
+        var openSession = Assert.Single(sessionRepository.SavedSessions);
+        Assert.Equal(tokenGenerator.HashToken(Assert.IsType<AccountLoginResult.LoggedIn>(secondResult).SessionToken), openSession.Id);
     }
 
     // Un mauvais mot de passe ne doit pas déconnecter le navigateur.
     [Fact]
     public async Task FailedLoginKeepsTheOldSessionOfThisBrowser()
     {
-        AddAccountToTheFakeDatabase();
-        var resultOfTheFirstLoginOfTheAccount = await LogInWithTheseCookiesAlreadyInTheBrowserAsync(null, null);
+        AddAccount();
+        var firstResult = await LogInWithCookiesAsync(null, null);
 
-        await CreateLoginServiceWithFakeTools().LogVisitorInWithEmailAddressAndPasswordAsync(new LoginAttemptFromVisitor
+        await CreateLoginService().LogInAsync(new LoginAttempt
         {
-            EmailAddressTypedByTheVisitor = EmailAddressOfTheAccountInTheseTests,
-            PasswordTextTypedByTheVisitor = WrongPasswordTypedInTheseTests,
-            SessionTokenReadInTheCookie = resultOfTheFirstLoginOfTheAccount.SessionTokenToPutInTheCookie
+            EmailAddress = AccountEmail,
+            Password = WrongPassword,
+            SessionToken = Assert.IsType<AccountLoginResult.LoggedIn>(firstResult).SessionToken
         });
 
-        Assert.Single(repositoryThatKeepsSessionsInMemory.SavedSessions);
+        Assert.Single(sessionRepository.SavedSessions);
     }
 
     // --- Normalisation
@@ -701,26 +710,26 @@ public class AccountLoginServiceTests
     [Fact]
     public async Task PasswordTypedWithDecomposedAccentMatchesThePasswordChosenWithComposedAccent()
     {
-        var accountBeingTestedInThisLogin = AddAccountToTheFakeDatabase();
-        accountBeingTestedInThisLogin.PasswordHash = FakePasswordHasher.PrefixOfTheFakePasswordHashes + "Mot-De-Passé-1";
+        var account = AddAccount();
+        account.ReplacePasswordHash(FakePasswordHasher.HashPrefix + "Mot-De-Passé-1");
 
-        var resultOfTheLoginOfTheAccount = await TryToLogInWithThisEmailAddressAndPasswordAsync(EmailAddressOfTheAccountInTheseTests, "Mot-De-Passé-1");
+        var result = await LogInAsync(AccountEmail, "Mot-De-Passé-1");
 
-        Assert.True(resultOfTheLoginOfTheAccount.IsLoggedIn);
+        Assert.IsType<AccountLoginResult.LoggedIn>(result);
     }
 
     // Ces caractères font lever une erreur à .NET : le visiteur doit recevoir le refus normal, pas une erreur 500.
     [Theory]
     [InlineData(0xFFFE)]
     [InlineData(0xD800)]
-    public async Task PasswordThatCannotBeNormalizedIsRefusedWithTheGenericMessage(int codeOfTheCharacterThatCannotBeNormalized)
+    public async Task PasswordThatCannotBeNormalizedIsRefusedWithTheGenericMessage(int unnormalizableCharacter)
     {
-        AddAccountToTheFakeDatabase();
+        AddAccount();
 
-        var resultOfTheLoginWithHostilePassword = await TryToLogInWithThisEmailAddressAndPasswordAsync(
-            EmailAddressOfTheAccountInTheseTests,
-            PasswordOfTheAccountInTheseTests + (char)codeOfTheCharacterThatCannotBeNormalized);
+        var result = await LogInAsync(
+            AccountEmail,
+            AccountPassword + (char)unnormalizableCharacter);
 
-        CheckThatLoginWasRefusedWithTheGenericMessage(resultOfTheLoginWithHostilePassword);
+        AssertGenericRefusal(result);
     }
 }

@@ -7,16 +7,16 @@ namespace WalletFlow.Tests.Infrastructure;
 public class OtpNetAuthenticatorCodeToolTests
 {
     // Le secret de la RFC 6238 : « 12345678901234567890 », écrit en Base32.
-    private const string SecretOfThePhonePublishedInTheRfc = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ";
+    private const string RfcSecret = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ";
 
-    private static readonly DateTime DateOfTheCodesUsedInTheseTests = new DateTime(2026, 11, 5, 12, 0, 0, DateTimeKind.Utc);
+    private static readonly DateTime CodeDate = new DateTime(2026, 11, 5, 12, 0, 0, DateTimeKind.Utc);
 
-    private readonly OtpNetAuthenticatorCodeTool toolBeingTestedWithRealCalculations = new OtpNetAuthenticatorCodeTool();
+    private readonly OtpNetAuthenticatorCodeTool tool = new OtpNetAuthenticatorCodeTool();
 
     // Calcule le code qu'affiche un téléphone à cette date.
-    private static string CalculateCodeShownOnThePhoneAtThisDate(DateTime dateShownOnThePhoneInUtc)
+    private static string CalculateCodeAt(DateTime date)
     {
-        return new Totp(Base32Encoding.ToBytes(SecretOfThePhonePublishedInTheRfc)).ComputeTotp(dateShownOnThePhoneInUtc);
+        return new Totp(Base32Encoding.ToBytes(RfcSecret)).ComputeTotp(date);
     }
 
     // Les 6 derniers chiffres des valeurs de la RFC 6238, dont un code qui commence par un zéro.
@@ -27,27 +27,27 @@ public class OtpNetAuthenticatorCodeToolTests
     [InlineData(1234567890L, "005924")]
     [InlineData(2000000000L, "279037")]
     [InlineData(20000000000L, "353130")]
-    public void CodesPublishedInTheRfcAreAcceptedInTheirExactPeriod(long numberOfSecondsSinceTheUnixEpoch, string codeOfThePhonePublishedInTheRfc)
+    public void CodesPublishedInTheRfcAreAcceptedInTheirExactPeriod(long unixSeconds, string rfcCode)
     {
-        var dateOfTheCodePublishedInTheRfc = DateTimeOffset.FromUnixTimeSeconds(numberOfSecondsSinceTheUnixEpoch).UtcDateTime;
+        var rfcDate = DateTimeOffset.FromUnixTimeSeconds(unixSeconds).UtcDateTime;
 
-        var numberOfThePeriodFoundByTheTool = toolBeingTestedWithRealCalculations.FindPeriodWhereThisCodeIsValidAtThisDate(SecretOfThePhonePublishedInTheRfc, codeOfThePhonePublishedInTheRfc, dateOfTheCodePublishedInTheRfc);
+        var foundPeriod = tool.FindValidPeriod(RfcSecret, rfcCode, rfcDate);
 
-        Assert.Equal(numberOfSecondsSinceTheUnixEpoch / 30, numberOfThePeriodFoundByTheTool);
+        Assert.Equal(unixSeconds / 30, foundPeriod);
     }
 
     [Theory]
     [InlineData(-30)]
     [InlineData(0)]
     [InlineData(30)]
-    public void CodeOfTheCurrentPreviousOrNextPeriodIsFoundWithItsOwnPeriodNumber(int secondsBetweenThePhoneAndTheServer)
+    public void CodeOfTheCurrentPreviousOrNextPeriodIsFoundWithItsOwnPeriodNumber(int driftSeconds)
     {
-        var dateShownOnThePhoneOfTheUser = DateOfTheCodesUsedInTheseTests.AddSeconds(secondsBetweenThePhoneAndTheServer);
-        var periodNumberExpectedByThisTest = new DateTimeOffset(dateShownOnThePhoneOfTheUser).ToUnixTimeSeconds() / 30;
+        var date = CodeDate.AddSeconds(driftSeconds);
+        var expectedPeriod = new DateTimeOffset(date).ToUnixTimeSeconds() / 30;
 
-        var numberOfThePeriodFoundByTheTool = toolBeingTestedWithRealCalculations.FindPeriodWhereThisCodeIsValidAtThisDate(SecretOfThePhonePublishedInTheRfc, CalculateCodeShownOnThePhoneAtThisDate(dateShownOnThePhoneOfTheUser), DateOfTheCodesUsedInTheseTests);
+        var foundPeriod = tool.FindValidPeriod(RfcSecret, CalculateCodeAt(date), CodeDate);
 
-        Assert.Equal(periodNumberExpectedByThisTest, numberOfThePeriodFoundByTheTool);
+        Assert.Equal(expectedPeriod, foundPeriod);
     }
 
     // Par défaut, Otp.NET n'accepte que la période en cours : ce test voit si le réglage disparaît. Au-delà de 30 secondes, le code ne vaut plus.
@@ -56,14 +56,14 @@ public class OtpNetAuthenticatorCodeToolTests
     [InlineData(60)]
     [InlineData(-3600)]
     [InlineData(3600)]
-    public void CodeOfAPeriodTooFarAwayIsNotFound(int secondsBetweenThePhoneAndTheServer)
+    public void CodeOfAPeriodTooFarAwayIsNotFound(int driftSeconds)
     {
-        var numberOfThePeriodFoundByTheTool = toolBeingTestedWithRealCalculations.FindPeriodWhereThisCodeIsValidAtThisDate(
-            SecretOfThePhonePublishedInTheRfc,
-            CalculateCodeShownOnThePhoneAtThisDate(DateOfTheCodesUsedInTheseTests.AddSeconds(secondsBetweenThePhoneAndTheServer)),
-            DateOfTheCodesUsedInTheseTests);
+        var foundPeriod = tool.FindValidPeriod(
+            RfcSecret,
+            CalculateCodeAt(CodeDate.AddSeconds(driftSeconds)),
+            CodeDate);
 
-        Assert.Null(numberOfThePeriodFoundByTheTool);
+        Assert.Null(foundPeriod);
     }
 
     // Otp.NET ne doit ni planter ni accepter un texte qui n'est pas un code, même si le service les arrête avant.
@@ -74,26 +74,26 @@ public class OtpNetAuthenticatorCodeToolTests
     [InlineData("abcdef")]
     [InlineData("١٢٣٤٥٦")]
     [InlineData("\0\0\0\0\0\0")]
-    public void HostileTextIsNeitherAcceptedNorACrash(string hostileTextSentInThisTest)
+    public void HostileTextIsNeitherAcceptedNorACrash(string hostileText)
     {
-        Assert.Null(toolBeingTestedWithRealCalculations.FindPeriodWhereThisCodeIsValidAtThisDate(SecretOfThePhonePublishedInTheRfc, hostileTextSentInThisTest, DateOfTheCodesUsedInTheseTests));
+        Assert.Null(tool.FindValidPeriod(RfcSecret, hostileText, CodeDate));
     }
 
     [Fact]
     public void CodeCalculatedWithAnotherSecretIsNotFound()
     {
-        var codeCalculatedWithAnotherAuthenticatorSecret = new Totp(Base32Encoding.ToBytes(toolBeingTestedWithRealCalculations.GenerateNewRandomSecretForTheAuthenticatorApplication())).ComputeTotp(DateOfTheCodesUsedInTheseTests);
-        var codesCalculatedWithTheRightAuthenticatorSecret = new List<string>
+        var otherSecretCode = new Totp(Base32Encoding.ToBytes(tool.GenerateSecret())).ComputeTotp(CodeDate);
+        var rightCodes = new List<string>
         {
-            CalculateCodeShownOnThePhoneAtThisDate(DateOfTheCodesUsedInTheseTests.AddSeconds(-30)),
-            CalculateCodeShownOnThePhoneAtThisDate(DateOfTheCodesUsedInTheseTests),
-            CalculateCodeShownOnThePhoneAtThisDate(DateOfTheCodesUsedInTheseTests.AddSeconds(30))
+            CalculateCodeAt(CodeDate.AddSeconds(-30)),
+            CalculateCodeAt(CodeDate),
+            CalculateCodeAt(CodeDate.AddSeconds(30))
         };
 
         // Une fois sur un million, les deux secrets donnent le même code : ce test ne dirait alors rien, sans échouer pour autant.
-        if (!codesCalculatedWithTheRightAuthenticatorSecret.Contains(codeCalculatedWithAnotherAuthenticatorSecret))
+        if (!rightCodes.Contains(otherSecretCode))
         {
-            Assert.Null(toolBeingTestedWithRealCalculations.FindPeriodWhereThisCodeIsValidAtThisDate(SecretOfThePhonePublishedInTheRfc, codeCalculatedWithAnotherAuthenticatorSecret, DateOfTheCodesUsedInTheseTests));
+            Assert.Null(tool.FindValidPeriod(RfcSecret, otherSecretCode, CodeDate));
         }
     }
 
@@ -101,20 +101,20 @@ public class OtpNetAuthenticatorCodeToolTests
     [Fact]
     public void NewSecretContains160BitsAndIsWrittenInBase32()
     {
-        var newSecretOfTheAuthenticatorApplication = toolBeingTestedWithRealCalculations.GenerateNewRandomSecretForTheAuthenticatorApplication();
+        var secret = tool.GenerateSecret();
 
-        Assert.Matches("^[A-Z2-7]{32}$", newSecretOfTheAuthenticatorApplication);
-        Assert.Equal(20, Base32Encoding.ToBytes(newSecretOfTheAuthenticatorApplication).Length);
+        Assert.Matches("^[A-Z2-7]{32}$", secret);
+        Assert.Equal(20, Base32Encoding.ToBytes(secret).Length);
     }
 
     [Fact]
     public void TwoNewSecretsAreNeverTheSame()
     {
-        var secretsAlreadyDrawnInThisTest = new HashSet<string>();
+        var drawnSecrets = new HashSet<string>();
 
-        for (var numberOfTheSecretBeingDrawn = 1; numberOfTheSecretBeingDrawn <= 1000; numberOfTheSecretBeingDrawn++)
+        for (var secretNumber = 1; secretNumber <= 1000; secretNumber++)
         {
-            Assert.True(secretsAlreadyDrawnInThisTest.Add(toolBeingTestedWithRealCalculations.GenerateNewRandomSecretForTheAuthenticatorApplication()));
+            Assert.True(drawnSecrets.Add(tool.GenerateSecret()));
         }
     }
 
@@ -122,11 +122,11 @@ public class OtpNetAuthenticatorCodeToolTests
     [Fact]
     public void LinkGivesTheSecretAndTheExactSettingsOfTheCodes()
     {
-        var linkGivenToTheAuthenticatorApplicationByTheTool = toolBeingTestedWithRealCalculations.BuildLinkThatAddsThisSecretToTheApplication(SecretOfThePhonePublishedInTheRfc, "utilisateur@exemple.test");
+        var link = tool.BuildSetupLink(RfcSecret, "utilisateur@exemple.test");
 
         Assert.Equal(
-            "otpauth://totp/WalletFlow:utilisateur%40exemple.test?secret=" + SecretOfThePhonePublishedInTheRfc + "&issuer=WalletFlow&algorithm=SHA1&digits=6&period=30",
-            linkGivenToTheAuthenticatorApplicationByTheTool);
+            "otpauth://totp/WalletFlow:utilisateur%40exemple.test?secret=" + RfcSecret + "&issuer=WalletFlow&algorithm=SHA1&digits=6&period=30",
+            link);
     }
 
     // Une adresse e-mail peut contenir ces caractères : sans encodage, elle changerait le sens du lien.
@@ -137,12 +137,12 @@ public class OtpNetAuthenticatorCodeToolTests
     [InlineData("a?b@exemple.test", "a%3Fb%40exemple.test")]
     [InlineData("a/b@exemple.test", "a%2Fb%40exemple.test")]
     [InlineData("a:b@exemple.test", "a%3Ab%40exemple.test")]
-    public void SpecialCharactersOfTheEmailAddressCannotChangeTheMeaningOfTheLink(string emailAddressOfTheAccountInThisTest, string encodedAddressExpectedInTheLink)
+    public void SpecialCharactersOfTheEmailAddressCannotChangeTheMeaningOfTheLink(string emailAddress, string encodedAddress)
     {
-        var linkGivenToTheAuthenticatorApplicationByTheTool = toolBeingTestedWithRealCalculations.BuildLinkThatAddsThisSecretToTheApplication(SecretOfThePhonePublishedInTheRfc, emailAddressOfTheAccountInThisTest);
+        var link = tool.BuildSetupLink(RfcSecret, emailAddress);
 
         Assert.Equal(
-            "otpauth://totp/WalletFlow:" + encodedAddressExpectedInTheLink + "?secret=" + SecretOfThePhonePublishedInTheRfc + "&issuer=WalletFlow&algorithm=SHA1&digits=6&period=30",
-            linkGivenToTheAuthenticatorApplicationByTheTool);
+            "otpauth://totp/WalletFlow:" + encodedAddress + "?secret=" + RfcSecret + "&issuer=WalletFlow&algorithm=SHA1&digits=6&period=30",
+            link);
     }
 }

@@ -6,12 +6,13 @@ using WalletFlow.Application.TwoFactorAuthentication;
 using WalletFlow.Application.UserAccounts;
 using WalletFlow.Application.UserSessions;
 using WalletFlow.Domain.UsersAndSecurity;
+using WalletFlow.Infrastructure.Emails;
 using WalletFlow.Infrastructure.Persistence;
 using WalletFlow.Infrastructure.Persistence.Repositories;
 using WalletFlow.Infrastructure.Security;
 using WalletFlow.Tests.Fakes;
 using static WalletFlow.Tests.Api.RegistrationRequestTestValues;
-using static WalletFlow.Tests.Infrastructure.LocalDatabaseForTheTests;
+using static WalletFlow.Tests.Infrastructure.LocalTestDatabase;
 
 namespace WalletFlow.Tests.Infrastructure;
 
@@ -19,433 +20,442 @@ namespace WalletFlow.Tests.Infrastructure;
 // Seuls l'envoi des e-mails et l'horloge sont remplacés. Chaque test annule sa transaction à la fin : la base reste vide.
 public class TwoFactorRealChainTests
 {
-    private const string EmailAddressOfTheAccountInTheseTests = "chaine-double-auth@exemple.test";
+    private const string AccountEmail = "chaine-double-auth@exemple.test";
 
-    private static readonly IPAddress IpAddressOfTheVisitorInTheseTests = IPAddress.Parse("203.0.113.7");
+    private static readonly IPAddress IpAddress = IPAddress.Parse("203.0.113.7");
 
-    private readonly LibsodiumPasswordHasher realHasherOfThePasswordsInTheseTests = new LibsodiumPasswordHasher();
-    private readonly RandomSecureTokenGenerator realGeneratorOfTheTokensInTheseTests = new RandomSecureTokenGenerator();
-    private readonly OtpNetAuthenticatorCodeTool realToolThatCalculatesTheCodes = new OtpNetAuthenticatorCodeTool();
-    private readonly AesGcmTotpSecretProtector realProtectorOfTheSecretsInTheseTests = new AesGcmTotpSecretProtector(TwoFactorTestTools.CreateNewEncryptionKeyForOneTest());
-    private readonly FakeEmailSender senderThatKeepsTheEmailsInMemory = new FakeEmailSender();
-    private readonly FakeBackgroundEmailRequestQueue queueThatKeepsTheEmailRequestsInMemory = new FakeBackgroundEmailRequestQueue();
-    private readonly FakeTimeProviderForTests clockThatOnlyMovesWhenTestsAskIt = new FakeTimeProviderForTests();
-    private readonly InMemoryLoginsWaitingForTheirCodeStore storeOfTheLoginsWaitingForTheirCode;
-    private readonly InMemorySecretsWaitingForActivationStore storeOfTheSecretsWaitingForActivation;
-    private readonly InMemoryUsedAuthenticatorCodesRegister registerOfTheCodesAlreadyUsed;
+    private readonly LibsodiumPasswordHasher passwordHasher = RealArgonHashers.CreatePasswordHasher();
+    private readonly LibsodiumBackupCodeHasher backupCodeHasher = RealArgonHashers.CreateBackupCodeHasher();
+    private readonly RandomSecureTokenGenerator tokenGenerator = new RandomSecureTokenGenerator();
+    private readonly OtpNetAuthenticatorCodeTool authenticatorCodeTool = new OtpNetAuthenticatorCodeTool();
+    private readonly AesGcmTotpSecretProtector secretProtector = new AesGcmTotpSecretProtector(TwoFactorTestTools.CreateEncryptionKey());
+    private readonly FakeEmailSender emailSender = new FakeEmailSender();
+    private readonly FakeBackgroundEmailRequestQueue emailQueue = new FakeBackgroundEmailRequestQueue();
+    private readonly FakeTimeProvider clock = new FakeTimeProvider();
+    private readonly InMemoryWaitingLoginStore waitingLoginStore;
+    private readonly InMemoryWaitingSecretStore waitingSecretStore;
+    private readonly InMemoryUsedAuthenticatorCodesRegister usedCodesRegister;
 
     // Donne aux outils en mémoire la fausse horloge. Ils survivent aux requêtes, comme dans la vraie API.
     public TwoFactorRealChainTests()
     {
-        storeOfTheLoginsWaitingForTheirCode = new InMemoryLoginsWaitingForTheirCodeStore(clockThatOnlyMovesWhenTestsAskIt);
-        storeOfTheSecretsWaitingForActivation = new InMemorySecretsWaitingForActivationStore(clockThatOnlyMovesWhenTestsAskIt);
-        registerOfTheCodesAlreadyUsed = new InMemoryUsedAuthenticatorCodesRegister(clockThatOnlyMovesWhenTestsAskIt);
+        waitingLoginStore = new InMemoryWaitingLoginStore(clock);
+        waitingSecretStore = new InMemoryWaitingSecretStore(clock);
+        usedCodesRegister = new InMemoryUsedAuthenticatorCodesRegister(clock);
     }
 
     // Inscrit puis confirme un compte, comme le feraient deux requêtes, et renvoie son identifiant.
-    private async Task<Guid> RegisterThenConfirmNewUserAccountAsync(WalletFlowDatabaseContext databaseContextOfThisChainTest)
+    private async Task<Guid> RegisterThenConfirmAsync(WalletFlowDatabaseContext databaseContext)
     {
-        var serviceThatRegistersTheNewAccount = new AccountRegistrationService(
-            new UserAccountRepository(databaseContextOfThisChainTest),
-            realHasherOfThePasswordsInTheseTests,
-            realGeneratorOfTheTokensInTheseTests,
-            senderThatKeepsTheEmailsInMemory,
+        var registrationService = new AccountRegistrationService(
+            new UserAccountRepository(databaseContext),
+            new EntityFrameworkDatabaseUnitOfWork(databaseContext),
+            passwordHasher,
+            tokenGenerator,
+            emailSender,
+            new FrenchAccountRegistrationEmails(),
             new PublicWebsiteSettings("https://walletflow.test"),
-            new InMemoryEmailAddressRequestLimiter(clockThatOnlyMovesWhenTestsAskIt),
-            clockThatOnlyMovesWhenTestsAskIt);
-        await serviceThatRegistersTheNewAccount.RegisterNewAccountForVisitorAsync(EmailAddressOfTheAccountInTheseTests, ValidPasswordChosenInTheseTests);
-        databaseContextOfThisChainTest.ChangeTracker.Clear();
+            new InMemoryEmailAddressRequestLimiter(clock),
+            clock);
+        await registrationService.RegisterAsync(AccountEmail, ValidPassword);
+        databaseContext.ChangeTracker.Clear();
 
-        var serviceThatConfirmsTheNewAccount = new AccountConfirmationService(
-            new UserAccountRepository(databaseContextOfThisChainTest),
-            realHasherOfThePasswordsInTheseTests,
-            realGeneratorOfTheTokensInTheseTests,
-            clockThatOnlyMovesWhenTestsAskIt);
-        var resultOfTheConfirmationOfTheAccount = await serviceThatConfirmsTheNewAccount.ConfirmAccountWithLinkTokenAndPasswordAsync(
-            ReadTokenWrittenInTheConfirmationLink(senderThatKeepsTheEmailsInMemory.SentEmails.Last().Body),
-            ValidPasswordChosenInTheseTests);
-        Assert.True(resultOfTheConfirmationOfTheAccount.IsConfirmed);
-        databaseContextOfThisChainTest.ChangeTracker.Clear();
+        var confirmationService = new AccountConfirmationService(
+            new UserAccountRepository(databaseContext),
+            new EntityFrameworkDatabaseUnitOfWork(databaseContext),
+            passwordHasher,
+            tokenGenerator,
+            clock);
+        var result = await confirmationService.ConfirmAsync(
+            ReadConfirmationToken(emailSender.SentEmails.Last().Body),
+            ValidPassword);
+        Assert.Equal(AccountConfirmationResult.AccountConfirmed, result);
+        databaseContext.ChangeTracker.Clear();
 
-        var accountReadBackFromTheRealDatabase = await databaseContextOfThisChainTest.Users.AsNoTracking().SingleAsync(userSearchedInTheDatabaseTable =>
-            userSearchedInTheDatabaseTable.Email == EmailAddressOfTheAccountInTheseTests);
+        var reloadedAccount = await databaseContext.Users.AsNoTracking().SingleAsync(row =>
+            row.Email == AccountEmail);
 
-        return accountReadBackFromTheRealDatabase.Id;
+        return reloadedAccount.Id;
     }
 
     // Crée le service qui vérifie les codes, sur cet accès à la base.
-    private TwoFactorCodeCheckingService CreateRealCodeCheckingServiceOnThisContext(WalletFlowDatabaseContext databaseContextOfThisChainTest)
+    private TwoFactorCodeCheckingService CreateCodeCheckingService(WalletFlowDatabaseContext databaseContext)
     {
         return new TwoFactorCodeCheckingService(
-            new TwoFactorAuthenticationRepository(databaseContextOfThisChainTest),
-            realHasherOfThePasswordsInTheseTests,
-            realToolThatCalculatesTheCodes,
-            realProtectorOfTheSecretsInTheseTests,
-            registerOfTheCodesAlreadyUsed,
-            clockThatOnlyMovesWhenTestsAskIt);
+            new TwoFactorAuthenticationRepository(databaseContext),
+            backupCodeHasher,
+            authenticatorCodeTool,
+            secretProtector,
+            usedCodesRegister,
+            clock);
     }
 
     // Crée le service qui ouvre les sessions, sur cet accès à la base.
-    private UserSessionOpeningService CreateRealSessionOpeningServiceOnThisContext(WalletFlowDatabaseContext databaseContextOfThisChainTest)
+    private UserSessionOpeningService CreateSessionOpeningService(WalletFlowDatabaseContext databaseContext)
     {
         return new UserSessionOpeningService(
-            new UserAccountRepository(databaseContextOfThisChainTest),
-            new UserSessionRepository(databaseContextOfThisChainTest),
-            new TwoFactorAuthenticationRepository(databaseContextOfThisChainTest),
-            realGeneratorOfTheTokensInTheseTests,
-            clockThatOnlyMovesWhenTestsAskIt);
+            new UserAccountRepository(databaseContext),
+            new UserSessionRepository(databaseContext),
+            new TwoFactorAuthenticationRepository(databaseContext),
+            CreateSavingService(databaseContext),
+            CreateSecurityJournal(databaseContext, clock),
+            tokenGenerator,
+            clock);
     }
 
     // Active la double authentification comme le feraient deux requêtes. Renvoie le secret du téléphone et les codes de secours.
-    private async Task<(string SecretOfThePhone, List<string> BackupCodesOfTheUser)> ActivateTwoFactorLikeTwoRealRequestsAsync(WalletFlowDatabaseContext databaseContextOfThisChainTest, Guid identifierOfTheUserAccountInTheseTests)
+    private async Task<(string SecretOfThePhone, List<string> BackupCodesOfTheUser)> ActivateTwoFactorAsync(WalletFlowDatabaseContext databaseContext, Guid accountId)
     {
-        var resultOfTheStartOfTheActivation = await CreateRealTwoFactorActivationServiceOnThisContext(databaseContextOfThisChainTest).StartActivationWithThePasswordOfTheUserAsync(identifierOfTheUserAccountInTheseTests, ValidPasswordChosenInTheseTests, IpAddressOfTheVisitorInTheseTests);
-        databaseContextOfThisChainTest.ChangeTracker.Clear();
-        var secretSharedWithThePhoneOfTheUser = resultOfTheStartOfTheActivation.SecretOfTheAuthenticatorApplication!;
+        var startResult = await CreateActivationService(databaseContext).StartAsync(accountId, ValidPassword, IpAddress);
+        databaseContext.ChangeTracker.Clear();
+        var secret = Assert.IsType<TwoFactorActivationStartResult.Started>(startResult).Secret;
 
-        var resultOfTheEndOfTheActivation = await CreateRealTwoFactorActivationServiceOnThisContext(databaseContextOfThisChainTest).FinishActivationWithTheFirstCodeOfTheUserAsync(identifierOfTheUserAccountInTheseTests, CalculateCodeShownOnThePhoneNow(secretSharedWithThePhoneOfTheUser), IpAddressOfTheVisitorInTheseTests);
-        databaseContextOfThisChainTest.ChangeTracker.Clear();
-        Assert.True(resultOfTheEndOfTheActivation.IsTwoFactorActivated);
+        var finishResult = await CreateActivationService(databaseContext).FinishAsync(accountId, CalculateCurrentCode(secret), IpAddress);
+        databaseContext.ChangeTracker.Clear();
+        Assert.IsType<TwoFactorActivationFinishResult.Activated>(finishResult);
 
-        return (secretSharedWithThePhoneOfTheUser, resultOfTheEndOfTheActivation.BackupCodesToGiveOnlyOnce!);
+        return (secret, Assert.IsType<TwoFactorActivationFinishResult.Activated>(finishResult).BackupCodes);
     }
 
     // Crée le service qui active la double authentification, sur cet accès à la base.
-    private TwoFactorActivationService CreateRealTwoFactorActivationServiceOnThisContext(WalletFlowDatabaseContext databaseContextOfThisChainTest)
+    private TwoFactorActivationService CreateActivationService(WalletFlowDatabaseContext databaseContext)
     {
         return new TwoFactorActivationService(
-            new UserAccountRepository(databaseContextOfThisChainTest),
-            new TwoFactorAuthenticationRepository(databaseContextOfThisChainTest),
-            new SecurityEventRepository(databaseContextOfThisChainTest),
-            realHasherOfThePasswordsInTheseTests,
-            realGeneratorOfTheTokensInTheseTests,
-            realToolThatCalculatesTheCodes,
-            realProtectorOfTheSecretsInTheseTests,
-            storeOfTheSecretsWaitingForActivation,
-            CreateRealCodeCheckingServiceOnThisContext(databaseContextOfThisChainTest),
-            clockThatOnlyMovesWhenTestsAskIt);
+            new UserAccountRepository(databaseContext),
+            new TwoFactorAuthenticationRepository(databaseContext),
+            CreateSavingService(databaseContext),
+            CreateSecurityJournal(databaseContext, clock),
+            passwordHasher,
+            backupCodeHasher,
+            tokenGenerator,
+            authenticatorCodeTool,
+            secretProtector,
+            waitingSecretStore,
+            CreateCodeCheckingService(databaseContext));
     }
 
     // Désactive comme le ferait une requête.
-    private async Task<TwoFactorDeactivationResult> DeactivateLikeOneRealRequestAsync(WalletFlowDatabaseContext databaseContextOfThisChainTest, Guid identifierOfTheUserAccountInTheseTests, string codeTypedByTheUserInThisTest)
+    private async Task<TwoFactorDeactivationResult> DeactivateAsync(WalletFlowDatabaseContext databaseContext, Guid accountId, string code)
     {
-        var serviceThatDeactivatesTheTwoFactor = new TwoFactorDeactivationService(
-            new UserAccountRepository(databaseContextOfThisChainTest),
-            new TwoFactorAuthenticationRepository(databaseContextOfThisChainTest),
-            new SecurityEventRepository(databaseContextOfThisChainTest),
-            realHasherOfThePasswordsInTheseTests,
-            CreateRealCodeCheckingServiceOnThisContext(databaseContextOfThisChainTest),
-            clockThatOnlyMovesWhenTestsAskIt);
-        var resultOfTheDeactivationOfTheTwoFactor = await serviceThatDeactivatesTheTwoFactor.DeactivateTwoFactorWithPasswordAndCodeOfTheUserAsync(identifierOfTheUserAccountInTheseTests, ValidPasswordChosenInTheseTests, codeTypedByTheUserInThisTest, IpAddressOfTheVisitorInTheseTests);
-        databaseContextOfThisChainTest.ChangeTracker.Clear();
+        var deactivationService = new TwoFactorDeactivationService(
+            new UserAccountRepository(databaseContext),
+            new TwoFactorAuthenticationRepository(databaseContext),
+            CreateSavingService(databaseContext),
+            CreateSecurityJournal(databaseContext, clock),
+            passwordHasher,
+            CreateCodeCheckingService(databaseContext));
+        var result = await deactivationService.DeactivateAsync(accountId, ValidPassword, code, IpAddress);
+        databaseContext.ChangeTracker.Clear();
 
-        return resultOfTheDeactivationOfTheTwoFactor;
+        return result;
     }
 
     // Donne le mot de passe comme le ferait une requête.
-    private async Task<AccountLoginResult> LogInWithThePasswordLikeOneRealRequestAsync(WalletFlowDatabaseContext databaseContextOfThisChainTest, string passwordTypedByTheVisitorInThisTest = ValidPasswordChosenInTheseTests)
+    private async Task<AccountLoginResult> LogInWithPasswordAsync(WalletFlowDatabaseContext databaseContext, string password = ValidPassword)
     {
-        var serviceThatLogsTheVisitorIn = new AccountLoginService(
-            new UserAccountRepository(databaseContextOfThisChainTest),
-            new SecurityEventRepository(databaseContextOfThisChainTest),
-            queueThatKeepsTheEmailRequestsInMemory,
-            realHasherOfThePasswordsInTheseTests,
-            realGeneratorOfTheTokensInTheseTests,
-            storeOfTheLoginsWaitingForTheirCode,
-            CreateRealSessionOpeningServiceOnThisContext(databaseContextOfThisChainTest),
-            clockThatOnlyMovesWhenTestsAskIt);
-        var resultOfTheLoginAttemptOfTheVisitor = await serviceThatLogsTheVisitorIn.LogVisitorInWithEmailAddressAndPasswordAsync(new LoginAttemptFromVisitor
+        var loginService = new AccountLoginService(
+            new UserAccountRepository(databaseContext),
+            CreateSavingService(databaseContext),
+            CreateSecurityJournal(databaseContext, clock),
+            emailQueue,
+            passwordHasher,
+            tokenGenerator,
+            waitingLoginStore,
+            CreateSessionOpeningService(databaseContext),
+            clock);
+        var result = await loginService.LogInAsync(new LoginAttempt
         {
-            EmailAddressTypedByTheVisitor = EmailAddressOfTheAccountInTheseTests,
-            PasswordTextTypedByTheVisitor = passwordTypedByTheVisitorInThisTest,
-            IpAddressOfTheVisitor = IpAddressOfTheVisitorInTheseTests
+            EmailAddress = AccountEmail,
+            Password = password,
+            IpAddress = IpAddress
         });
-        databaseContextOfThisChainTest.ChangeTracker.Clear();
+        databaseContext.ChangeTracker.Clear();
 
-        return resultOfTheLoginAttemptOfTheVisitor;
+        return result;
     }
 
     // Finit la connexion comme le ferait une requête.
-    private async Task<TwoFactorLoginResult> FinishLoginLikeOneRealRequestAsync(WalletFlowDatabaseContext databaseContextOfThisChainTest, string waitingLoginTokenOfTheVisitor, string codeTypedByTheVisitorInThisTest)
+    private async Task<TwoFactorLoginResult> FinishLoginAsync(WalletFlowDatabaseContext databaseContext, string waitingLoginToken, string code)
     {
-        var serviceThatFinishesTheLoginWithACode = new TwoFactorLoginService(
-            new UserAccountRepository(databaseContextOfThisChainTest),
-            new SecurityEventRepository(databaseContextOfThisChainTest),
-            realGeneratorOfTheTokensInTheseTests,
-            storeOfTheLoginsWaitingForTheirCode,
-            CreateRealCodeCheckingServiceOnThisContext(databaseContextOfThisChainTest),
-            CreateRealSessionOpeningServiceOnThisContext(databaseContextOfThisChainTest),
-            clockThatOnlyMovesWhenTestsAskIt);
-        var resultOfTheCodeAttemptOfTheVisitor = await serviceThatFinishesTheLoginWithACode.FinishLoginOfTheVisitorWithThisCodeAsync(new TwoFactorCodeAttemptFromVisitor
+        var twoFactorLoginService = new TwoFactorLoginService(
+            new UserAccountRepository(databaseContext),
+            CreateSecurityJournal(databaseContext, clock),
+            tokenGenerator,
+            waitingLoginStore,
+            CreateCodeCheckingService(databaseContext),
+            CreateSessionOpeningService(databaseContext));
+        var result = await twoFactorLoginService.FinishAsync(new TwoFactorCodeAttempt
         {
-            CodeTypedByTheVisitor = codeTypedByTheVisitorInThisTest,
-            IpAddressOfTheVisitor = IpAddressOfTheVisitorInTheseTests,
-            WaitingLoginTokenReadInTheCookie = waitingLoginTokenOfTheVisitor
+            Code = code,
+            IpAddress = IpAddress,
+            WaitingLoginToken = waitingLoginToken
         });
-        databaseContextOfThisChainTest.ChangeTracker.Clear();
+        databaseContext.ChangeTracker.Clear();
 
-        return resultOfTheCodeAttemptOfTheVisitor;
+        return result;
     }
 
     // Calcule le code qu'affiche le téléphone à la date de la fausse horloge.
-    private string CalculateCodeShownOnThePhoneNow(string secretSharedWithThePhoneOfTheUser)
+    private string CalculateCurrentCode(string secret)
     {
-        return TwoFactorTestTools.CalculateAuthenticatorCodeShownAtThisDate(secretSharedWithThePhoneOfTheUser, clockThatOnlyMovesWhenTestsAskIt.GetUtcNow());
+        return TwoFactorTestTools.CalculateCodeAt(secret, clock.GetUtcNow());
     }
 
     // Passe à la période suivante : le téléphone affiche un nouveau code.
-    private void WaitForTheNextCodeOnThePhone()
+    private void WaitForNextCode()
     {
-        clockThatOnlyMovesWhenTestsAskIt.MoveFakeClockForwardByThisDuration(TimeSpan.FromSeconds(TwoFactorTestTools.NumberOfSecondsInOneAuthenticatorPeriod));
+        clock.Advance(TimeSpan.FromSeconds(TwoFactorTestTools.PeriodInSeconds));
     }
 
     // Compte les événements de ce type et de ce résultat dans le vrai journal, pour ce compte.
-    private static async Task<int> CountSecurityEventsOfThisAccountAsync(
-        WalletFlowDatabaseContext databaseContextOfThisChainTest,
-        Guid identifierOfTheAccountInTheJournal,
-        SecurityEventType typeOfTheEventsToCount,
-        SecurityEventResult resultOfTheEventsToCount)
+    private static async Task<int> CountSecurityEventsAsync(
+        WalletFlowDatabaseContext databaseContext,
+        Guid accountId,
+        SecurityEventType type,
+        SecurityEventResult result)
     {
-        return await databaseContextOfThisChainTest.SecurityEvents.CountAsync(eventSearchedInTheDatabaseTable =>
-            eventSearchedInTheDatabaseTable.UserId == identifierOfTheAccountInTheJournal
-            && eventSearchedInTheDatabaseTable.Type == typeOfTheEventsToCount
-            && eventSearchedInTheDatabaseTable.Result == resultOfTheEventsToCount);
+        return await databaseContext.SecurityEvents.CountAsync(row =>
+            row.UserId == accountId
+            && row.Type == type
+            && row.Result == result);
     }
 
     // Relit le compte dans la vraie base, sans passer par les objets en mémoire.
-    private static async Task<User> ReadAccountBackFromTheRealDatabaseAsync(WalletFlowDatabaseContext databaseContextOfThisChainTest, Guid identifierOfTheUserAccountInTheseTests)
+    private static async Task<User> ReadAccountAsync(WalletFlowDatabaseContext databaseContext, Guid accountId)
     {
-        return await databaseContextOfThisChainTest.Users.AsNoTracking().SingleAsync(userSearchedInTheDatabaseTable => userSearchedInTheDatabaseTable.Id == identifierOfTheUserAccountInTheseTests);
+        return await databaseContext.Users.AsNoTracking().SingleAsync(row => row.Id == accountId);
     }
 
     // Tout le début du parcours : activer, puis se reconnecter avec un vrai code calculé par une vraie bibliothèque.
     [Fact]
     public async Task ActivationThenLoginWithARealCodeWorkOnTheRealDatabase()
     {
-        await using var databaseContextOfThisChainTest = CreateDatabaseContextConnectedToLocalDatabase();
-        await using var transactionCancelledAtTheEndOfThisTest = await databaseContextOfThisChainTest.Database.BeginTransactionAsync();
-        var identifierOfTheUserAccountInTheseTests = await RegisterThenConfirmNewUserAccountAsync(databaseContextOfThisChainTest);
+        await using var databaseContext = CreateDatabaseContext();
+        await using var transaction = await databaseContext.Database.BeginTransactionAsync();
+        var accountId = await RegisterThenConfirmAsync(databaseContext);
 
-        var (secretSharedWithThePhoneOfTheUser, backupCodesGivenToTheUserAtActivation) = await ActivateTwoFactorLikeTwoRealRequestsAsync(databaseContextOfThisChainTest, identifierOfTheUserAccountInTheseTests);
+        var (secret, givenCodes) = await ActivateTwoFactorAsync(databaseContext, accountId);
 
-        var accountReadAgainAfterTheActivation = await ReadAccountBackFromTheRealDatabaseAsync(databaseContextOfThisChainTest, identifierOfTheUserAccountInTheseTests);
-        Assert.True(accountReadAgainAfterTheActivation.IsTwoFactorEnabled);
-        Assert.DoesNotContain(secretSharedWithThePhoneOfTheUser, accountReadAgainAfterTheActivation.EncryptedTotpSecret);
-        Assert.Equal(secretSharedWithThePhoneOfTheUser, realProtectorOfTheSecretsInTheseTests.DecryptSecretOfThisUserAccount(accountReadAgainAfterTheActivation.EncryptedTotpSecret!, identifierOfTheUserAccountInTheseTests));
-        Assert.Equal(10, backupCodesGivenToTheUserAtActivation.Count);
-        Assert.Equal(1, await CountSecurityEventsOfThisAccountAsync(databaseContextOfThisChainTest, identifierOfTheUserAccountInTheseTests, SecurityEventType.TwoFactorActivation, SecurityEventResult.Success));
+        var reloadedAccount = await ReadAccountAsync(databaseContext, accountId);
+        Assert.True(reloadedAccount.IsTwoFactorEnabled);
+        Assert.DoesNotContain(secret, reloadedAccount.EncryptedTotpSecret);
+        Assert.Equal(secret, secretProtector.Decrypt(reloadedAccount.EncryptedTotpSecret!, accountId));
+        Assert.Equal(10, givenCodes.Count);
+        Assert.Equal(1, await CountSecurityEventsAsync(databaseContext, accountId, SecurityEventType.TwoFactorActivation, SecurityEventResult.Success));
 
-        var backupCodesInTheRealDatabase = await databaseContextOfThisChainTest.BackupCodes.AsNoTracking().Where(backupCodeSearchedInTheDatabaseTable => backupCodeSearchedInTheDatabaseTable.UserId == identifierOfTheUserAccountInTheseTests).ToListAsync();
-        Assert.Equal(10, backupCodesInTheRealDatabase.Count);
-        foreach (var backupCodeInTheRealDatabase in backupCodesInTheRealDatabase)
+        var storedCodes = await databaseContext.BackupCodes.AsNoTracking().Where(row => row.UserId == accountId).ToListAsync();
+        Assert.Equal(10, storedCodes.Count);
+        foreach (var storedCode in storedCodes)
         {
-            Assert.StartsWith("$argon2id$", backupCodeInTheRealDatabase.CodeHash);
-            Assert.Null(backupCodeInTheRealDatabase.UsedAt);
+            Assert.StartsWith(LibsodiumBackupCodeHasher.HashPrefix, storedCode.CodeHash);
+            Assert.Null(storedCode.UsedAt);
         }
 
-        var resultOfTheLoginWithThePasswordAlone = await LogInWithThePasswordLikeOneRealRequestAsync(databaseContextOfThisChainTest);
-        Assert.True(resultOfTheLoginWithThePasswordAlone.IsWaitingForTwoFactorCode);
-        Assert.Equal(0, await databaseContextOfThisChainTest.UserSessions.CountAsync(sessionSearchedInTheDatabaseTable => sessionSearchedInTheDatabaseTable.UserId == identifierOfTheUserAccountInTheseTests));
-        Assert.Equal(1, (await ReadAccountBackFromTheRealDatabaseAsync(databaseContextOfThisChainTest, identifierOfTheUserAccountInTheseTests)).FailedLoginAttemptCount);
+        var passwordResult = await LogInWithPasswordAsync(databaseContext);
+        Assert.IsType<AccountLoginResult.WaitingForTwoFactorCode>(passwordResult);
+        Assert.Equal(0, await databaseContext.UserSessions.CountAsync(row => row.UserId == accountId));
+        Assert.Equal(1, (await ReadAccountAsync(databaseContext, accountId)).FailedLoginAttemptCount);
 
-        WaitForTheNextCodeOnThePhone();
-        var resultOfTheCodeOfTheVisitor = await FinishLoginLikeOneRealRequestAsync(databaseContextOfThisChainTest, resultOfTheLoginWithThePasswordAlone.WaitingLoginTokenToPutInTheCookie!, CalculateCodeShownOnThePhoneNow(secretSharedWithThePhoneOfTheUser));
+        WaitForNextCode();
+        var codeResult = await FinishLoginAsync(databaseContext, Assert.IsType<AccountLoginResult.WaitingForTwoFactorCode>(passwordResult).WaitingLoginToken, CalculateCurrentCode(secret));
 
-        Assert.True(resultOfTheCodeOfTheVisitor.IsLoggedIn);
-        Assert.Equal(1, await databaseContextOfThisChainTest.UserSessions.CountAsync(sessionSearchedInTheDatabaseTable => sessionSearchedInTheDatabaseTable.UserId == identifierOfTheUserAccountInTheseTests));
-        Assert.Equal(1, await databaseContextOfThisChainTest.Devices.CountAsync(deviceSearchedInTheDatabaseTable => deviceSearchedInTheDatabaseTable.UserId == identifierOfTheUserAccountInTheseTests));
-        Assert.Equal(0, (await ReadAccountBackFromTheRealDatabaseAsync(databaseContextOfThisChainTest, identifierOfTheUserAccountInTheseTests)).FailedLoginAttemptCount);
-        Assert.Equal(1, await CountSecurityEventsOfThisAccountAsync(databaseContextOfThisChainTest, identifierOfTheUserAccountInTheseTests, SecurityEventType.Login, SecurityEventResult.Success));
+        Assert.IsType<TwoFactorLoginResult.LoggedIn>(codeResult);
+        Assert.Equal(1, await databaseContext.UserSessions.CountAsync(row => row.UserId == accountId));
+        Assert.Equal(1, await databaseContext.Devices.CountAsync(row => row.UserId == accountId));
+        Assert.Equal(0, (await ReadAccountAsync(databaseContext, accountId)).FailedLoginAttemptCount);
+        Assert.Equal(1, await CountSecurityEventsAsync(databaseContext, accountId, SecurityEventType.Login, SecurityEventResult.Success));
 
-        var serviceOfTheSessionsBeingTested = new UserSessionService(new UserSessionRepository(databaseContextOfThisChainTest), realGeneratorOfTheTokensInTheseTests, clockThatOnlyMovesWhenTestsAskIt);
-        Assert.Equal(identifierOfTheUserAccountInTheseTests, await serviceOfTheSessionsBeingTested.FindOwnerOfTheActiveSessionThenRecordItsActivityAsync(resultOfTheCodeOfTheVisitor.SessionTokenToPutInTheCookie!));
+        var sessionService = new UserSessionService(new UserSessionRepository(databaseContext), tokenGenerator, clock);
+        Assert.Equal(accountId, await sessionService.FindOwnerAndRecordActivityAsync(Assert.IsType<TwoFactorLoginResult.LoggedIn>(codeResult).SessionToken));
     }
 
     [Fact]
     public async Task WrongCodesAreWrittenInTheRealJournalAndOpenNothing()
     {
-        await using var databaseContextOfThisChainTest = CreateDatabaseContextConnectedToLocalDatabase();
-        await using var transactionCancelledAtTheEndOfThisTest = await databaseContextOfThisChainTest.Database.BeginTransactionAsync();
-        var identifierOfTheUserAccountInTheseTests = await RegisterThenConfirmNewUserAccountAsync(databaseContextOfThisChainTest);
-        var (secretSharedWithThePhoneOfTheUser, _) = await ActivateTwoFactorLikeTwoRealRequestsAsync(databaseContextOfThisChainTest, identifierOfTheUserAccountInTheseTests);
-        var resultOfTheLoginWithThePasswordAlone = await LogInWithThePasswordLikeOneRealRequestAsync(databaseContextOfThisChainTest);
-        var codeThatIsWrongInThisTest = TwoFactorTestTools.FindAuthenticatorCodeThatIsWrongAtThisDate(secretSharedWithThePhoneOfTheUser, clockThatOnlyMovesWhenTestsAskIt.GetUtcNow());
+        await using var databaseContext = CreateDatabaseContext();
+        await using var transaction = await databaseContext.Database.BeginTransactionAsync();
+        var accountId = await RegisterThenConfirmAsync(databaseContext);
+        var (secret, _) = await ActivateTwoFactorAsync(databaseContext, accountId);
+        var passwordResult = await LogInWithPasswordAsync(databaseContext);
+        var wrongCode = TwoFactorTestTools.FindWrongCodeAt(secret, clock.GetUtcNow());
 
-        for (var numberOfTheWrongCodeBeingTried = 1; numberOfTheWrongCodeBeingTried <= 4; numberOfTheWrongCodeBeingTried++)
+        for (var attemptNumber = 1; attemptNumber <= 4; attemptNumber++)
         {
-            var resultOfOneWrongCodeOfTheVisitor = await FinishLoginLikeOneRealRequestAsync(databaseContextOfThisChainTest, resultOfTheLoginWithThePasswordAlone.WaitingLoginTokenToPutInTheCookie!, codeThatIsWrongInThisTest);
-            Assert.NotNull(resultOfOneWrongCodeOfTheVisitor.WrongCodeErrorMessage);
+            var wrongCodeResult = await FinishLoginAsync(databaseContext, Assert.IsType<AccountLoginResult.WaitingForTwoFactorCode>(passwordResult).WaitingLoginToken, wrongCode);
+            Assert.IsType<TwoFactorLoginResult.WrongCode>(wrongCodeResult);
         }
 
-        var resultOfTheFifthWrongCode = await FinishLoginLikeOneRealRequestAsync(databaseContextOfThisChainTest, resultOfTheLoginWithThePasswordAlone.WaitingLoginTokenToPutInTheCookie!, codeThatIsWrongInThisTest);
+        var fifthResult = await FinishLoginAsync(databaseContext, Assert.IsType<AccountLoginResult.WaitingForTwoFactorCode>(passwordResult).WaitingLoginToken, wrongCode);
 
-        Assert.NotNull(resultOfTheFifthWrongCode.LoginMustRestartErrorMessage);
-        Assert.Equal(5, await CountSecurityEventsOfThisAccountAsync(databaseContextOfThisChainTest, identifierOfTheUserAccountInTheseTests, SecurityEventType.Login, SecurityEventResult.Failure));
-        Assert.Equal(0, await databaseContextOfThisChainTest.UserSessions.CountAsync(sessionSearchedInTheDatabaseTable => sessionSearchedInTheDatabaseTable.UserId == identifierOfTheUserAccountInTheseTests));
+        Assert.IsType<TwoFactorLoginResult.LoginMustRestart>(fifthResult);
+        Assert.Equal(5, await CountSecurityEventsAsync(databaseContext, accountId, SecurityEventType.Login, SecurityEventResult.Failure));
+        Assert.Equal(0, await databaseContext.UserSessions.CountAsync(row => row.UserId == accountId));
     }
 
     // Les vrais codes passent par le vrai Argon2 : un code de secours n'est utilisable qu'une fois, écrit avec ou sans son tiret.
     [Fact]
     public async Task BackupCodeWorksOnceWithTheRealHasherOnTheRealDatabase()
     {
-        await using var databaseContextOfThisChainTest = CreateDatabaseContextConnectedToLocalDatabase();
-        await using var transactionCancelledAtTheEndOfThisTest = await databaseContextOfThisChainTest.Database.BeginTransactionAsync();
-        var identifierOfTheUserAccountInTheseTests = await RegisterThenConfirmNewUserAccountAsync(databaseContextOfThisChainTest);
-        var (_, backupCodesGivenToTheUserAtActivation) = await ActivateTwoFactorLikeTwoRealRequestsAsync(databaseContextOfThisChainTest, identifierOfTheUserAccountInTheseTests);
+        await using var databaseContext = CreateDatabaseContext();
+        await using var transaction = await databaseContext.Database.BeginTransactionAsync();
+        var accountId = await RegisterThenConfirmAsync(databaseContext);
+        var (_, givenCodes) = await ActivateTwoFactorAsync(databaseContext, accountId);
 
-        var firstLoginOfTheAccountWithThePassword = await LogInWithThePasswordLikeOneRealRequestAsync(databaseContextOfThisChainTest);
-        var resultOfTheFirstUseOfTheCode = await FinishLoginLikeOneRealRequestAsync(databaseContextOfThisChainTest, firstLoginOfTheAccountWithThePassword.WaitingLoginTokenToPutInTheCookie!, backupCodesGivenToTheUserAtActivation[7]);
-        Assert.True(resultOfTheFirstUseOfTheCode.IsLoggedIn);
-        Assert.Equal(1, await databaseContextOfThisChainTest.BackupCodes.CountAsync(backupCodeSearchedInTheDatabaseTable => backupCodeSearchedInTheDatabaseTable.UserId == identifierOfTheUserAccountInTheseTests && backupCodeSearchedInTheDatabaseTable.UsedAt == clockThatOnlyMovesWhenTestsAskIt.GetUtcNow().UtcDateTime));
+        var firstLogin = await LogInWithPasswordAsync(databaseContext);
+        var firstUseResult = await FinishLoginAsync(databaseContext, Assert.IsType<AccountLoginResult.WaitingForTwoFactorCode>(firstLogin).WaitingLoginToken, givenCodes[7]);
+        Assert.IsType<TwoFactorLoginResult.LoggedIn>(firstUseResult);
+        Assert.Equal(1, await databaseContext.BackupCodes.CountAsync(row => row.UserId == accountId && row.UsedAt == clock.GetUtcNow().UtcDateTime));
 
-        var secondLoginOfTheAccountWithThePassword = await LogInWithThePasswordLikeOneRealRequestAsync(databaseContextOfThisChainTest);
-        var resultOfTheSecondUseOfTheCode = await FinishLoginLikeOneRealRequestAsync(databaseContextOfThisChainTest, secondLoginOfTheAccountWithThePassword.WaitingLoginTokenToPutInTheCookie!, backupCodesGivenToTheUserAtActivation[7].Replace("-", "").ToLowerInvariant());
-        Assert.Equal(TwoFactorCodeCheckingService.ErrorMessageForWrongTwoFactorCode, resultOfTheSecondUseOfTheCode.WrongCodeErrorMessage);
+        var secondLogin = await LogInWithPasswordAsync(databaseContext);
+        var secondUseResult = await FinishLoginAsync(databaseContext, Assert.IsType<AccountLoginResult.WaitingForTwoFactorCode>(secondLogin).WaitingLoginToken, givenCodes[7].Replace("-", "").ToLowerInvariant());
+        Assert.IsType<TwoFactorLoginResult.WrongCode>(secondUseResult);
 
-        var resultOfTheLoginWithAnotherBackupCode = await FinishLoginLikeOneRealRequestAsync(databaseContextOfThisChainTest, secondLoginOfTheAccountWithThePassword.WaitingLoginTokenToPutInTheCookie!, backupCodesGivenToTheUserAtActivation[2].Replace("-", "").ToLowerInvariant());
-        Assert.True(resultOfTheLoginWithAnotherBackupCode.IsLoggedIn);
+        var otherCodeResult = await FinishLoginAsync(databaseContext, Assert.IsType<AccountLoginResult.WaitingForTwoFactorCode>(secondLogin).WaitingLoginToken, givenCodes[2].Replace("-", "").ToLowerInvariant());
+        Assert.IsType<TwoFactorLoginResult.LoggedIn>(otherCodeResult);
     }
 
     // Le verrou réel : 5 connexions avec le bon mot de passe, puis le propriétaire entre avec son code et le blocage disparaît.
     [Fact]
     public async Task LoginsWithTheRightPasswordOnlyReallyLockTheAccountAndTheRightCodeRemovesTheLock()
     {
-        await using var databaseContextOfThisChainTest = CreateDatabaseContextConnectedToLocalDatabase();
-        await using var transactionCancelledAtTheEndOfThisTest = await databaseContextOfThisChainTest.Database.BeginTransactionAsync();
-        var identifierOfTheUserAccountInTheseTests = await RegisterThenConfirmNewUserAccountAsync(databaseContextOfThisChainTest);
-        var (secretSharedWithThePhoneOfTheUser, _) = await ActivateTwoFactorLikeTwoRealRequestsAsync(databaseContextOfThisChainTest, identifierOfTheUserAccountInTheseTests);
-        WaitForTheNextCodeOnThePhone();
+        await using var databaseContext = CreateDatabaseContext();
+        await using var transaction = await databaseContext.Database.BeginTransactionAsync();
+        var accountId = await RegisterThenConfirmAsync(databaseContext);
+        var (secret, _) = await ActivateTwoFactorAsync(databaseContext, accountId);
+        WaitForNextCode();
 
-        AccountLoginResult resultOfTheLastLogin = new AccountLoginResult();
-        for (var numberOfTheLoginBeingTried = 1; numberOfTheLoginBeingTried <= 5; numberOfTheLoginBeingTried++)
+        var lastWaitingLoginToken = "";
+        for (var attemptNumber = 1; attemptNumber <= 5; attemptNumber++)
         {
-            resultOfTheLastLogin = await LogInWithThePasswordLikeOneRealRequestAsync(databaseContextOfThisChainTest);
-            Assert.True(resultOfTheLastLogin.IsWaitingForTwoFactorCode);
+            var attemptResult = await LogInWithPasswordAsync(databaseContext);
+            lastWaitingLoginToken = Assert.IsType<AccountLoginResult.WaitingForTwoFactorCode>(attemptResult).WaitingLoginToken;
         }
 
-        var accountReadAgainAfterTheLock = await ReadAccountBackFromTheRealDatabaseAsync(databaseContextOfThisChainTest, identifierOfTheUserAccountInTheseTests);
-        Assert.NotNull(accountReadAgainAfterTheLock.LockoutEndsAt);
-        Assert.Equal(1, accountReadAgainAfterTheLock.LockoutCount);
-        Assert.Equal(1, await CountSecurityEventsOfThisAccountAsync(databaseContextOfThisChainTest, identifierOfTheUserAccountInTheseTests, SecurityEventType.Lockout, SecurityEventResult.Success));
-        Assert.Single(queueThatKeepsTheEmailRequestsInMemory.RequestsAddedToTheBackgroundQueue);
+        var lockedAccount = await ReadAccountAsync(databaseContext, accountId);
+        Assert.NotNull(lockedAccount.LockoutEndsAt);
+        Assert.Equal(1, lockedAccount.LockoutCount);
+        Assert.Equal(1, await CountSecurityEventsAsync(databaseContext, accountId, SecurityEventType.Lockout, SecurityEventResult.Success));
+        Assert.Single(emailQueue.AddedRequests);
 
-        var resultOfTheLoginDuringTheLock = await LogInWithThePasswordLikeOneRealRequestAsync(databaseContextOfThisChainTest);
-        Assert.False(resultOfTheLoginDuringTheLock.IsWaitingForTwoFactorCode);
+        var lockedResult = await LogInWithPasswordAsync(databaseContext);
+        Assert.IsNotType<AccountLoginResult.WaitingForTwoFactorCode>(lockedResult);
 
-        var resultOfTheCodeOfTheVisitor = await FinishLoginLikeOneRealRequestAsync(databaseContextOfThisChainTest, resultOfTheLastLogin.WaitingLoginTokenToPutInTheCookie!, CalculateCodeShownOnThePhoneNow(secretSharedWithThePhoneOfTheUser));
+        var codeResult = await FinishLoginAsync(databaseContext, lastWaitingLoginToken, CalculateCurrentCode(secret));
 
-        Assert.True(resultOfTheCodeOfTheVisitor.IsLoggedIn);
-        var accountReadAgainAfterTheLogin = await ReadAccountBackFromTheRealDatabaseAsync(databaseContextOfThisChainTest, identifierOfTheUserAccountInTheseTests);
-        Assert.Null(accountReadAgainAfterTheLogin.LockoutEndsAt);
-        Assert.Equal(0, accountReadAgainAfterTheLogin.FailedLoginAttemptCount);
-        Assert.Equal(0, accountReadAgainAfterTheLogin.LockoutCount);
+        Assert.IsType<TwoFactorLoginResult.LoggedIn>(codeResult);
+        var loggedInAccount = await ReadAccountAsync(databaseContext, accountId);
+        Assert.Null(loggedInAccount.LockoutEndsAt);
+        Assert.Equal(0, loggedInAccount.FailedLoginAttemptCount);
+        Assert.Equal(0, loggedInAccount.LockoutCount);
     }
 
     // La fin du cycle : désactiver efface vraiment tout, l'événement passe la contrainte de la vraie base, et réactiver donne 10 nouveaux codes.
     [Fact]
     public async Task DeactivationThenReactivationWorkOnTheRealDatabase()
     {
-        await using var databaseContextOfThisChainTest = CreateDatabaseContextConnectedToLocalDatabase();
-        await using var transactionCancelledAtTheEndOfThisTest = await databaseContextOfThisChainTest.Database.BeginTransactionAsync();
-        var identifierOfTheUserAccountInTheseTests = await RegisterThenConfirmNewUserAccountAsync(databaseContextOfThisChainTest);
-        var (secretOfTheFirstPhoneOfTheUser, firstBackupCodesOfTheUser) = await ActivateTwoFactorLikeTwoRealRequestsAsync(databaseContextOfThisChainTest, identifierOfTheUserAccountInTheseTests);
-        var hashOfTheFirstBackupCode = (await databaseContextOfThisChainTest.BackupCodes.AsNoTracking().FirstAsync(backupCodeSearchedInTheDatabaseTable => backupCodeSearchedInTheDatabaseTable.UserId == identifierOfTheUserAccountInTheseTests)).CodeHash;
+        await using var databaseContext = CreateDatabaseContext();
+        await using var transaction = await databaseContext.Database.BeginTransactionAsync();
+        var accountId = await RegisterThenConfirmAsync(databaseContext);
+        var (firstPhoneSecret, firstBackupCodes) = await ActivateTwoFactorAsync(databaseContext, accountId);
+        var firstCodeHash = (await databaseContext.BackupCodes.AsNoTracking().FirstAsync(row => row.UserId == accountId)).CodeHash;
 
-        var resultOfTheDeactivationOfTheTwoFactor = await DeactivateLikeOneRealRequestAsync(databaseContextOfThisChainTest, identifierOfTheUserAccountInTheseTests, firstBackupCodesOfTheUser[0]);
+        var deactivationResult = await DeactivateAsync(databaseContext, accountId, firstBackupCodes[0]);
 
-        Assert.True(resultOfTheDeactivationOfTheTwoFactor.IsTwoFactorDeactivated);
-        var accountReadAgainAfterTheDeactivation = await ReadAccountBackFromTheRealDatabaseAsync(databaseContextOfThisChainTest, identifierOfTheUserAccountInTheseTests);
-        Assert.False(accountReadAgainAfterTheDeactivation.IsTwoFactorEnabled);
-        Assert.Null(accountReadAgainAfterTheDeactivation.EncryptedTotpSecret);
-        Assert.Equal(0, await databaseContextOfThisChainTest.BackupCodes.CountAsync(backupCodeSearchedInTheDatabaseTable => backupCodeSearchedInTheDatabaseTable.UserId == identifierOfTheUserAccountInTheseTests));
-        Assert.Equal(1, await CountSecurityEventsOfThisAccountAsync(databaseContextOfThisChainTest, identifierOfTheUserAccountInTheseTests, SecurityEventType.TwoFactorDeactivation, SecurityEventResult.Success));
+        Assert.Equal(TwoFactorDeactivationResult.TwoFactorDeactivated, deactivationResult);
+        var reloadedAccount = await ReadAccountAsync(databaseContext, accountId);
+        Assert.False(reloadedAccount.IsTwoFactorEnabled);
+        Assert.Null(reloadedAccount.EncryptedTotpSecret);
+        Assert.Equal(0, await databaseContext.BackupCodes.CountAsync(row => row.UserId == accountId));
+        Assert.Equal(1, await CountSecurityEventsAsync(databaseContext, accountId, SecurityEventType.TwoFactorDeactivation, SecurityEventResult.Success));
 
-        var resultOfTheLoginWithoutAnyCode = await LogInWithThePasswordLikeOneRealRequestAsync(databaseContextOfThisChainTest);
-        Assert.True(resultOfTheLoginWithoutAnyCode.IsLoggedIn);
+        var loginResult = await LogInWithPasswordAsync(databaseContext);
+        Assert.IsType<AccountLoginResult.LoggedIn>(loginResult);
 
-        WaitForTheNextCodeOnThePhone();
-        var (secretOfTheSecondPhoneOfTheUser, _) = await ActivateTwoFactorLikeTwoRealRequestsAsync(databaseContextOfThisChainTest, identifierOfTheUserAccountInTheseTests);
+        WaitForNextCode();
+        var (secondPhoneSecret, _) = await ActivateTwoFactorAsync(databaseContext, accountId);
 
-        Assert.NotEqual(secretOfTheFirstPhoneOfTheUser, secretOfTheSecondPhoneOfTheUser);
-        Assert.Equal(10, await databaseContextOfThisChainTest.BackupCodes.CountAsync(backupCodeSearchedInTheDatabaseTable => backupCodeSearchedInTheDatabaseTable.UserId == identifierOfTheUserAccountInTheseTests));
-        Assert.False(await databaseContextOfThisChainTest.BackupCodes.AnyAsync(backupCodeSearchedInTheDatabaseTable => backupCodeSearchedInTheDatabaseTable.CodeHash == hashOfTheFirstBackupCode));
+        Assert.NotEqual(firstPhoneSecret, secondPhoneSecret);
+        Assert.Equal(10, await databaseContext.BackupCodes.CountAsync(row => row.UserId == accountId));
+        Assert.False(await databaseContext.BackupCodes.AnyAsync(row => row.CodeHash == firstCodeHash));
     }
 
     // Un mot de passe faux sur une désactivation laisse tout en place et s'écrit au vrai journal.
     [Fact]
     public async Task RefusedActivationAndDeactivationAreWrittenInTheRealJournal()
     {
-        await using var databaseContextOfThisChainTest = CreateDatabaseContextConnectedToLocalDatabase();
-        await using var transactionCancelledAtTheEndOfThisTest = await databaseContextOfThisChainTest.Database.BeginTransactionAsync();
-        var identifierOfTheUserAccountInTheseTests = await RegisterThenConfirmNewUserAccountAsync(databaseContextOfThisChainTest);
+        await using var databaseContext = CreateDatabaseContext();
+        await using var transaction = await databaseContext.Database.BeginTransactionAsync();
+        var accountId = await RegisterThenConfirmAsync(databaseContext);
 
-        await CreateRealTwoFactorActivationServiceOnThisContext(databaseContextOfThisChainTest).StartActivationWithThePasswordOfTheUserAsync(identifierOfTheUserAccountInTheseTests, "Mauvais-Mot-De-Passe-2", IpAddressOfTheVisitorInTheseTests);
-        databaseContextOfThisChainTest.ChangeTracker.Clear();
-        Assert.Equal(1, await CountSecurityEventsOfThisAccountAsync(databaseContextOfThisChainTest, identifierOfTheUserAccountInTheseTests, SecurityEventType.TwoFactorActivation, SecurityEventResult.Failure));
+        await CreateActivationService(databaseContext).StartAsync(accountId, "Mauvais-Mot-De-Passe-2", IpAddress);
+        databaseContext.ChangeTracker.Clear();
+        Assert.Equal(1, await CountSecurityEventsAsync(databaseContext, accountId, SecurityEventType.TwoFactorActivation, SecurityEventResult.Failure));
 
-        await ActivateTwoFactorLikeTwoRealRequestsAsync(databaseContextOfThisChainTest, identifierOfTheUserAccountInTheseTests);
+        await ActivateTwoFactorAsync(databaseContext, accountId);
 
-        var resultOfTheDeactivationOfTheTwoFactor = await DeactivateLikeOneRealRequestAsync(databaseContextOfThisChainTest, identifierOfTheUserAccountInTheseTests, "000000");
+        var result = await DeactivateAsync(databaseContext, accountId, "000000");
 
-        Assert.False(resultOfTheDeactivationOfTheTwoFactor.IsTwoFactorDeactivated);
-        Assert.True((await ReadAccountBackFromTheRealDatabaseAsync(databaseContextOfThisChainTest, identifierOfTheUserAccountInTheseTests)).IsTwoFactorEnabled);
-        Assert.Equal(1, await CountSecurityEventsOfThisAccountAsync(databaseContextOfThisChainTest, identifierOfTheUserAccountInTheseTests, SecurityEventType.TwoFactorDeactivation, SecurityEventResult.Failure));
+        Assert.NotEqual(TwoFactorDeactivationResult.TwoFactorDeactivated, result);
+        Assert.True((await ReadAccountAsync(databaseContext, accountId)).IsTwoFactorEnabled);
+        Assert.Equal(1, await CountSecurityEventsAsync(databaseContext, accountId, SecurityEventType.TwoFactorDeactivation, SecurityEventResult.Failure));
     }
 
     // GR Auth : la récupération garde la double authentification, annule les connexions en attente, et la suivante demande le code.
     [Fact]
     public async Task PasswordRecoveryKeepsTheTwoFactorOnTheRealDatabase()
     {
-        await using var databaseContextOfThisChainTest = CreateDatabaseContextConnectedToLocalDatabase();
-        await using var transactionCancelledAtTheEndOfThisTest = await databaseContextOfThisChainTest.Database.BeginTransactionAsync();
-        var identifierOfTheUserAccountInTheseTests = await RegisterThenConfirmNewUserAccountAsync(databaseContextOfThisChainTest);
-        var (secretSharedWithThePhoneOfTheUser, _) = await ActivateTwoFactorLikeTwoRealRequestsAsync(databaseContextOfThisChainTest, identifierOfTheUserAccountInTheseTests);
-        WaitForTheNextCodeOnThePhone();
-        var loginOfTheThiefWithTheStolenPassword = await LogInWithThePasswordLikeOneRealRequestAsync(databaseContextOfThisChainTest);
+        await using var databaseContext = CreateDatabaseContext();
+        await using var transaction = await databaseContext.Database.BeginTransactionAsync();
+        var accountId = await RegisterThenConfirmAsync(databaseContext);
+        var (secret, _) = await ActivateTwoFactorAsync(databaseContext, accountId);
+        WaitForNextCode();
+        var thiefLogin = await LogInWithPasswordAsync(databaseContext);
 
-        var generatedTokenOfTheRecoveryLink = realGeneratorOfTheTokensInTheseTests.GenerateNewRandomSecureTokenWithItsHash();
-        await new UserAccountRepository(databaseContextOfThisChainTest).ReplaceEmailTokenOfThisTypeForThisAccountAsync(new EmailToken
+        var recoveryToken = tokenGenerator.GenerateToken();
+        await new UserAccountRepository(databaseContext).ReplaceTokenAsync(new EmailToken
         {
             Type = EmailTokenType.PasswordRecovery,
-            TokenHash = generatedTokenOfTheRecoveryLink.HashToStoreInTheDatabase,
-            ExpiresAt = clockThatOnlyMovesWhenTestsAskIt.GetUtcNow().UtcDateTime.AddMinutes(30),
-            UserId = identifierOfTheUserAccountInTheseTests
+            TokenHash = recoveryToken.Hash,
+            ExpiresAt = clock.GetUtcNow().UtcDateTime.AddMinutes(30),
+            UserId = accountId
         });
-        databaseContextOfThisChainTest.ChangeTracker.Clear();
-        var serviceThatChangesTheForgottenPasswords = new PasswordResetService(
-            new UserAccountRepository(databaseContextOfThisChainTest),
-            new UserSessionRepository(databaseContextOfThisChainTest),
-            realHasherOfThePasswordsInTheseTests,
-            realGeneratorOfTheTokensInTheseTests,
-            clockThatOnlyMovesWhenTestsAskIt);
-        var resultOfTheRecoveryOfThePassword = await serviceThatChangesTheForgottenPasswords.ResetPasswordWithLinkTokenAsync(generatedTokenOfTheRecoveryLink.TokenGivenOnlyToTheVisitor, "Nouveau-Mot-De-Passe-3", IpAddressOfTheVisitorInTheseTests);
-        databaseContextOfThisChainTest.ChangeTracker.Clear();
-        Assert.True(resultOfTheRecoveryOfThePassword.IsPasswordChanged);
+        databaseContext.ChangeTracker.Clear();
+        var passwordResetService = new PasswordResetService(
+            new UserAccountRepository(databaseContext),
+            new UserSessionRepository(databaseContext),
+            CreateSavingService(databaseContext),
+            CreateSecurityJournal(databaseContext, clock),
+            passwordHasher,
+            tokenGenerator,
+            clock);
+        var recoveryResult = await passwordResetService.ResetAsync(recoveryToken.Token, "Nouveau-Mot-De-Passe-3", IpAddress);
+        databaseContext.ChangeTracker.Clear();
+        Assert.Equal(PasswordResetResult.PasswordChanged, recoveryResult);
 
-        var resultOfTheCodeOfTheThief = await FinishLoginLikeOneRealRequestAsync(databaseContextOfThisChainTest, loginOfTheThiefWithTheStolenPassword.WaitingLoginTokenToPutInTheCookie!, CalculateCodeShownOnThePhoneNow(secretSharedWithThePhoneOfTheUser));
-        Assert.Equal(TwoFactorLoginService.ErrorMessageForLoginThatMustRestart, resultOfTheCodeOfTheThief.LoginMustRestartErrorMessage);
+        var thiefResult = await FinishLoginAsync(databaseContext, Assert.IsType<AccountLoginResult.WaitingForTwoFactorCode>(thiefLogin).WaitingLoginToken, CalculateCurrentCode(secret));
+        Assert.IsType<TwoFactorLoginResult.LoginMustRestart>(thiefResult);
 
-        var accountReadAgainAfterTheRecovery = await ReadAccountBackFromTheRealDatabaseAsync(databaseContextOfThisChainTest, identifierOfTheUserAccountInTheseTests);
-        Assert.True(accountReadAgainAfterTheRecovery.IsTwoFactorEnabled);
-        Assert.NotNull(accountReadAgainAfterTheRecovery.EncryptedTotpSecret);
+        var reloadedAccount = await ReadAccountAsync(databaseContext, accountId);
+        Assert.True(reloadedAccount.IsTwoFactorEnabled);
+        Assert.NotNull(reloadedAccount.EncryptedTotpSecret);
 
-        var loginOfTheOwnerWithTheNewPassword = await LogInWithThePasswordLikeOneRealRequestAsync(databaseContextOfThisChainTest, "Nouveau-Mot-De-Passe-3");
-        Assert.True(loginOfTheOwnerWithTheNewPassword.IsWaitingForTwoFactorCode);
-        var resultOfTheCodeOfTheOwner = await FinishLoginLikeOneRealRequestAsync(databaseContextOfThisChainTest, loginOfTheOwnerWithTheNewPassword.WaitingLoginTokenToPutInTheCookie!, CalculateCodeShownOnThePhoneNow(secretSharedWithThePhoneOfTheUser));
-        Assert.True(resultOfTheCodeOfTheOwner.IsLoggedIn);
+        var ownerLogin = await LogInWithPasswordAsync(databaseContext, "Nouveau-Mot-De-Passe-3");
+        Assert.IsType<AccountLoginResult.WaitingForTwoFactorCode>(ownerLogin);
+        var ownerResult = await FinishLoginAsync(databaseContext, Assert.IsType<AccountLoginResult.WaitingForTwoFactorCode>(ownerLogin).WaitingLoginToken, CalculateCurrentCode(secret));
+        Assert.IsType<TwoFactorLoginResult.LoggedIn>(ownerResult);
     }
 
     // Le service de nettoyage ou d'effacement du compte passe par ON DELETE CASCADE : les codes de secours partent avec le compte.
     [Fact]
     public async Task BackupCodesDisappearWithTheAccountOnTheRealDatabase()
     {
-        await using var databaseContextOfThisChainTest = CreateDatabaseContextConnectedToLocalDatabase();
-        await using var transactionCancelledAtTheEndOfThisTest = await databaseContextOfThisChainTest.Database.BeginTransactionAsync();
-        var identifierOfTheUserAccountInTheseTests = await RegisterThenConfirmNewUserAccountAsync(databaseContextOfThisChainTest);
-        await ActivateTwoFactorLikeTwoRealRequestsAsync(databaseContextOfThisChainTest, identifierOfTheUserAccountInTheseTests);
+        await using var databaseContext = CreateDatabaseContext();
+        await using var transaction = await databaseContext.Database.BeginTransactionAsync();
+        var accountId = await RegisterThenConfirmAsync(databaseContext);
+        await ActivateTwoFactorAsync(databaseContext, accountId);
 
-        await databaseContextOfThisChainTest.Users.Where(userSearchedInTheDatabaseTable => userSearchedInTheDatabaseTable.Id == identifierOfTheUserAccountInTheseTests).ExecuteDeleteAsync();
+        await databaseContext.Users.Where(row => row.Id == accountId).ExecuteDeleteAsync();
 
-        Assert.Equal(0, await databaseContextOfThisChainTest.BackupCodes.CountAsync(backupCodeSearchedInTheDatabaseTable => backupCodeSearchedInTheDatabaseTable.UserId == identifierOfTheUserAccountInTheseTests));
+        Assert.Equal(0, await databaseContext.BackupCodes.CountAsync(row => row.UserId == accountId));
     }
 }

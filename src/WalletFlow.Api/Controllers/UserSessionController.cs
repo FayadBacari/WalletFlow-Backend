@@ -12,37 +12,49 @@ namespace WalletFlow.Api.Controllers;
 [Route("api/account")]
 public class UserSessionController : ControllerBase
 {
-    public const string MessageSentWhenTheUserIsLoggedOut = "Tu es déconnecté.";
+    public const string LoggedOutMessage = "Tu es déconnecté.";
 
-    private readonly UserSessionService serviceThatClosesTheUserSessions;
-    private readonly IAntiforgery toolThatCreatesTheCsrfTokens;
+    private readonly UserSessionService sessionService;
+    private readonly IAntiforgery antiforgery;
 
     // Reçoit le cas d'utilisation des sessions et l'outil anti-CSRF d'ASP.NET Core.
-    public UserSessionController(UserSessionService serviceThatClosesTheUserSessions, IAntiforgery toolThatCreatesTheCsrfTokens)
+    public UserSessionController(UserSessionService sessionService, IAntiforgery antiforgery)
     {
-        this.serviceThatClosesTheUserSessions = serviceThatClosesTheUserSessions;
-        this.toolThatCreatesTheCsrfTokens = toolThatCreatesTheCsrfTokens;
+        this.sessionService = sessionService;
+        this.antiforgery = antiforgery;
     }
 
     // GET api/account/csrf-token : donne le jeton à joindre aux requêtes qui modifient des données.
     // Il est lié à l'utilisateur : il se demande donc une fois connecté. Il répond 401 sans session.
     [HttpGet("csrf-token")]
-    public IActionResult GiveCsrfTokenToTheLoggedInUser()
+    public IActionResult GetCsrfToken()
     {
-        var tokensCreatedForTheLoggedInUser = toolThatCreatesTheCsrfTokens.GetAndStoreTokens(HttpContext);
+        var tokens = antiforgery.GetAndStoreTokens(HttpContext);
 
-        return Ok(new CsrfTokenResponse(tokensCreatedForTheLoggedInUser.RequestToken!));
+        // ASP.NET Core remplit toujours ce jeton : s'il manquait, la réponse serait une erreur, jamais un jeton vide.
+        if (tokens.RequestToken == null)
+        {
+            throw new InvalidOperationException("Le jeton anti-CSRF n'a pas été créé.");
+        }
+
+        return Ok(new CsrfTokenResponse(tokens.RequestToken));
     }
 
     // POST api/account/logout : détruit la session côté serveur, puis le cookie (SS §3).
     // Le cookie d'appareil reste : le navigateur reste reconnu à la prochaine connexion.
     [HttpPost("logout")]
-    public async Task<IActionResult> LogOutTheLoggedInUser()
+    public async Task<IActionResult> LogOut()
     {
-        await serviceThatClosesTheUserSessions.CloseUserSessionOfThisCookieAsync(Request.Cookies[SessionCookiesConfiguration.NameOfTheUserSessionCookie]!);
+        var sessionToken = Request.Cookies[SessionCookiesConfiguration.SessionCookieName];
 
-        Response.Cookies.Delete(SessionCookiesConfiguration.NameOfTheUserSessionCookie, SessionCookiesConfiguration.CreateOptionsOfTheUserSessionCookie());
+        // La route demande une session : le cookie est donc là. Sans lui, il n'y aurait aucune session à détruire.
+        if (sessionToken != null)
+        {
+            await sessionService.CloseAsync(sessionToken);
+        }
 
-        return Ok(new MessageResponse(MessageSentWhenTheUserIsLoggedOut));
+        Response.Cookies.Delete(SessionCookiesConfiguration.SessionCookieName, SessionCookiesConfiguration.CreateSessionCookieOptions());
+
+        return Ok(new MessageResponse(LoggedOutMessage));
     }
 }

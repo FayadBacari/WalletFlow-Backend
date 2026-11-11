@@ -8,23 +8,25 @@ namespace WalletFlow.Infrastructure.Persistence.TableConfigurations.UsersAndSecu
 public class BackupCodeTableConfiguration : IEntityTypeConfiguration<BackupCode>
 {
     // Appelée par EF Core au démarrage (nom imposé par le framework).
-    public void Configure(EntityTypeBuilder<BackupCode> builderOfTheBackupCodeTableMapping)
+    public void Configure(EntityTypeBuilder<BackupCode> builder)
     {
-        builderOfTheBackupCodeTableMapping.ToTable("code_secours");
+        builder.ToTable("code_secours");
 
         // L'identifiant est créé par l'entité elle-même, jamais par EF Core.
-        builderOfTheBackupCodeTableMapping.HasKey(nameof(BackupCode.Id));
-        builderOfTheBackupCodeTableMapping.Property(nameof(BackupCode.Id)).HasColumnName("id_code_secours").ValueGeneratedNever();
+        builder.HasKey(nameof(BackupCode.Id));
+        builder.Property(nameof(BackupCode.Id)).HasColumnName("id_code_secours").ValueGeneratedNever();
 
-        builderOfTheBackupCodeTableMapping.Property(nameof(BackupCode.CodeHash)).HasColumnName("empreinte_code_secours");
+        builder.Property(nameof(BackupCode.CodeHash)).HasColumnName("empreinte_code_secours");
 
-        // Chaque mise à jour vérifie que le code n'a pas servi depuis sa lecture : de deux requêtes simultanées, une seule peut l'utiliser.
-        builderOfTheBackupCodeTableMapping.Property(nameof(BackupCode.UsedAt)).HasColumnName("date_utilisation_code_secours").IsConcurrencyToken();
+        builder.Property(nameof(BackupCode.UsedAt)).HasColumnName("date_utilisation_code_secours");
 
-        builderOfTheBackupCodeTableMapping.Property(nameof(BackupCode.UserId)).HasColumnName("id_utilisateur");
+        // Chaque écriture vérifie que le code n'a pas changé depuis sa lecture : de deux requêtes simultanées, une seule peut l'utiliser.
+        RowVersionConfiguration.AddRowVersion(builder);
+
+        builder.Property(nameof(BackupCode.UserId)).HasColumnName("id_utilisateur");
 
         // Un code de secours appartient à un utilisateur et disparaît avec lui (ON DELETE CASCADE).
-        builderOfTheBackupCodeTableMapping.HasOne<User>().WithMany()
+        builder.HasOne<User>().WithMany()
             .HasForeignKey(nameof(BackupCode.UserId))
             .OnDelete(DeleteBehavior.Cascade);
     }

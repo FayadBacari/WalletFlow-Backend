@@ -12,7 +12,8 @@ BEGIN;
 
 -- Outil des tests : exécute une instruction qui doit être refusée, puis vérifie que la base
 -- l'a refusée avec le code d'erreur attendu (23514 : CHECK, 23505 : unicité,
--- P0001 : refus d'un déclencheur). L'instruction refusée ne laisse aucune trace.
+-- P0001 : refus d'un déclencheur, 42501 : droit refusé à l'application).
+-- L'instruction refusée ne laisse aucune trace.
 CREATE FUNCTION pg_temp.verifier_que_la_base_refuse_cette_instruction(
     instruction_sql_qui_doit_etre_refusee text,
     code_d_erreur_attendu_par_ce_test text,
@@ -103,8 +104,12 @@ BEGIN
         '23505', 'deux comptes ne partagent jamais la même adresse e-mail');
     PERFORM pg_temp.verifier_que_la_base_refuse_cette_instruction(
         $sql$INSERT INTO utilisateur (email_utilisateur, mot_de_passe_hash, role_utilisateur)
-             VALUES ('role@exemple.test', 'empreinte', 'superadmin')$sql$,
-        '23514', 'le rôle vaut utilisateur ou administrateur');
+             VALUES ('role@exemple.test', 'empreinte', 'administrateur')$sql$,
+        '42501', 'l''application ne peut pas choisir le rôle d''un nouveau compte');
+    PERFORM pg_temp.verifier_que_la_base_refuse_cette_instruction(
+        $sql$INSERT INTO utilisateur (email_utilisateur, mot_de_passe_hash, nb_blocages)
+             VALUES ('blocages@exemple.test', 'empreinte', 9)$sql$,
+        '23514', 'le nombre de blocages s''arrête à 8');
     PERFORM pg_temp.verifier_que_la_base_refuse_cette_instruction(
         $sql$INSERT INTO utilisateur (email_utilisateur, mot_de_passe_hash, secret_totp_chiffre)
              VALUES ('totp@exemple.test', 'empreinte', 'secret-chiffre')$sql$,
@@ -578,6 +583,31 @@ BEGIN
         $sql$INSERT INTO evenement_securite (type_evenement, resultat_evenement)
              VALUES ('type_inconnu', 'succes')$sql$,
         '23514', 'le journal refuse un type d''événement inconnu');
+END;
+$$;
+
+
+-- 10. SS §8, §11 et §14 : l'application ne peut ni donner le rôle administrateur, ni modifier
+--     ou effacer le journal de sécurité. Ces tests tournent avec l'utilisateur de l'application.
+DO $$
+BEGIN
+    PERFORM pg_temp.verifier_que_la_base_refuse_cette_instruction(
+        $sql$UPDATE utilisateur SET role_utilisateur = 'administrateur'
+             WHERE email_utilisateur = 'test-contraintes@exemple.test'$sql$,
+        '42501', 'l''application ne peut pas donner le rôle administrateur');
+    PERFORM pg_temp.verifier_que_la_base_refuse_cette_instruction(
+        $sql$UPDATE evenement_securite SET resultat_evenement = 'succes'$sql$,
+        '42501', 'l''application ne peut pas modifier le journal de sécurité');
+    PERFORM pg_temp.verifier_que_la_base_refuse_cette_instruction(
+        $sql$DELETE FROM evenement_securite$sql$,
+        '42501', 'l''application ne peut pas effacer le journal de sécurité');
+    PERFORM pg_temp.verifier_que_la_base_refuse_cette_instruction(
+        $sql$TRUNCATE evenement_securite$sql$,
+        '42501', 'l''application ne peut pas vider le journal de sécurité');
+
+    -- L'application garde les droits dont elle a besoin sur les autres colonnes du compte.
+    UPDATE utilisateur SET nb_tentatives_echouees = 1 WHERE email_utilisateur = 'test-contraintes@exemple.test';
+    RAISE NOTICE 'OK : l''application peut encore modifier les compteurs d''un compte';
 END;
 $$;
 

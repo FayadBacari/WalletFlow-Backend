@@ -10,27 +10,27 @@ namespace WalletFlow.Tests.Api;
 // Vérifie la règle des clés d'erreur : seul le nom d'un champ est gardé, jamais un texte qui pourrait venir du visiteur (SS §10).
 public class ApiErrorConfigurationTests
 {
-    private const string MessageWrittenByTheValidationRules = "message-ecrit-par-les-regles";
+    private const string ValidationMessage = "message-ecrit-par-les-regles";
 
     // Construit la réponse d'une requête refusée avec une erreur pour chacune de ces clés.
-    private static ValidationProblemDetails CreateAnswerForTheseKeysOfErrors(params string[] keysOfTheErrorsToAnswer)
+    private static ValidationProblemDetails CreateAnswerForErrorKeys(params string[] keys)
     {
-        using var apiStartedLikeInProductionForThisTest = new ApiFactoryRunningLikeInProduction();
-        var errorsOfTheRequestToRefuse = new ModelStateDictionary();
+        using var productionApi = new ApiFactoryInProduction();
+        var errors = new ModelStateDictionary();
 
-        foreach (var keyOfTheErrorToAddToTheRequest in keysOfTheErrorsToAnswer)
+        foreach (var errorKey in keys)
         {
-            errorsOfTheRequestToRefuse.AddModelError(keyOfTheErrorToAddToTheRequest, MessageWrittenByTheValidationRules);
+            errors.AddModelError(errorKey, ValidationMessage);
         }
 
-        var contextOfTheRequestToRefuse = new ActionContext(
-            new DefaultHttpContext { RequestServices = apiStartedLikeInProductionForThisTest.Services },
+        var context = new ActionContext(
+            new DefaultHttpContext { RequestServices = productionApi.Services },
             new RouteData(),
             new ActionDescriptor(),
-            errorsOfTheRequestToRefuse);
+            errors);
 
-        var answerToTheRequestToRefuse = Assert.IsType<BadRequestObjectResult>(ApiErrorConfiguration.CreateAnswerForTheRefusedRequest(contextOfTheRequestToRefuse));
-        return Assert.IsType<ValidationProblemDetails>(answerToTheRequestToRefuse.Value);
+        var response = Assert.IsType<BadRequestObjectResult>(ApiErrorConfiguration.CreateRefusedRequestAnswer(context));
+        return Assert.IsType<ValidationProblemDetails>(response.Value);
     }
 
     // Une erreur sur un champ garde sa clé stable et son message.
@@ -38,11 +38,11 @@ public class ApiErrorConfigurationTests
     [InlineData("Email")]
     [InlineData("Password")]
     [InlineData("Token2")]
-    public void NameOfRequestFieldKeepsItsKeyAndItsMessage(string nameOfTheFieldWithTheError)
+    public void NameOfRequestFieldKeepsItsKeyAndItsMessage(string fieldName)
     {
-        var detailsOfTheRefusedRequestAnswer = CreateAnswerForTheseKeysOfErrors(nameOfTheFieldWithTheError);
+        var problemDetails = CreateAnswerForErrorKeys(fieldName);
 
-        Assert.Equal(MessageWrittenByTheValidationRules, Assert.Single(detailsOfTheRefusedRequestAnswer.Errors[nameOfTheFieldWithTheError]));
+        Assert.Equal(ValidationMessage, Assert.Single(problemDetails.Errors[fieldName]));
     }
 
     // Toute autre clé pourrait citer un nom interne du code ou recopier un texte du visiteur : ni elle ni son message ne sortent.
@@ -51,26 +51,26 @@ public class ApiErrorConfigurationTests
     [InlineData("$")]
     [InlineData("$.email")]
     [InlineData("$['<script>alert(1)</script>']")]
-    [InlineData("requestSentByTheVisitorToRegister")]
+    [InlineData("request")]
     [InlineData("Email<script>")]
     [InlineData("Email.Name")]
     [InlineData("Émail")]
-    public void AnyOtherKeyBecomesTheGenericErrorWithoutItsMessage(string keyThatIsNotTheNameOfRequestField)
+    public void AnyOtherKeyBecomesTheGenericErrorWithoutItsMessage(string unknownKey)
     {
-        var detailsOfTheRefusedRequestAnswer = CreateAnswerForTheseKeysOfErrors(keyThatIsNotTheNameOfRequestField);
+        var problemDetails = CreateAnswerForErrorKeys(unknownKey);
 
-        var onlyErrorKeptInTheAnswer = Assert.Single(detailsOfTheRefusedRequestAnswer.Errors);
-        Assert.Equal(ApiErrorConfiguration.KeyOfTheErrorsOutsideTheRequestFields, onlyErrorKeptInTheAnswer.Key);
-        Assert.Equal(ApiErrorConfiguration.MessageForRequestThatCannotBeRead, Assert.Single(onlyErrorKeptInTheAnswer.Value));
+        var onlyError = Assert.Single(problemDetails.Errors);
+        Assert.Equal(ApiErrorConfiguration.GeneralErrorsKey, onlyError.Key);
+        Assert.Equal(ApiErrorConfiguration.UnreadableRequestMessage, Assert.Single(onlyError.Value));
     }
 
     // Plusieurs erreurs illisibles dans la même requête ne donnent qu'un seul message générique.
     [Fact]
     public void SeveralUnreadableErrorsGiveOnlyOneGenericMessage()
     {
-        var detailsOfTheRefusedRequestAnswer = CreateAnswerForTheseKeysOfErrors("$", "$.email", "requestSentByTheVisitorToRegister");
+        var problemDetails = CreateAnswerForErrorKeys("$", "$.email", "request");
 
-        var onlyErrorKeptInTheAnswer = Assert.Single(detailsOfTheRefusedRequestAnswer.Errors);
-        Assert.Single(onlyErrorKeptInTheAnswer.Value);
+        var onlyError = Assert.Single(problemDetails.Errors);
+        Assert.Single(onlyError.Value);
     }
 }

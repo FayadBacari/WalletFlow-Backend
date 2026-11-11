@@ -1,4 +1,5 @@
 using System.Net;
+using WalletFlow.Application.Persistence;
 using WalletFlow.Application.Security;
 using WalletFlow.Application.UserAccounts;
 using WalletFlow.Application.UserSessions;
@@ -10,121 +11,110 @@ namespace WalletFlow.Application.AccountRecovery;
 // Le lien a prouvé qu'il possède la boîte mail : le compte est aussi débloqué. Il ne connecte personne.
 public class PasswordResetService
 {
-    public const string ErrorMessageForRecoveryLinkNoLongerValid = "Ce lien n'est plus valable. Demande un nouveau lien avec « Mot de passe oublié ».";
-
-    private readonly IUserAccountRepository repositoryOfTheUserAccountsInDatabase;
-    private readonly IUserSessionRepository repositoryOfTheUserSessionsInDatabase;
-    private readonly IPasswordHasher hasherOfThePasswordsChosenByVisitors;
-    private readonly ISecureTokenGenerator generatorOfTheSecureRandomTokens;
-    private readonly TimeProvider clockThatGivesTheCurrentDateAndTime;
+    private readonly IUserAccountRepository accountRepository;
+    private readonly IUserSessionRepository sessionRepository;
+    private readonly DatabaseChangesSavingService savingService;
+    private readonly SecurityJournalService securityJournal;
+    private readonly IPasswordHasher passwordHasher;
+    private readonly ISecureTokenGenerator tokenGenerator;
+    private readonly TimeProvider clock;
 
     // Reçoit les outils dont le changement de mot de passe a besoin.
     public PasswordResetService(
-        IUserAccountRepository repositoryOfTheUserAccountsInDatabase,
-        IUserSessionRepository repositoryOfTheUserSessionsInDatabase,
-        IPasswordHasher hasherOfThePasswordsChosenByVisitors,
-        ISecureTokenGenerator generatorOfTheSecureRandomTokens,
-        TimeProvider clockThatGivesTheCurrentDateAndTime)
+        IUserAccountRepository accountRepository,
+        IUserSessionRepository sessionRepository,
+        DatabaseChangesSavingService savingService,
+        SecurityJournalService securityJournal,
+        IPasswordHasher passwordHasher,
+        ISecureTokenGenerator tokenGenerator,
+        TimeProvider clock)
     {
-        this.repositoryOfTheUserAccountsInDatabase = repositoryOfTheUserAccountsInDatabase;
-        this.repositoryOfTheUserSessionsInDatabase = repositoryOfTheUserSessionsInDatabase;
-        this.hasherOfThePasswordsChosenByVisitors = hasherOfThePasswordsChosenByVisitors;
-        this.generatorOfTheSecureRandomTokens = generatorOfTheSecureRandomTokens;
-        this.clockThatGivesTheCurrentDateAndTime = clockThatGivesTheCurrentDateAndTime;
+        this.accountRepository = accountRepository;
+        this.sessionRepository = sessionRepository;
+        this.savingService = savingService;
+        this.securityJournal = securityJournal;
+        this.passwordHasher = passwordHasher;
+        this.tokenGenerator = tokenGenerator;
+        this.clock = clock;
     }
 
     // Change le mot de passe si le lien est encore valable. Un mot de passe refusé par les règles ne consomme pas le lien.
-    public async Task<PasswordResetResult> ResetPasswordWithLinkTokenAsync(string tokenReadInTheRecoveryLink, string newPasswordTypedByTheVisitor, IPAddress? ipAddressOfTheRequestingVisitor)
+    public async Task<PasswordResetResult> ResetAsync(string linkToken, string newPassword, IPAddress? ipAddress)
     {
-        var hashOfTheTokenFromTheLink = generatorOfTheSecureRandomTokens.ConvertSecureTokenIntoItsHash(tokenReadInTheRecoveryLink);
+        var tokenHash = tokenGenerator.HashToken(linkToken);
 
-        if (await FindRecoveryTokenThatCanStillBeUsedAsync(hashOfTheTokenFromTheLink) == null)
+        if (await FindUsableTokenAsync(tokenHash) == null)
         {
-            return CreateResultForTheLinkNoLongerValid();
+            return PasswordResetResult.LinkNoLongerValid;
         }
 
-        var passwordWrittenInItsNormalizedForm = PasswordRules.ConvertPasswordIntoItsNormalizedForm(newPasswordTypedByTheVisitor);
+        var normalizedPassword = PasswordRules.Normalize(newPassword);
 
-        if (!PasswordRules.CheckThatPasswordRespectsAllTheRules(passwordWrittenInItsNormalizedForm))
+        if (!PasswordRules.IsValid(normalizedPassword))
         {
-            return new PasswordResetResult { PasswordErrorMessage = AccountRegistrationService.ErrorMessageForPasswordBreakingTheRules };
+            return PasswordResetResult.PasswordBreaksRules;
         }
 
         // Le hachage est lent : il passe avant la lecture du compte, pour que l'écriture suive de près la lecture.
-        var secureHashOfTheNewPassword = hasherOfThePasswordsChosenByVisitors.ConvertPasswordIntoItsSecureHash(passwordWrittenInItsNormalizedForm);
+        var newPasswordHash = await passwordHasher.HashAsync(normalizedPassword);
 
-        return await SaveNewPasswordThenCloseEverySessionAsync(hashOfTheTokenFromTheLink, secureHashOfTheNewPassword, ipAddressOfTheRequestingVisitor);
+        return await SavePasswordThenCloseSessionsAsync(tokenHash, newPasswordHash, ipAddress);
     }
 
-    // Enregistre le changement. Si une autre requête a changé le compte ou le lien, relit tout et recommence :
-    // un lien déjà utilisé ou remplacé entre-temps est alors refusé.
-    private async Task<PasswordResetResult> SaveNewPasswordThenCloseEverySessionAsync(string hashOfTheTokenFromTheLink, string secureHashOfTheNewPassword, IPAddress? ipAddressOfTheRequestingVisitor)
+    // Enregistre le changement, puis ferme toutes les sessions du compte. Si une autre requête a changé le compte ou le lien,
+    // tout est relu : un lien déjà utilisé ou remplacé entre-temps est alors refusé.
+    private async Task<PasswordResetResult> SavePasswordThenCloseSessionsAsync(string tokenHash, string newPasswordHash, IPAddress? ipAddress)
     {
-        for (var numberOfTheTryBeingDone = 1; numberOfTheTryBeingDone <= AccountLockoutRules.MaximumNumberOfTriesWhileOtherRequestsChangeTheAccount; numberOfTheTryBeingDone++)
+        var accountId = await savingService.SaveWithRetriesAsync<Guid?>(
+            () => PrepareNewPasswordAsync(tokenHash, newPasswordHash, ipAddress),
+            null);
+
+        if (accountId == null)
         {
-            var tokenThatCanStillBeUsed = await FindRecoveryTokenThatCanStillBeUsedAsync(hashOfTheTokenFromTheLink);
-            if (tokenThatCanStillBeUsed == null)
-            {
-                return CreateResultForTheLinkNoLongerValid();
-            }
-
-            var accountThatOwnsTheRecoveryToken = await repositoryOfTheUserAccountsInDatabase.FindUserAccountByIdentifierAsync(tokenThatCanStillBeUsed.UserId);
-            if (accountThatOwnsTheRecoveryToken == null || !accountThatOwnsTheRecoveryToken.IsEmailConfirmed)
-            {
-                return CreateResultForTheLinkNoLongerValid();
-            }
-
-            AccountLockoutRules.RemoveCurrentLockoutOfThisAccount(accountThatOwnsTheRecoveryToken);
-
-            var newPasswordWasSavedInTheDatabase = await repositoryOfTheUserAccountsInDatabase.TryToSaveNewPasswordAndUseItsTokenAsync(
-                accountThatOwnsTheRecoveryToken,
-                tokenThatCanStillBeUsed,
-                secureHashOfTheNewPassword,
-                clockThatGivesTheCurrentDateAndTime.GetUtcNow().UtcDateTime,
-                CreateSecurityEventOfThePasswordChange(accountThatOwnsTheRecoveryToken.Id, ipAddressOfTheRequestingVisitor));
-
-            if (newPasswordWasSavedInTheDatabase)
-            {
-                // Après l'enregistrement, et pas pendant : une connexion en cours avec l'ancien mot de passe a soit
-                // déjà ouvert sa session, qui est effacée ici, soit trouvera le nouveau mot de passe et sera refusée (SS §3).
-                await repositoryOfTheUserSessionsInDatabase.DeleteAllUserSessionsOfThisAccountAsync(accountThatOwnsTheRecoveryToken.Id);
-                return new PasswordResetResult();
-            }
+            return PasswordResetResult.LinkNoLongerValid;
         }
 
-        return CreateResultForTheLinkNoLongerValid();
+        // Après l'enregistrement, et pas pendant : une connexion en cours avec l'ancien mot de passe a soit
+        // déjà ouvert sa session, qui est effacée ici, soit trouvera le nouveau mot de passe et sera refusée (SS §3).
+        await sessionRepository.DeleteAllForUserAsync(accountId.Value);
+        return PasswordResetResult.PasswordChanged;
+    }
+
+    // Un passage : lit le lien et son compte, les vérifie, puis prépare le nouveau mot de passe, le compte débloqué,
+    // le lien utilisé et l'événement du journal. Donne l'identifiant du compte, ou null si le lien ne vaut plus.
+    private async Task<PreparedChanges<Guid?>> PrepareNewPasswordAsync(string tokenHash, string newPasswordHash, IPAddress? ipAddress)
+    {
+        var token = await FindUsableTokenAsync(tokenHash);
+        if (token == null)
+        {
+            return PreparedChanges<Guid?>.NothingToSave(null);
+        }
+
+        var account = await accountRepository.FindByIdAsync(token.UserId);
+        if (account == null || !account.IsEmailConfirmed)
+        {
+            return PreparedChanges<Guid?>.NothingToSave(null);
+        }
+
+        account.ReplacePasswordHash(newPasswordHash);
+        account.Unlock();
+        token.MarkAsUsed(clock.GetUtcNow().UtcDateTime);
+        securityJournal.PrepareEvent(SecurityEventType.PasswordChange, SecurityEventResult.Success, account.Id, ipAddress);
+
+        return PreparedChanges<Guid?>.SaveThenReturn(account.Id);
     }
 
     // Cherche le jeton du lien. Renvoie null s'il n'existe pas, s'il a déjà servi ou s'il a expiré.
-    private async Task<EmailToken?> FindRecoveryTokenThatCanStillBeUsedAsync(string hashOfTheTokenFromTheLink)
+    private async Task<EmailToken?> FindUsableTokenAsync(string tokenHash)
     {
-        var tokenFoundInTheDatabaseTable = await repositoryOfTheUserAccountsInDatabase.FindEmailTokenOfThisTypeByItsHashAsync(hashOfTheTokenFromTheLink, EmailTokenType.PasswordRecovery);
+        var token = await accountRepository.FindTokenAsync(tokenHash, EmailTokenType.PasswordRecovery);
 
-        if (tokenFoundInTheDatabaseTable == null
-            || !EmailTokenRules.CheckThatTokenCanStillBeUsedAtThisDate(tokenFoundInTheDatabaseTable, clockThatGivesTheCurrentDateAndTime.GetUtcNow().UtcDateTime))
+        if (token == null
+            || !token.CanBeUsedAt(clock.GetUtcNow().UtcDateTime))
         {
             return null;
         }
 
-        return tokenFoundInTheDatabaseTable;
-    }
-
-    // Crée l'événement du journal de sécurité (SS §11).
-    private SecurityEvent CreateSecurityEventOfThePasswordChange(Guid identifierOfTheAccountWithNewPassword, IPAddress? ipAddressOfTheRequestingVisitor)
-    {
-        return new SecurityEvent
-        {
-            Type = SecurityEventType.PasswordChange,
-            Result = SecurityEventResult.Success,
-            OccurredAt = clockThatGivesTheCurrentDateAndTime.GetUtcNow().UtcDateTime,
-            IpAddress = ipAddressOfTheRequestingVisitor,
-            UserId = identifierOfTheAccountWithNewPassword
-        };
-    }
-
-    // Donne le même refus pour tout lien qui ne vaut plus, sans dire pourquoi.
-    private static PasswordResetResult CreateResultForTheLinkNoLongerValid()
-    {
-        return new PasswordResetResult { LinkErrorMessage = ErrorMessageForRecoveryLinkNoLongerValid };
+        return token;
     }
 }

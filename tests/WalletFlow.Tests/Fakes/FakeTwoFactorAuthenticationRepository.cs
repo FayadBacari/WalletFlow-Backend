@@ -4,114 +4,167 @@ using WalletFlow.Domain.UsersAndSecurity;
 namespace WalletFlow.Tests.Fakes;
 
 // Remplace la vraie base dans les tests : garde les codes de secours en mémoire.
-public class FakeTwoFactorAuthenticationRepository : ITwoFactorAuthenticationRepository
+// Les codes préparés, ou leur effacement, ne sont gardés qu'avec les autres changements (voir FakeDatabaseUnitOfWork).
+public class FakeTwoFactorAuthenticationRepository : ITwoFactorAuthenticationRepository, ITransactionalFakeRepository
 {
-    public const string TechnicalDetailOfTheSimulatedTwoFactorFailure = "detail-technique-de-la-panne-de-la-double-authentification";
+    public const string FailureDetail = "detail-technique-de-la-panne-de-la-double-authentification";
 
-    private readonly FakeUserAccountRepository repositoryThatKeepsTheAccountsInMemory;
-    private readonly FakeSecurityEventRepository repositoryThatKeepsTheSecurityEventsInMemory;
+    private readonly object pendingChangesLock = new object();
+    private readonly ReadCopies<BackupCode> readBackupCodes = new ReadCopies<BackupCode>();
+    private readonly List<BackupCode> preparedBackupCodes = new List<BackupCode>();
+    private readonly List<Guid> backupCodeRemovals = new List<Guid>();
 
+    // Ce que la fausse base contient.
     public List<BackupCode> SavedBackupCodes { get; } = new List<BackupCode>();
 
-    // Simule d'autres requêtes qui changent le compte juste avant l'enregistrement d'une activation.
-    public int NumberOfConflictsBeforeTheActivationIsSaved { get; set; } = 0;
-
-    // Simule d'autres requêtes qui changent le compte juste avant l'enregistrement d'une désactivation.
-    public int NumberOfConflictsBeforeTheDeactivationIsSaved { get; set; } = 0;
+    // Simule une panne de la base au moment de lire les codes de secours.
+    public bool FailsWhenReadingBackupCodes { get; set; } = false;
 
     // Simule une panne de la base au moment d'enregistrer une activation ou une désactivation.
-    public bool DatabaseIsDownWhileSavingTheSettings { get; set; } = false;
+    public bool FailsWhenSavingSettings { get; set; } = false;
 
-    // Simule une panne de la base au moment de lire les codes de secours.
-    public bool DatabaseIsDownWhileReadingTheBackupCodes { get; set; } = false;
+    // Les réglages qui suivent simulent une autre requête qui agit juste avant l'enregistrement de celle du test.
 
-    // Reçoit les faux comptes et le faux journal, où l'activation et la désactivation écrivent aussi.
-    public FakeTwoFactorAuthenticationRepository(FakeUserAccountRepository repositoryThatKeepsTheAccountsInMemory, FakeSecurityEventRepository repositoryThatKeepsTheSecurityEventsInMemory)
-    {
-        this.repositoryThatKeepsTheAccountsInMemory = repositoryThatKeepsTheAccountsInMemory;
-        this.repositoryThatKeepsTheSecurityEventsInMemory = repositoryThatKeepsTheSecurityEventsInMemory;
-    }
+    // D'autres requêtes changent le compte juste avant l'enregistrement d'une activation : un conflit chacune.
+    public int ActivationConflicts { get; set; } = 0;
+
+    // D'autres requêtes changent le compte juste avant l'enregistrement d'une désactivation : un conflit chacune.
+    public int DeactivationConflicts { get; set; } = 0;
 
     // Cherche en mémoire les codes de secours de ce compte qui n'ont pas servi.
-    public Task<List<BackupCode>> FindUnusedBackupCodesOfThisAccountAsync(Guid identifierOfTheAccountOwningTheCodes)
+    public Task<List<BackupCode>> FindUnusedBackupCodesAsync(Guid accountId)
     {
-        if (DatabaseIsDownWhileReadingTheBackupCodes)
+        if (FailsWhenReadingBackupCodes)
         {
-            throw new InvalidOperationException(TechnicalDetailOfTheSimulatedTwoFactorFailure);
+            throw new InvalidOperationException(FailureDetail);
         }
 
-        var unusedBackupCodesOfTheAccount = new List<BackupCode>();
-
-        foreach (var backupCodeAlreadyKeptInThisMemoryList in SavedBackupCodes)
+        var unusedCodes = new List<BackupCode>();
+        foreach (var backupCode in SavedBackupCodes)
         {
-            if (backupCodeAlreadyKeptInThisMemoryList.UserId == identifierOfTheAccountOwningTheCodes && backupCodeAlreadyKeptInThisMemoryList.UsedAt == null)
+            if (backupCode.UserId == accountId && backupCode.UsedAt == null)
             {
-                unusedBackupCodesOfTheAccount.Add(backupCodeAlreadyKeptInThisMemoryList);
+                unusedCodes.Add(backupCode);
             }
         }
 
-        return Task.FromResult(unusedBackupCodesOfTheAccount);
+        return Task.FromResult(unusedCodes);
     }
 
-    // Cherche en mémoire un code de secours par son identifiant.
-    public Task<BackupCode?> FindBackupCodeByItsIdentifierAsync(Guid identifierOfTheBackupCodeToFind)
+    // Cherche en mémoire un code de secours par son identifiant, et garde une copie de ce qu'il était.
+    public Task<BackupCode?> FindBackupCodeAsync(Guid backupCodeId)
     {
-        foreach (var backupCodeAlreadyKeptInThisMemoryList in SavedBackupCodes)
+        foreach (var backupCode in SavedBackupCodes)
         {
-            if (backupCodeAlreadyKeptInThisMemoryList.Id == identifierOfTheBackupCodeToFind)
+            if (backupCode.Id == backupCodeId)
             {
-                return Task.FromResult<BackupCode?>(backupCodeAlreadyKeptInThisMemoryList);
+                KeepCopy(backupCode);
+                return Task.FromResult<BackupCode?>(backupCode);
             }
         }
 
         return Task.FromResult<BackupCode?>(null);
     }
 
-    // Garde tout en mémoire, sauf si un conflit est simulé : rien n'est alors gardé, comme avec la vraie transaction.
-    public Task<bool> TryToSaveTwoFactorActivationOfThisAccountAsync(
-        User accountBeingActivatedByTheFirstCode,
-        string secretOfThePhoneEncryptedForTheDatabase,
-        List<BackupCode> newBackupCodesOfTheAccount,
-        SecurityEvent securityEventOfTheTwoFactorActivation)
+    // Garde les nouveaux codes de côté : ils ne seront gardés qu'avec les autres changements.
+    public void PrepareBackupCodes(List<BackupCode> backupCodes)
     {
-        if (DatabaseIsDownWhileSavingTheSettings)
+        lock (pendingChangesLock)
         {
-            throw new InvalidOperationException(TechnicalDetailOfTheSimulatedTwoFactorFailure);
+            preparedBackupCodes.AddRange(backupCodes);
         }
-
-        if (NumberOfConflictsBeforeTheActivationIsSaved > 0)
-        {
-            NumberOfConflictsBeforeTheActivationIsSaved = NumberOfConflictsBeforeTheActivationIsSaved - 1;
-            return Task.FromResult(false);
-        }
-
-        accountBeingActivatedByTheFirstCode.IsTwoFactorEnabled = true;
-        accountBeingActivatedByTheFirstCode.EncryptedTotpSecret = secretOfThePhoneEncryptedForTheDatabase;
-        SavedBackupCodes.AddRange(newBackupCodesOfTheAccount);
-        repositoryThatKeepsTheSecurityEventsInMemory.SavedSecurityEvents.Add(securityEventOfTheTwoFactorActivation);
-
-        return Task.FromResult(true);
     }
 
-    // Efface le secret et tous les codes en mémoire, sauf si un conflit est simulé.
-    public Task<bool> TryToSaveTwoFactorDeactivationOfThisAccountAsync(User accountBeingDeactivatedByItsOwner, SecurityEvent securityEventOfTheTwoFactorDeactivation)
+    // Note que tous les codes de ce compte devront partir avec les autres changements.
+    public Task PrepareBackupCodesRemovalAsync(Guid accountId)
     {
-        if (DatabaseIsDownWhileSavingTheSettings)
+        lock (pendingChangesLock)
         {
-            throw new InvalidOperationException(TechnicalDetailOfTheSimulatedTwoFactorFailure);
+            backupCodeRemovals.Add(accountId);
         }
 
-        if (NumberOfConflictsBeforeTheDeactivationIsSaved > 0)
+        return Task.CompletedTask;
+    }
+
+    // La panne simulée touche l'enregistrement d'une activation ou d'une désactivation.
+    public void ThrowIfTableIsDown()
+    {
+        lock (pendingChangesLock)
         {
-            NumberOfConflictsBeforeTheDeactivationIsSaved = NumberOfConflictsBeforeTheDeactivationIsSaved - 1;
-            return Task.FromResult(false);
+            if (FailsWhenSavingSettings && (preparedBackupCodes.Count > 0 || backupCodeRemovals.Count > 0))
+            {
+                throw new InvalidOperationException(FailureDetail);
+            }
         }
+    }
 
-        accountBeingDeactivatedByItsOwner.IsTwoFactorEnabled = false;
-        accountBeingDeactivatedByItsOwner.EncryptedTotpSecret = null;
-        SavedBackupCodes.RemoveAll(backupCodeAlreadyKeptInThisMemoryList => backupCodeAlreadyKeptInThisMemoryList.UserId == accountBeingDeactivatedByItsOwner.Id);
-        repositoryThatKeepsTheSecurityEventsInMemory.SavedSecurityEvents.Add(securityEventOfTheTwoFactorDeactivation);
+    // Une autre requête change le compte juste avant une activation ou une désactivation, tant que le réglage le demande.
+    public bool HasConcurrentChange()
+    {
+        lock (pendingChangesLock)
+        {
+            // Des codes préparés : c'est une activation.
+            if (preparedBackupCodes.Count > 0 && ActivationConflicts > 0)
+            {
+                ActivationConflicts = ActivationConflicts - 1;
+                return true;
+            }
 
-        return Task.FromResult(true);
+            // Des codes à effacer : c'est une désactivation.
+            if (backupCodeRemovals.Count > 0 && DeactivationConflicts > 0)
+            {
+                DeactivationConflicts = DeactivationConflicts - 1;
+                return true;
+            }
+
+            return false;
+        }
+    }
+
+    // Remet les codes lus comme ils étaient, et oublie ce qui était préparé.
+    public void Rollback()
+    {
+        lock (pendingChangesLock)
+        {
+            readBackupCodes.RestoreAll();
+            ClearTracking();
+        }
+    }
+
+    // L'autre requête simulée a changé le compte, pas les codes : il n'y a rien à écrire ici.
+    public void ApplyConcurrentChanges()
+    {
+    }
+
+    // Garde les nouveaux codes, et efface ceux des comptes qui désactivent la double authentification.
+    public void Commit()
+    {
+        lock (pendingChangesLock)
+        {
+            foreach (var accountId in backupCodeRemovals)
+            {
+                SavedBackupCodes.RemoveAll(backupCode => backupCode.UserId == accountId);
+            }
+
+            SavedBackupCodes.AddRange(preparedBackupCodes);
+            ClearTracking();
+        }
+    }
+
+    // Garde une copie du code tel qu'il est lu : il reprendra ces valeurs si l'enregistrement échoue.
+    private void KeepCopy(BackupCode backupCode)
+    {
+        lock (pendingChangesLock)
+        {
+            readBackupCodes.Keep(backupCode);
+        }
+    }
+
+    // Oublie les copies et ce qui était préparé : le prochain passage repart de ce qui est gardé.
+    private void ClearTracking()
+    {
+        readBackupCodes.Clear();
+        preparedBackupCodes.Clear();
+        backupCodeRemovals.Clear();
     }
 }

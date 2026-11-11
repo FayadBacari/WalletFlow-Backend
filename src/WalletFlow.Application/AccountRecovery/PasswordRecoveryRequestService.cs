@@ -9,41 +9,40 @@ namespace WalletFlow.Application.AccountRecovery;
 // Ce service ne lit jamais la base : sa réponse et son temps de réponse sont donc les mêmes pour toutes les adresses.
 public class PasswordRecoveryRequestService
 {
-    private readonly IPasswordRecoveryRequestLimiter limiterOfTheRecoveryRequestsPerEmailAddress;
-    private readonly IBackgroundEmailRequestQueue queueOfTheEmailsToPrepareInTheBackground;
+    private readonly IPasswordRecoveryRequestLimiter requestLimiter;
+    private readonly IBackgroundEmailRequestQueue emailQueue;
 
     // Reçoit la limite par adresse e-mail et la file des e-mails.
     public PasswordRecoveryRequestService(
-        IPasswordRecoveryRequestLimiter limiterOfTheRecoveryRequestsPerEmailAddress,
-        IBackgroundEmailRequestQueue queueOfTheEmailsToPrepareInTheBackground)
+        IPasswordRecoveryRequestLimiter requestLimiter,
+        IBackgroundEmailRequestQueue emailQueue)
     {
-        this.limiterOfTheRecoveryRequestsPerEmailAddress = limiterOfTheRecoveryRequestsPerEmailAddress;
-        this.queueOfTheEmailsToPrepareInTheBackground = queueOfTheEmailsToPrepareInTheBackground;
+        this.requestLimiter = requestLimiter;
+        this.emailQueue = emailQueue;
     }
 
     // Vérifie l'adresse et la limite, puis confie la suite à la file des e-mails.
     // La limite compte les demandes, qu'un compte existe ou non : elle ne révèle donc rien.
-    public PasswordRecoveryRequestResult RequestPasswordRecoveryForThisEmailAddress(string emailAddressTypedByTheVisitor, IPAddress? ipAddressOfTheRequestingVisitor)
+    public PasswordRecoveryRequestResult Request(string typedEmail, IPAddress? ipAddress)
     {
-        var emailAddressInItsStoredForm = EmailAddressRules.ConvertEmailAddressIntoItsStoredForm(emailAddressTypedByTheVisitor);
+        var email = EmailAddressRules.Normalize(typedEmail);
 
-        if (!EmailAddressRules.CheckThatEmailAddressHasValidFormat(emailAddressInItsStoredForm))
+        if (!EmailAddressRules.IsValid(email))
         {
-            return new PasswordRecoveryRequestResult { EmailAddressErrorMessage = AccountRegistrationService.ErrorMessageForInvalidEmailAddressFormat };
+            return PasswordRecoveryRequestResult.InvalidEmailAddressFormat;
         }
 
-        if (!limiterOfTheRecoveryRequestsPerEmailAddress.TryToCountNewRequestForThisEmailAddress(emailAddressInItsStoredForm))
+        if (!requestLimiter.TryCountRequest(email))
         {
-            return new PasswordRecoveryRequestResult { TooManyRequestsForThisEmailAddress = true };
+            return PasswordRecoveryRequestResult.TooManyRequests;
         }
 
-        queueOfTheEmailsToPrepareInTheBackground.AddEmailRequestToTheBackgroundQueue(new BackgroundEmailRequest
+        emailQueue.Add(new BackgroundEmailRequest.PasswordRecovery
         {
-            TypeOfTheRequestedBackgroundEmail = BackgroundEmailRequestType.PasswordRecovery,
-            EmailAddressOfTheRecoveryRequest = emailAddressInItsStoredForm,
-            IpAddressOfTheRequestingVisitor = ipAddressOfTheRequestingVisitor
+            EmailAddress = email,
+            IpAddress = ipAddress
         });
 
-        return new PasswordRecoveryRequestResult();
+        return PasswordRecoveryRequestResult.RequestAccepted;
     }
 }

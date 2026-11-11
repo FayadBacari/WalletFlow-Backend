@@ -6,55 +6,55 @@ namespace WalletFlow.Domain.UsersAndSecurity;
 // Règles que doit respecter un mot de passe (GR Auth, SS §2, DD §3).
 public static class PasswordRules
 {
-    public const int MinimumNumberOfCharactersInPassword = 12;
-    public const int MaximumNumberOfCharactersInPassword = 128;
+    public const int MinimumLength = 12;
+    public const int MaximumLength = 128;
 
     // Écrit le mot de passe en Unicode NFC, avant les règles et le hachage (SS §2) : tapé sur deux appareils
     // différents, un « é » donne le même résultat. .NET refuse de normaliser un texte qui contient des
     // caractères interdits : il est alors gardé tel quel, et il ne pourra ni être choisi ni correspondre à un compte.
-    public static string ConvertPasswordIntoItsNormalizedForm(string passwordTextTypedByTheVisitor)
+    public static string Normalize(string password)
     {
         try
         {
-            return passwordTextTypedByTheVisitor.Normalize(NormalizationForm.FormC);
+            return password.Normalize(NormalizationForm.FormC);
         }
         catch (ArgumentException)
         {
-            return passwordTextTypedByTheVisitor;
+            return password;
         }
     }
 
     // Renvoie vrai si le mot de passe a la bonne longueur, aucun caractère invisible et les 4 types de caractères demandés.
-    public static bool CheckThatPasswordRespectsAllTheRules(string passwordToCheckAgainstTheRules)
+    public static bool IsValid(string password)
     {
-        return CheckThatPasswordHasTheRightNumberOfCharacters(passwordToCheckAgainstTheRules)
-            && !CheckThatPasswordContainsAtLeastOneInvisibleCharacter(passwordToCheckAgainstTheRules)
-            && CheckThatPasswordContainsTheFourRequiredTypesOfCharacters(passwordToCheckAgainstTheRules);
+        return HasValidLength(password)
+            && !ContainsInvisibleCharacter(password)
+            && HasRequiredCharacterTypes(password);
     }
 
     // Compte les vrais caractères : avec Length, un emoji compterait pour deux.
-    private static bool CheckThatPasswordHasTheRightNumberOfCharacters(string passwordToCheckAgainstTheRules)
+    private static bool HasValidLength(string password)
     {
-        var numberOfRealCharactersInThePassword = passwordToCheckAgainstTheRules.EnumerateRunes().Count();
+        var characterCount = password.EnumerateRunes().Count();
 
-        return numberOfRealCharactersInThePassword >= MinimumNumberOfCharactersInPassword
-            && numberOfRealCharactersInThePassword <= MaximumNumberOfCharactersInPassword;
+        return characterCount >= MinimumLength
+            && characterCount <= MaximumLength;
     }
 
     // Renvoie vrai si le mot de passe contient un caractère invisible ou non attribué par Unicode :
     // il pourrait compter comme caractère spécial sans se voir, et on ne pourrait pas le retaper.
-    private static bool CheckThatPasswordContainsAtLeastOneInvisibleCharacter(string passwordToCheckAgainstTheRules)
+    private static bool ContainsInvisibleCharacter(string password)
     {
-        foreach (var realCharacterOfThePasswordBeingChecked in passwordToCheckAgainstTheRules.EnumerateRunes())
+        foreach (var character in password.EnumerateRunes())
         {
-            var unicodeCategoryOfTheCharacterBeingChecked = Rune.GetUnicodeCategory(realCharacterOfThePasswordBeingChecked);
+            var category = Rune.GetUnicodeCategory(character);
 
-            if (unicodeCategoryOfTheCharacterBeingChecked == UnicodeCategory.Control
-                || unicodeCategoryOfTheCharacterBeingChecked == UnicodeCategory.Format
-                || unicodeCategoryOfTheCharacterBeingChecked == UnicodeCategory.LineSeparator
-                || unicodeCategoryOfTheCharacterBeingChecked == UnicodeCategory.ParagraphSeparator
-                || unicodeCategoryOfTheCharacterBeingChecked == UnicodeCategory.PrivateUse
-                || unicodeCategoryOfTheCharacterBeingChecked == UnicodeCategory.OtherNotAssigned)
+            if (category == UnicodeCategory.Control
+                || category == UnicodeCategory.Format
+                || category == UnicodeCategory.LineSeparator
+                || category == UnicodeCategory.ParagraphSeparator
+                || category == UnicodeCategory.PrivateUse
+                || category == UnicodeCategory.OtherNotAssigned)
             {
                 return true;
             }
@@ -64,47 +64,47 @@ public static class PasswordRules
     }
 
     // Renvoie vrai si le mot de passe contient une majuscule, une minuscule, un chiffre et un caractère spécial.
-    private static bool CheckThatPasswordContainsTheFourRequiredTypesOfCharacters(string passwordToCheckAgainstTheRules)
+    private static bool HasRequiredCharacterTypes(string password)
     {
-        var passwordContainsAtLeastOneUppercaseLetter = false;
-        var passwordContainsAtLeastOneLowercaseLetter = false;
-        var passwordContainsAtLeastOneDigitCharacter = false;
-        var passwordContainsAtLeastOneSpecialCharacter = false;
+        var hasUppercase = false;
+        var hasLowercase = false;
+        var hasDigit = false;
+        var hasSpecialCharacter = false;
 
-        foreach (var realCharacterOfThePasswordBeingChecked in passwordToCheckAgainstTheRules.EnumerateRunes())
+        foreach (var character in password.EnumerateRunes())
         {
-            if (Rune.IsUpper(realCharacterOfThePasswordBeingChecked))
+            if (Rune.IsUpper(character))
             {
-                passwordContainsAtLeastOneUppercaseLetter = true;
+                hasUppercase = true;
             }
-            else if (Rune.IsLower(realCharacterOfThePasswordBeingChecked))
+            else if (Rune.IsLower(character))
             {
-                passwordContainsAtLeastOneLowercaseLetter = true;
+                hasLowercase = true;
             }
-            else if (Rune.IsDigit(realCharacterOfThePasswordBeingChecked))
+            else if (Rune.IsDigit(character))
             {
-                passwordContainsAtLeastOneDigitCharacter = true;
+                hasDigit = true;
             }
-            else if (CheckThatCharacterCountsAsSpecialCharacter(realCharacterOfThePasswordBeingChecked))
+            else if (IsSpecialCharacter(character))
             {
-                passwordContainsAtLeastOneSpecialCharacter = true;
+                hasSpecialCharacter = true;
             }
         }
 
-        return passwordContainsAtLeastOneUppercaseLetter
-            && passwordContainsAtLeastOneLowercaseLetter
-            && passwordContainsAtLeastOneDigitCharacter
-            && passwordContainsAtLeastOneSpecialCharacter;
+        return hasUppercase
+            && hasLowercase
+            && hasDigit
+            && hasSpecialCharacter;
     }
 
     // Un caractère spécial n'est ni une lettre ni un accent combinant, qui s'ajoute simplement à une lettre.
-    private static bool CheckThatCharacterCountsAsSpecialCharacter(Rune realCharacterOfThePasswordBeingChecked)
+    private static bool IsSpecialCharacter(Rune character)
     {
-        var unicodeCategoryOfTheCharacterBeingChecked = Rune.GetUnicodeCategory(realCharacterOfThePasswordBeingChecked);
+        var category = Rune.GetUnicodeCategory(character);
 
-        return !Rune.IsLetter(realCharacterOfThePasswordBeingChecked)
-            && unicodeCategoryOfTheCharacterBeingChecked != UnicodeCategory.NonSpacingMark
-            && unicodeCategoryOfTheCharacterBeingChecked != UnicodeCategory.SpacingCombiningMark
-            && unicodeCategoryOfTheCharacterBeingChecked != UnicodeCategory.EnclosingMark;
+        return !Rune.IsLetter(character)
+            && category != UnicodeCategory.NonSpacingMark
+            && category != UnicodeCategory.SpacingCombiningMark
+            && category != UnicodeCategory.EnclosingMark;
     }
 }

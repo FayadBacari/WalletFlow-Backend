@@ -1,3 +1,4 @@
+using WalletFlow.Api.Contracts;
 using System.Net;
 using System.Net.Http.Json;
 using System.Text;
@@ -23,86 +24,86 @@ public class TwoFactorLoginEndpointTests
     [Fact]
     public async Task RightPasswordOfAnActivatedAccountAsksForTheCodeAndOpensNoSession()
     {
-        using var apiStartedInMemoryForThisTest = new ApiFactoryWithFakeRepositoryAndEmails();
-        AddActivatedAccountToTheFakeRepositoryOfTheApi(apiStartedInMemoryForThisTest);
-        var clientThatKeepsTheCookiesOfTheBrowser = CreateClientThatKeepsCookiesLikeABrowser(apiStartedInMemoryForThisTest);
+        using var api = new ApiFactoryWithFakes();
+        await AddActivatedAccountAsync(api);
+        var browserClient = CreateBrowserClient(api);
 
-        var answerToTheLoginRequestWithThePassword = await SendLoginRequestToTheApiAsync(clientThatKeepsTheCookiesOfTheBrowser);
+        var loginResponse = await SendLoginRequestAsync(browserClient);
 
-        Assert.Equal(HttpStatusCode.OK, answerToTheLoginRequestWithThePassword.StatusCode);
-        var jsonDocumentOfTheApiAnswer = JsonDocument.Parse(await answerToTheLoginRequestWithThePassword.Content.ReadAsStringAsync());
-        Assert.True(jsonDocumentOfTheApiAnswer.RootElement.GetProperty("isTwoFactorCodeRequired").GetBoolean());
-        Assert.Equal(AccountLoginController.MessageSentWhenTheLoginWaitsForItsCode, jsonDocumentOfTheApiAnswer.RootElement.GetProperty("message").GetString());
-        Assert.Null(FindCookieWrittenByTheAnswer(answerToTheLoginRequestWithThePassword, SessionCookiesConfiguration.NameOfTheUserSessionCookie));
-        Assert.Null(FindCookieWrittenByTheAnswer(answerToTheLoginRequestWithThePassword, SessionCookiesConfiguration.NameOfTheDeviceTokenCookie));
-        Assert.Empty(apiStartedInMemoryForThisTest.RepositoryThatKeepsSessionsInMemory.SavedSessions);
-        SecurityHeadersAssertions.CheckThatAnswerCarriesTheExactSecurityHeaders(answerToTheLoginRequestWithThePassword);
+        Assert.Equal(HttpStatusCode.OK, loginResponse.StatusCode);
+        var jsonDocument = JsonDocument.Parse(await loginResponse.Content.ReadAsStringAsync());
+        Assert.True(jsonDocument.RootElement.GetProperty("isTwoFactorCodeRequired").GetBoolean());
+        Assert.Equal(AccountLoginController.CodeRequiredMessage, jsonDocument.RootElement.GetProperty("message").GetString());
+        Assert.Null(FindCookie(loginResponse, SessionCookiesConfiguration.SessionCookieName));
+        Assert.Null(FindCookie(loginResponse, SessionCookiesConfiguration.DeviceCookieName));
+        Assert.Empty(api.SessionRepository.SavedSessions);
+        SecurityHeadersAssertions.AssertExactSecurityHeaders(loginResponse);
     }
 
     // SS §3 : ce cookie n'est lisible par aucun script, ne part qu'en HTTPS, et ne vaut que pour le site lui-même.
     [Fact]
     public async Task WaitingLoginCookieHasItsExactAttributesAndNeverAppearsInTheBody()
     {
-        using var apiStartedInMemoryForThisTest = new ApiFactoryWithFakeRepositoryAndEmails();
-        AddActivatedAccountToTheFakeRepositoryOfTheApi(apiStartedInMemoryForThisTest);
-        var clientThatKeepsTheCookiesOfTheBrowser = CreateClientThatKeepsCookiesLikeABrowser(apiStartedInMemoryForThisTest);
+        using var api = new ApiFactoryWithFakes();
+        await AddActivatedAccountAsync(api);
+        var browserClient = CreateBrowserClient(api);
 
-        var answerToTheLoginRequestWithThePassword = await SendLoginRequestToTheApiAsync(clientThatKeepsTheCookiesOfTheBrowser);
+        var loginResponse = await SendLoginRequestAsync(browserClient);
 
-        var waitingLoginCookieWrittenByTheAnswer = FindCookieWrittenByTheAnswer(answerToTheLoginRequestWithThePassword, NameOfTheWaitingLoginCookieInTheseTests);
-        Assert.NotNull(waitingLoginCookieWrittenByTheAnswer);
-        Assert.True(waitingLoginCookieWrittenByTheAnswer.HttpOnly);
-        Assert.True(waitingLoginCookieWrittenByTheAnswer.Secure);
-        Assert.Equal(SameSiteMode.Strict, waitingLoginCookieWrittenByTheAnswer.SameSite);
-        Assert.Equal("/", waitingLoginCookieWrittenByTheAnswer.Path.ToString());
-        Assert.Equal(0, waitingLoginCookieWrittenByTheAnswer.Domain.Length);
-        Assert.Null(waitingLoginCookieWrittenByTheAnswer.MaxAge);
-        Assert.Null(waitingLoginCookieWrittenByTheAnswer.Expires);
-        Assert.DoesNotContain(waitingLoginCookieWrittenByTheAnswer.Value.ToString(), await answerToTheLoginRequestWithThePassword.Content.ReadAsStringAsync());
+        var waitingLoginCookie = FindCookie(loginResponse, WaitingLoginCookieName);
+        Assert.NotNull(waitingLoginCookie);
+        Assert.True(waitingLoginCookie.HttpOnly);
+        Assert.True(waitingLoginCookie.Secure);
+        Assert.Equal(SameSiteMode.Strict, waitingLoginCookie.SameSite);
+        Assert.Equal("/", waitingLoginCookie.Path.ToString());
+        Assert.Equal(0, waitingLoginCookie.Domain.Length);
+        Assert.Null(waitingLoginCookie.MaxAge);
+        Assert.Null(waitingLoginCookie.Expires);
+        Assert.DoesNotContain(waitingLoginCookie.Value.ToString(), await loginResponse.Content.ReadAsStringAsync());
     }
 
     // Le contrat avec le site : une connexion sans double authentification ne demande aucun code.
     [Fact]
     public async Task AccountWithoutTwoFactorIsToldThatNoCodeIsRequired()
     {
-        using var apiStartedInMemoryForThisTest = new ApiFactoryWithFakeRepositoryAndEmails();
-        AddAccountToTheFakeRepositoryOfTheApi(apiStartedInMemoryForThisTest);
-        var clientThatKeepsTheCookiesOfTheBrowser = CreateClientThatKeepsCookiesLikeABrowser(apiStartedInMemoryForThisTest);
+        using var api = new ApiFactoryWithFakes();
+        await AddAccountAsync(api);
+        var browserClient = CreateBrowserClient(api);
 
-        var answerToTheLoginRequestWithThePassword = await SendLoginRequestToTheApiAsync(clientThatKeepsTheCookiesOfTheBrowser);
+        var loginResponse = await SendLoginRequestAsync(browserClient);
 
-        var jsonDocumentOfTheApiAnswer = JsonDocument.Parse(await answerToTheLoginRequestWithThePassword.Content.ReadAsStringAsync());
-        Assert.False(jsonDocumentOfTheApiAnswer.RootElement.GetProperty("isTwoFactorCodeRequired").GetBoolean());
-        Assert.Null(FindCookieWrittenByTheAnswer(answerToTheLoginRequestWithThePassword, NameOfTheWaitingLoginCookieInTheseTests));
+        var jsonDocument = JsonDocument.Parse(await loginResponse.Content.ReadAsStringAsync());
+        Assert.False(jsonDocument.RootElement.GetProperty("isTwoFactorCodeRequired").GetBoolean());
+        Assert.Null(FindCookie(loginResponse, WaitingLoginCookieName));
     }
 
     // Le cookie d'attente n'ouvre aucune porte : il ne vaut pas une session.
     [Fact]
     public async Task WaitingLoginCookieAloneGivesAccessToNothing()
     {
-        using var apiStartedInMemoryForThisTest = new ApiFactoryWithFakeRepositoryAndEmails();
-        AddActivatedAccountToTheFakeRepositoryOfTheApi(apiStartedInMemoryForThisTest);
-        var clientThatKeepsTheCookiesOfTheBrowser = CreateClientThatKeepsCookiesLikeABrowser(apiStartedInMemoryForThisTest);
-        await SendLoginRequestToTheApiAsync(clientThatKeepsTheCookiesOfTheBrowser);
+        using var api = new ApiFactoryWithFakes();
+        await AddActivatedAccountAsync(api);
+        var browserClient = CreateBrowserClient(api);
+        await SendLoginRequestAsync(browserClient);
 
-        var answerGivenByTheProtectedRouteOfTheApi = await clientThatKeepsTheCookiesOfTheBrowser.GetAsync(AddressOfTheCsrfTokenEndpoint);
+        var protectedResponse = await browserClient.GetAsync(CsrfTokenEndpoint);
 
-        Assert.Equal(HttpStatusCode.Unauthorized, answerGivenByTheProtectedRouteOfTheApi.StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, protectedResponse.StatusCode);
     }
 
     // Copié dans le cookie de session, le jeton d'attente n'est reconnu par aucune session.
     [Fact]
     public async Task WaitingLoginTokenCopiedIntoTheSessionCookieGivesAccessToNothing()
     {
-        using var apiStartedInMemoryForThisTest = new ApiFactoryWithFakeRepositoryAndEmails();
-        AddActivatedAccountToTheFakeRepositoryOfTheApi(apiStartedInMemoryForThisTest);
-        var answerToTheLoginRequestWithThePassword = await SendLoginRequestToTheApiAsync(CreateClientThatKeepsCookiesLikeABrowser(apiStartedInMemoryForThisTest));
-        var waitingLoginTokenOfTheVisitor = FindCookieWrittenByTheAnswer(answerToTheLoginRequestWithThePassword, NameOfTheWaitingLoginCookieInTheseTests)!.Value.ToString();
-        var clientUsedByTheAttackerOfThisTest = CreateClientThatOnlySendsHandwrittenCookies(apiStartedInMemoryForThisTest, SessionCookiesConfiguration.NameOfTheUserSessionCookie + "=" + waitingLoginTokenOfTheVisitor);
+        using var api = new ApiFactoryWithFakes();
+        await AddActivatedAccountAsync(api);
+        var loginResponse = await SendLoginRequestAsync(CreateBrowserClient(api));
+        var waitingLoginToken = FindCookie(loginResponse, WaitingLoginCookieName)!.Value.ToString();
+        var attackerClient = CreateClientWithManualCookies(api, SessionCookiesConfiguration.SessionCookieName + "=" + waitingLoginToken);
 
-        var answerGivenByTheProtectedRouteOfTheApi = await clientUsedByTheAttackerOfThisTest.GetAsync(AddressOfTheCsrfTokenEndpoint);
+        var protectedResponse = await attackerClient.GetAsync(CsrfTokenEndpoint);
 
-        Assert.Equal(HttpStatusCode.Unauthorized, answerGivenByTheProtectedRouteOfTheApi.StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, protectedResponse.StatusCode);
     }
 
     // --- Le bon code
@@ -110,101 +111,101 @@ public class TwoFactorLoginEndpointTests
     [Fact]
     public async Task RightCodeOpensTheSessionWritesItsCookiesAndDeletesTheWaitingCookie()
     {
-        using var apiStartedInMemoryForThisTest = new ApiFactoryWithFakeRepositoryAndEmails();
-        var activatedAccountUsedByThisTest = AddActivatedAccountToTheFakeRepositoryOfTheApi(apiStartedInMemoryForThisTest);
-        var clientThatKeepsTheCookiesOfTheBrowser = CreateClientThatKeepsCookiesLikeABrowser(apiStartedInMemoryForThisTest);
-        await SendLoginRequestToTheApiAsync(clientThatKeepsTheCookiesOfTheBrowser);
+        using var api = new ApiFactoryWithFakes();
+        var activatedAccount = await AddActivatedAccountAsync(api);
+        var browserClient = CreateBrowserClient(api);
+        await SendLoginRequestAsync(browserClient);
 
-        var answerToTheRequestCarryingTheCode = await SendTwoFactorLoginRequestToTheApiAsync(clientThatKeepsTheCookiesOfTheBrowser, CalculateCodeShownOnThePhoneNow(apiStartedInMemoryForThisTest, activatedAccountUsedByThisTest.SecretOfTheAuthenticatorApplication));
+        var codeResponse = await SendTwoFactorLoginRequestAsync(browserClient, CalculateCurrentCode(api, activatedAccount.Secret));
 
-        Assert.Equal(HttpStatusCode.OK, answerToTheRequestCarryingTheCode.StatusCode);
-        var jsonDocumentOfTheApiAnswer = JsonDocument.Parse(await answerToTheRequestCarryingTheCode.Content.ReadAsStringAsync());
-        Assert.False(jsonDocumentOfTheApiAnswer.RootElement.GetProperty("isTwoFactorCodeRequired").GetBoolean());
-        Assert.Equal(AccountLoginController.MessageSentWhenTheVisitorIsLoggedIn, jsonDocumentOfTheApiAnswer.RootElement.GetProperty("message").GetString());
+        Assert.Equal(HttpStatusCode.OK, codeResponse.StatusCode);
+        var jsonDocument = JsonDocument.Parse(await codeResponse.Content.ReadAsStringAsync());
+        Assert.False(jsonDocument.RootElement.GetProperty("isTwoFactorCodeRequired").GetBoolean());
+        Assert.Equal(AccountLoginController.LoggedInMessage, jsonDocument.RootElement.GetProperty("message").GetString());
 
-        var sessionCookieWrittenByTheAnswer = FindCookieWrittenByTheAnswer(answerToTheRequestCarryingTheCode, SessionCookiesConfiguration.NameOfTheUserSessionCookie);
-        Assert.NotNull(sessionCookieWrittenByTheAnswer);
-        Assert.True(sessionCookieWrittenByTheAnswer.HttpOnly);
-        Assert.Equal(SameSiteMode.Lax, sessionCookieWrittenByTheAnswer.SameSite);
-        Assert.Equal(TimeSpan.FromDays(365), FindCookieWrittenByTheAnswer(answerToTheRequestCarryingTheCode, SessionCookiesConfiguration.NameOfTheDeviceTokenCookie)!.MaxAge);
+        var sessionCookie = FindCookie(codeResponse, SessionCookiesConfiguration.SessionCookieName);
+        Assert.NotNull(sessionCookie);
+        Assert.True(sessionCookie.HttpOnly);
+        Assert.Equal(SameSiteMode.Lax, sessionCookie.SameSite);
+        Assert.Equal(TimeSpan.FromDays(365), FindCookie(codeResponse, SessionCookiesConfiguration.DeviceCookieName)!.MaxAge);
 
         // Un navigateur préfère Max-Age à une date passée : l'en-tête de suppression ne doit donc pas en contenir.
-        var waitingLoginCookieDeletedByTheAnswer = FindCookieWrittenByTheAnswer(answerToTheRequestCarryingTheCode, NameOfTheWaitingLoginCookieInTheseTests);
-        Assert.NotNull(waitingLoginCookieDeletedByTheAnswer);
-        Assert.Null(waitingLoginCookieDeletedByTheAnswer.MaxAge);
-        Assert.True(waitingLoginCookieDeletedByTheAnswer.Expires < DateTimeOffset.UtcNow);
-        Assert.Equal(0, waitingLoginCookieDeletedByTheAnswer.Value.Length);
+        var waitingLoginCookie = FindCookie(codeResponse, WaitingLoginCookieName);
+        Assert.NotNull(waitingLoginCookie);
+        Assert.Null(waitingLoginCookie.MaxAge);
+        Assert.True(waitingLoginCookie.Expires < DateTimeOffset.UtcNow);
+        Assert.Equal(0, waitingLoginCookie.Value.Length);
 
-        var answerGivenByTheProtectedRouteOfTheApi = await clientThatKeepsTheCookiesOfTheBrowser.GetAsync(AddressOfTheCsrfTokenEndpoint);
-        Assert.Equal(HttpStatusCode.OK, answerGivenByTheProtectedRouteOfTheApi.StatusCode);
+        var protectedResponse = await browserClient.GetAsync(CsrfTokenEndpoint);
+        Assert.Equal(HttpStatusCode.OK, protectedResponse.StatusCode);
     }
 
     [Fact]
     public async Task BackupCodeWithItsDashAlsoOpensTheSession()
     {
-        using var apiStartedInMemoryForThisTest = new ApiFactoryWithFakeRepositoryAndEmails();
-        var activatedAccountUsedByThisTest = AddActivatedAccountToTheFakeRepositoryOfTheApi(apiStartedInMemoryForThisTest);
-        var clientThatKeepsTheCookiesOfTheBrowser = CreateClientThatKeepsCookiesLikeABrowser(apiStartedInMemoryForThisTest);
-        await SendLoginRequestToTheApiAsync(clientThatKeepsTheCookiesOfTheBrowser);
+        using var api = new ApiFactoryWithFakes();
+        var activatedAccount = await AddActivatedAccountAsync(api);
+        var browserClient = CreateBrowserClient(api);
+        await SendLoginRequestAsync(browserClient);
 
-        var answerToTheRequestCarryingTheCode = await SendTwoFactorLoginRequestToTheApiAsync(clientThatKeepsTheCookiesOfTheBrowser, activatedAccountUsedByThisTest.BackupCodeInItsCleanForm.Insert(5, "-"));
+        var codeResponse = await SendTwoFactorLoginRequestAsync(browserClient, activatedAccount.BackupCode.Insert(5, "-"));
 
-        Assert.Equal(HttpStatusCode.OK, answerToTheRequestCarryingTheCode.StatusCode);
-        Assert.NotNull(apiStartedInMemoryForThisTest.RepositoryThatKeepsTwoFactorDataInMemory.SavedBackupCodes[0].UsedAt);
+        Assert.Equal(HttpStatusCode.OK, codeResponse.StatusCode);
+        Assert.NotNull(api.TwoFactorRepository.SavedBackupCodes[0].UsedAt);
     }
 
     // Le cookie d'appareil du navigateur est lu au moment du code : un appareil déjà connu du compte n'en crée pas d'autre.
     [Fact]
     public async Task KnownDeviceDoesNotCreateANewDeviceAtTheEndOfTheLogin()
     {
-        using var apiStartedInMemoryForThisTest = new ApiFactoryWithFakeRepositoryAndEmails();
-        var activatedAccountUsedByThisTest = AddActivatedAccountToTheFakeRepositoryOfTheApi(apiStartedInMemoryForThisTest);
-        var clientThatKeepsTheCookiesOfTheBrowser = CreateClientThatKeepsCookiesLikeABrowser(apiStartedInMemoryForThisTest);
-        await LogInWithPasswordAndCodeThenAskForTheCsrfTokenAsync(apiStartedInMemoryForThisTest, clientThatKeepsTheCookiesOfTheBrowser, activatedAccountUsedByThisTest.SecretOfTheAuthenticatorApplication);
-        WaitForTheNextCodeOnThePhone(apiStartedInMemoryForThisTest);
+        using var api = new ApiFactoryWithFakes();
+        var activatedAccount = await AddActivatedAccountAsync(api);
+        var browserClient = CreateBrowserClient(api);
+        await LogInWithCodeThenGetCsrfTokenAsync(api, browserClient, activatedAccount.Secret);
+        WaitForNextCode(api);
 
-        await LogInWithPasswordAndCodeThenAskForTheCsrfTokenAsync(apiStartedInMemoryForThisTest, clientThatKeepsTheCookiesOfTheBrowser, activatedAccountUsedByThisTest.SecretOfTheAuthenticatorApplication);
+        await LogInWithCodeThenGetCsrfTokenAsync(api, browserClient, activatedAccount.Secret);
 
-        Assert.Single(apiStartedInMemoryForThisTest.RepositoryThatKeepsSessionsInMemory.SavedDevices);
-        Assert.Single(apiStartedInMemoryForThisTest.RepositoryThatKeepsSessionsInMemory.SavedSessions);
+        Assert.Single(api.SessionRepository.SavedDevices);
+        Assert.Single(api.SessionRepository.SavedSessions);
     }
 
     // SS §2 : dans la vraie API aussi, la mémoire des codes utilisés survit d'une requête à l'autre.
     [Fact]
     public async Task CodeAlreadyUsedIsRefusedAtTheNextLoginThroughTheApi()
     {
-        using var apiStartedInMemoryForThisTest = new ApiFactoryWithFakeRepositoryAndEmails();
-        var activatedAccountUsedByThisTest = AddActivatedAccountToTheFakeRepositoryOfTheApi(apiStartedInMemoryForThisTest);
-        var clientThatKeepsTheCookiesOfTheBrowser = CreateClientThatKeepsCookiesLikeABrowser(apiStartedInMemoryForThisTest);
-        var codeShownOnThePhoneInThisTest = CalculateCodeShownOnThePhoneNow(apiStartedInMemoryForThisTest, activatedAccountUsedByThisTest.SecretOfTheAuthenticatorApplication);
-        await SendLoginRequestToTheApiAsync(clientThatKeepsTheCookiesOfTheBrowser);
-        var answerToTheFirstUseOfTheCode = await SendTwoFactorLoginRequestToTheApiAsync(clientThatKeepsTheCookiesOfTheBrowser, codeShownOnThePhoneInThisTest);
-        Assert.Equal(HttpStatusCode.OK, answerToTheFirstUseOfTheCode.StatusCode);
+        using var api = new ApiFactoryWithFakes();
+        var activatedAccount = await AddActivatedAccountAsync(api);
+        var browserClient = CreateBrowserClient(api);
+        var code = CalculateCurrentCode(api, activatedAccount.Secret);
+        await SendLoginRequestAsync(browserClient);
+        var firstResponse = await SendTwoFactorLoginRequestAsync(browserClient, code);
+        Assert.Equal(HttpStatusCode.OK, firstResponse.StatusCode);
 
-        await SendLoginRequestToTheApiAsync(clientThatKeepsTheCookiesOfTheBrowser);
-        var answerToTheSecondUseOfTheCode = await SendTwoFactorLoginRequestToTheApiAsync(clientThatKeepsTheCookiesOfTheBrowser, codeShownOnThePhoneInThisTest);
+        await SendLoginRequestAsync(browserClient);
+        var secondResponse = await SendTwoFactorLoginRequestAsync(browserClient, code);
 
-        Assert.Equal(HttpStatusCode.BadRequest, answerToTheSecondUseOfTheCode.StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, secondResponse.StatusCode);
     }
 
     // SS §11 : le journal note l'adresse IP de la requête qui donne le code, pour un refus comme pour une réussite.
     [Fact]
     public async Task JournalKeepsTheIpAddressOfTheRequestThatGivesTheCode()
     {
-        using var apiStartedInMemoryForThisTest = new ApiFactoryWithFakeRepositoryAndEmails();
-        var activatedAccountUsedByThisTest = AddActivatedAccountToTheFakeRepositoryOfTheApi(apiStartedInMemoryForThisTest);
-        var clientThatKeepsTheCookiesOfTheBrowser = CreateClientThatKeepsCookiesLikeABrowser(apiStartedInMemoryForThisTest);
-        clientThatKeepsTheCookiesOfTheBrowser.DefaultRequestHeaders.Add(StartupFilterThatReadsTheVisitorAddress.NameOfTheHeaderGivingTheVisitorAddress, "203.0.113.7");
-        await SendLoginRequestToTheApiAsync(clientThatKeepsTheCookiesOfTheBrowser);
+        using var api = new ApiFactoryWithFakes();
+        var activatedAccount = await AddActivatedAccountAsync(api);
+        var browserClient = CreateBrowserClient(api);
+        browserClient.DefaultRequestHeaders.Add(VisitorAddressStartupFilter.VisitorAddressHeader, "203.0.113.7");
+        await SendLoginRequestAsync(browserClient);
 
-        await SendTwoFactorLoginRequestToTheApiAsync(clientThatKeepsTheCookiesOfTheBrowser, FindCodeThatIsWrongNow(apiStartedInMemoryForThisTest, activatedAccountUsedByThisTest.SecretOfTheAuthenticatorApplication));
-        await SendTwoFactorLoginRequestToTheApiAsync(clientThatKeepsTheCookiesOfTheBrowser, CalculateCodeShownOnThePhoneNow(apiStartedInMemoryForThisTest, activatedAccountUsedByThisTest.SecretOfTheAuthenticatorApplication));
+        await SendTwoFactorLoginRequestAsync(browserClient, FindWrongCode(api, activatedAccount.Secret));
+        await SendTwoFactorLoginRequestAsync(browserClient, CalculateCurrentCode(api, activatedAccount.Secret));
 
-        var securityEventsSavedByTheseRequests = apiStartedInMemoryForThisTest.RepositoryThatKeepsSecurityEventsInMemory.SavedSecurityEvents;
-        Assert.Equal(2, securityEventsSavedByTheseRequests.Count);
-        foreach (var securityEventSavedByOneRequest in securityEventsSavedByTheseRequests)
+        var securityEvents = api.SecurityEventRepository.SavedSecurityEvents;
+        Assert.Equal(2, securityEvents.Count);
+        foreach (var securityEvent in securityEvents)
         {
-            Assert.Equal(IPAddress.Parse("203.0.113.7"), securityEventSavedByOneRequest.IpAddress);
+            Assert.Equal(IPAddress.Parse("203.0.113.7"), securityEvent.IpAddress);
         }
     }
 
@@ -214,119 +215,119 @@ public class TwoFactorLoginEndpointTests
     [Fact]
     public async Task WrongCodeAnswersWithAFieldErrorAndKeepsTheWaitingCookie()
     {
-        using var apiStartedInMemoryForThisTest = new ApiFactoryWithFakeRepositoryAndEmails();
-        var activatedAccountUsedByThisTest = AddActivatedAccountToTheFakeRepositoryOfTheApi(apiStartedInMemoryForThisTest);
-        var clientThatKeepsTheCookiesOfTheBrowser = CreateClientThatKeepsCookiesLikeABrowser(apiStartedInMemoryForThisTest);
-        await SendLoginRequestToTheApiAsync(clientThatKeepsTheCookiesOfTheBrowser);
+        using var api = new ApiFactoryWithFakes();
+        var activatedAccount = await AddActivatedAccountAsync(api);
+        var browserClient = CreateBrowserClient(api);
+        await SendLoginRequestAsync(browserClient);
 
-        var answerToTheWrongCodeOfTheVisitor = await SendTwoFactorLoginRequestToTheApiAsync(clientThatKeepsTheCookiesOfTheBrowser, FindCodeThatIsWrongNow(apiStartedInMemoryForThisTest, activatedAccountUsedByThisTest.SecretOfTheAuthenticatorApplication));
+        var wrongCodeResponse = await SendTwoFactorLoginRequestAsync(browserClient, FindWrongCode(api, activatedAccount.Secret));
 
-        Assert.Equal(HttpStatusCode.BadRequest, answerToTheWrongCodeOfTheVisitor.StatusCode);
-        Assert.Equal("application/problem+json", answerToTheWrongCodeOfTheVisitor.Content.Headers.ContentType?.MediaType);
-        Assert.Equal(TwoFactorCodeCheckingService.ErrorMessageForWrongTwoFactorCode, await ReadErrorMessageOfThisRequestFieldAsync(answerToTheWrongCodeOfTheVisitor, "Code"));
-        Assert.Null(FindCookieWrittenByTheAnswer(answerToTheWrongCodeOfTheVisitor, NameOfTheWaitingLoginCookieInTheseTests));
-        Assert.Null(FindCookieWrittenByTheAnswer(answerToTheWrongCodeOfTheVisitor, SessionCookiesConfiguration.NameOfTheUserSessionCookie));
-        SecurityHeadersAssertions.CheckThatAnswerCarriesTheExactSecurityHeaders(answerToTheWrongCodeOfTheVisitor);
+        Assert.Equal(HttpStatusCode.BadRequest, wrongCodeResponse.StatusCode);
+        Assert.Equal("application/problem+json", wrongCodeResponse.Content.Headers.ContentType?.MediaType);
+        Assert.Equal(ErrorMessages.WrongTwoFactorCode, await ReadFieldErrorAsync(wrongCodeResponse, "Code"));
+        Assert.Null(FindCookie(wrongCodeResponse, WaitingLoginCookieName));
+        Assert.Null(FindCookie(wrongCodeResponse, SessionCookiesConfiguration.SessionCookieName));
+        SecurityHeadersAssertions.AssertExactSecurityHeaders(wrongCodeResponse);
 
-        var answerToTheRightCodeOfTheVisitor = await SendTwoFactorLoginRequestToTheApiAsync(clientThatKeepsTheCookiesOfTheBrowser, CalculateCodeShownOnThePhoneNow(apiStartedInMemoryForThisTest, activatedAccountUsedByThisTest.SecretOfTheAuthenticatorApplication));
-        Assert.Equal(HttpStatusCode.OK, answerToTheRightCodeOfTheVisitor.StatusCode);
+        var rightCodeResponse = await SendTwoFactorLoginRequestAsync(browserClient, CalculateCurrentCode(api, activatedAccount.Secret));
+        Assert.Equal(HttpStatusCode.OK, rightCodeResponse.StatusCode);
     }
 
     // 401 : le site revient au formulaire du mot de passe, et le cookie d'attente disparaît.
     [Fact]
     public async Task FifthWrongCodeAnswers401AndDeletesTheWaitingCookie()
     {
-        using var apiStartedInMemoryForThisTest = new ApiFactoryWithFakeRepositoryAndEmails();
-        var activatedAccountUsedByThisTest = AddActivatedAccountToTheFakeRepositoryOfTheApi(apiStartedInMemoryForThisTest);
-        var clientThatKeepsTheCookiesOfTheBrowser = CreateClientThatKeepsCookiesLikeABrowser(apiStartedInMemoryForThisTest);
-        await SendLoginRequestToTheApiAsync(clientThatKeepsTheCookiesOfTheBrowser);
-        var codeThatIsWrongInThisTest = FindCodeThatIsWrongNow(apiStartedInMemoryForThisTest, activatedAccountUsedByThisTest.SecretOfTheAuthenticatorApplication);
+        using var api = new ApiFactoryWithFakes();
+        var activatedAccount = await AddActivatedAccountAsync(api);
+        var browserClient = CreateBrowserClient(api);
+        await SendLoginRequestAsync(browserClient);
+        var wrongCode = FindWrongCode(api, activatedAccount.Secret);
 
-        for (var numberOfTheWrongCodeBeingSent = 1; numberOfTheWrongCodeBeingSent <= 4; numberOfTheWrongCodeBeingSent++)
+        for (var attemptNumber = 1; attemptNumber <= 4; attemptNumber++)
         {
-            var answerToOneWrongCodeOfTheVisitor = await SendTwoFactorLoginRequestToTheApiAsync(clientThatKeepsTheCookiesOfTheBrowser, codeThatIsWrongInThisTest);
-            Assert.Equal(HttpStatusCode.BadRequest, answerToOneWrongCodeOfTheVisitor.StatusCode);
+            var wrongCodeResponse = await SendTwoFactorLoginRequestAsync(browserClient, wrongCode);
+            Assert.Equal(HttpStatusCode.BadRequest, wrongCodeResponse.StatusCode);
         }
 
-        var answerToTheFifthWrongCode = await SendTwoFactorLoginRequestToTheApiAsync(clientThatKeepsTheCookiesOfTheBrowser, codeThatIsWrongInThisTest);
+        var fifthResponse = await SendTwoFactorLoginRequestAsync(browserClient, wrongCode);
 
-        await CheckThatAnswerIsProblemWithThisExactTitleAsync(answerToTheFifthWrongCode, HttpStatusCode.Unauthorized, TwoFactorLoginService.ErrorMessageForLoginThatMustRestart);
-        Assert.True(FindCookieWrittenByTheAnswer(answerToTheFifthWrongCode, NameOfTheWaitingLoginCookieInTheseTests)!.Expires < DateTimeOffset.UtcNow);
-        Assert.Empty(apiStartedInMemoryForThisTest.RepositoryThatKeepsSessionsInMemory.SavedSessions);
+        await AssertProblemTitleAsync(fifthResponse, HttpStatusCode.Unauthorized, ErrorMessages.LoginMustRestart);
+        Assert.True(FindCookie(fifthResponse, WaitingLoginCookieName)!.Expires < DateTimeOffset.UtcNow);
+        Assert.Empty(api.SessionRepository.SavedSessions);
     }
 
     [Fact]
     public async Task CodeWithoutAnyWaitingLoginAnswers401()
     {
-        using var apiStartedInMemoryForThisTest = new ApiFactoryWithFakeRepositoryAndEmails();
-        var clientThatKeepsTheCookiesOfTheBrowser = CreateClientThatKeepsCookiesLikeABrowser(apiStartedInMemoryForThisTest);
+        using var api = new ApiFactoryWithFakes();
+        var browserClient = CreateBrowserClient(api);
 
-        var answerToTheRequestCarryingTheCode = await SendTwoFactorLoginRequestToTheApiAsync(clientThatKeepsTheCookiesOfTheBrowser, "123456");
+        var codeResponse = await SendTwoFactorLoginRequestAsync(browserClient, "123456");
 
-        await CheckThatAnswerIsProblemWithThisExactTitleAsync(answerToTheRequestCarryingTheCode, HttpStatusCode.Unauthorized, TwoFactorLoginService.ErrorMessageForLoginThatMustRestart);
+        await AssertProblemTitleAsync(codeResponse, HttpStatusCode.Unauthorized, ErrorMessages.LoginMustRestart);
     }
 
     [Fact]
     public async Task ForgedWaitingLoginCookieAnswers401AndIsNotCounted()
     {
-        using var apiStartedInMemoryForThisTest = new ApiFactoryWithFakeRepositoryAndEmails();
-        var clientUsedByTheAttackerOfThisTest = CreateClientThatOnlySendsHandwrittenCookies(apiStartedInMemoryForThisTest, NameOfTheWaitingLoginCookieInTheseTests + "=jeton-invente");
+        using var api = new ApiFactoryWithFakes();
+        var attackerClient = CreateClientWithManualCookies(api, WaitingLoginCookieName + "=jeton-invente");
 
-        var answerToTheRequestCarryingTheCode = await SendTwoFactorLoginRequestToTheApiAsync(clientUsedByTheAttackerOfThisTest, "123456");
+        var codeResponse = await SendTwoFactorLoginRequestAsync(attackerClient, "123456");
 
-        await CheckThatAnswerIsProblemWithThisExactTitleAsync(answerToTheRequestCarryingTheCode, HttpStatusCode.Unauthorized, TwoFactorLoginService.ErrorMessageForLoginThatMustRestart);
-        Assert.Empty(apiStartedInMemoryForThisTest.RepositoryThatKeepsSecurityEventsInMemory.SavedSecurityEvents);
+        await AssertProblemTitleAsync(codeResponse, HttpStatusCode.Unauthorized, ErrorMessages.LoginMustRestart);
+        Assert.Empty(api.SecurityEventRepository.SavedSecurityEvents);
     }
 
     [Fact]
     public async Task ExpiredWaitingLoginAnswers401EvenWithTheRightCode()
     {
-        using var apiStartedInMemoryForThisTest = new ApiFactoryWithFakeRepositoryAndEmails();
-        var activatedAccountUsedByThisTest = AddActivatedAccountToTheFakeRepositoryOfTheApi(apiStartedInMemoryForThisTest);
-        var clientThatKeepsTheCookiesOfTheBrowser = CreateClientThatKeepsCookiesLikeABrowser(apiStartedInMemoryForThisTest);
-        await SendLoginRequestToTheApiAsync(clientThatKeepsTheCookiesOfTheBrowser);
+        using var api = new ApiFactoryWithFakes();
+        var activatedAccount = await AddActivatedAccountAsync(api);
+        var browserClient = CreateBrowserClient(api);
+        await SendLoginRequestAsync(browserClient);
 
-        apiStartedInMemoryForThisTest.ClockThatOnlyMovesWhenTestsAskIt.MoveFakeClockForwardByThisDuration(TimeSpan.FromMinutes(5));
-        var answerToTheRequestCarryingTheCode = await SendTwoFactorLoginRequestToTheApiAsync(clientThatKeepsTheCookiesOfTheBrowser, CalculateCodeShownOnThePhoneNow(apiStartedInMemoryForThisTest, activatedAccountUsedByThisTest.SecretOfTheAuthenticatorApplication));
+        api.Clock.Advance(TimeSpan.FromMinutes(5));
+        var codeResponse = await SendTwoFactorLoginRequestAsync(browserClient, CalculateCurrentCode(api, activatedAccount.Secret));
 
-        await CheckThatAnswerIsProblemWithThisExactTitleAsync(answerToTheRequestCarryingTheCode, HttpStatusCode.Unauthorized, TwoFactorLoginService.ErrorMessageForLoginThatMustRestart);
+        await AssertProblemTitleAsync(codeResponse, HttpStatusCode.Unauthorized, ErrorMessages.LoginMustRestart);
     }
 
     // SS §3 : une récupération pendant l'attente annule cette connexion. Le voleur du mot de passe ne garde rien.
     [Fact]
     public async Task PasswordRecoveryDuringTheWaitCancelsTheWaitingLogin()
     {
-        using var apiStartedInMemoryForThisTest = new ApiFactoryWithFakeRepositoryAndEmails();
-        var activatedAccountUsedByThisTest = AddActivatedAccountToTheFakeRepositoryOfTheApi(apiStartedInMemoryForThisTest);
-        var clientUsedByTheThiefOfThePassword = CreateClientThatKeepsCookiesLikeABrowser(apiStartedInMemoryForThisTest);
-        var clientUsedByTheOwnerOfTheAccount = CreateClientThatKeepsCookiesLikeABrowser(apiStartedInMemoryForThisTest);
-        await SendLoginRequestToTheApiAsync(clientUsedByTheThiefOfThePassword);
+        using var api = new ApiFactoryWithFakes();
+        var activatedAccount = await AddActivatedAccountAsync(api);
+        var thiefClient = CreateBrowserClient(api);
+        var ownerClient = CreateBrowserClient(api);
+        await SendLoginRequestAsync(thiefClient);
 
-        var tokenReadInTheRecoveryLinkOfTheEmail = await RequestRecoveryThenReadTheTokenOfTheLinkAsync(apiStartedInMemoryForThisTest, clientUsedByTheOwnerOfTheAccount, EmailAddressOfTheLoginTests);
-        var answerToTheRecoveryOfThePassword = await SendResetPasswordRequestToTheApiAsync(clientUsedByTheOwnerOfTheAccount, tokenReadInTheRecoveryLinkOfTheEmail);
-        Assert.Equal(HttpStatusCode.OK, answerToTheRecoveryOfThePassword.StatusCode);
+        var linkToken = await RequestRecoveryThenReadTokenAsync(api, ownerClient, Email);
+        var response = await SendResetPasswordRequestAsync(ownerClient, linkToken);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
 
-        var answerToTheCodeOfTheThief = await SendTwoFactorLoginRequestToTheApiAsync(clientUsedByTheThiefOfThePassword, CalculateCodeShownOnThePhoneNow(apiStartedInMemoryForThisTest, activatedAccountUsedByThisTest.SecretOfTheAuthenticatorApplication));
+        var thiefResponse = await SendTwoFactorLoginRequestAsync(thiefClient, CalculateCurrentCode(api, activatedAccount.Secret));
 
-        await CheckThatAnswerIsProblemWithThisExactTitleAsync(answerToTheCodeOfTheThief, HttpStatusCode.Unauthorized, TwoFactorLoginService.ErrorMessageForLoginThatMustRestart);
-        Assert.Empty(apiStartedInMemoryForThisTest.RepositoryThatKeepsSessionsInMemory.SavedSessions);
+        await AssertProblemTitleAsync(thiefResponse, HttpStatusCode.Unauthorized, ErrorMessages.LoginMustRestart);
+        Assert.Empty(api.SessionRepository.SavedSessions);
     }
 
     // GR Auth : la récupération n'enlève pas le code. Une boîte mail piratée ne suffit donc pas à entrer.
     [Fact]
     public async Task AfterAPasswordRecoveryTheLoginStillAsksForTheCode()
     {
-        using var apiStartedInMemoryForThisTest = new ApiFactoryWithFakeRepositoryAndEmails();
-        AddActivatedAccountToTheFakeRepositoryOfTheApi(apiStartedInMemoryForThisTest);
-        var clientThatKeepsTheCookiesOfTheBrowser = CreateClientThatKeepsCookiesLikeABrowser(apiStartedInMemoryForThisTest);
-        var tokenReadInTheRecoveryLinkOfTheEmail = await RequestRecoveryThenReadTheTokenOfTheLinkAsync(apiStartedInMemoryForThisTest, clientThatKeepsTheCookiesOfTheBrowser, EmailAddressOfTheLoginTests);
-        await SendResetPasswordRequestToTheApiAsync(clientThatKeepsTheCookiesOfTheBrowser, tokenReadInTheRecoveryLinkOfTheEmail);
+        using var api = new ApiFactoryWithFakes();
+        await AddActivatedAccountAsync(api);
+        var browserClient = CreateBrowserClient(api);
+        var linkToken = await RequestRecoveryThenReadTokenAsync(api, browserClient, Email);
+        await SendResetPasswordRequestAsync(browserClient, linkToken);
 
-        var answerToTheLoginRequestWithThePassword = await SendLoginRequestToTheApiAsync(clientThatKeepsTheCookiesOfTheBrowser, EmailAddressOfTheLoginTests, NewPasswordChosenInTheRecoveryTests);
+        var loginResponse = await SendLoginRequestAsync(browserClient, Email, NewPassword);
 
-        var jsonDocumentOfTheApiAnswer = JsonDocument.Parse(await answerToTheLoginRequestWithThePassword.Content.ReadAsStringAsync());
-        Assert.True(jsonDocumentOfTheApiAnswer.RootElement.GetProperty("isTwoFactorCodeRequired").GetBoolean());
-        Assert.Empty(apiStartedInMemoryForThisTest.RepositoryThatKeepsSessionsInMemory.SavedSessions);
+        var jsonDocument = JsonDocument.Parse(await loginResponse.Content.ReadAsStringAsync());
+        Assert.True(jsonDocument.RootElement.GetProperty("isTwoFactorCodeRequired").GetBoolean());
+        Assert.Empty(api.SessionRepository.SavedSessions);
     }
 
     // --- Les requêtes mal formées
@@ -334,13 +335,13 @@ public class TwoFactorLoginEndpointTests
     [Fact]
     public async Task MissingCodeAnswersWithTheStableFieldError()
     {
-        using var apiStartedInMemoryForThisTest = new ApiFactoryWithFakeRepositoryAndEmails();
-        var clientThatKeepsTheCookiesOfTheBrowser = CreateClientThatKeepsCookiesLikeABrowser(apiStartedInMemoryForThisTest);
+        using var api = new ApiFactoryWithFakes();
+        var browserClient = CreateBrowserClient(api);
 
-        var answerToTheRequestCarryingTheCode = await clientThatKeepsTheCookiesOfTheBrowser.PostAsJsonAsync(AddressOfTheTwoFactorLoginEndpoint, new { });
+        var codeResponse = await browserClient.PostAsJsonAsync(TwoFactorLoginEndpoint, new { });
 
-        Assert.Equal(HttpStatusCode.BadRequest, answerToTheRequestCarryingTheCode.StatusCode);
-        Assert.Equal("Le code est obligatoire.", await ReadErrorMessageOfThisRequestFieldAsync(answerToTheRequestCarryingTheCode, "Code"));
+        Assert.Equal(HttpStatusCode.BadRequest, codeResponse.StatusCode);
+        Assert.Equal("Le code est obligatoire.", await ReadFieldErrorAsync(codeResponse, "Code"));
     }
 
     [Theory]
@@ -350,38 +351,38 @@ public class TwoFactorLoginEndpointTests
     [InlineData("{\"code\": \"\\uD800\"}")]
     [InlineData("pas du json")]
     [InlineData("")]
-    public async Task UnreadableBodyAnswers400WithoutRecopyingWhatWasSent(string bodyOfTheRequestSentInThisTest)
+    public async Task UnreadableBodyAnswers400WithoutRecopyingWhatWasSent(string requestBody)
     {
-        using var apiStartedInMemoryForThisTest = new ApiFactoryWithFakeRepositoryAndEmails();
-        var clientThatKeepsTheCookiesOfTheBrowser = CreateClientThatKeepsCookiesLikeABrowser(apiStartedInMemoryForThisTest);
+        using var api = new ApiFactoryWithFakes();
+        var browserClient = CreateBrowserClient(api);
 
-        var answerToTheRequestCarryingTheCode = await clientThatKeepsTheCookiesOfTheBrowser.PostAsync(AddressOfTheTwoFactorLoginEndpoint, new StringContent(bodyOfTheRequestSentInThisTest, Encoding.UTF8, "application/json"));
+        var codeResponse = await browserClient.PostAsync(TwoFactorLoginEndpoint, new StringContent(requestBody, Encoding.UTF8, "application/json"));
 
-        Assert.Equal(HttpStatusCode.BadRequest, answerToTheRequestCarryingTheCode.StatusCode);
-        Assert.DoesNotContain("123456", await answerToTheRequestCarryingTheCode.Content.ReadAsStringAsync());
+        Assert.Equal(HttpStatusCode.BadRequest, codeResponse.StatusCode);
+        Assert.DoesNotContain("123456", await codeResponse.Content.ReadAsStringAsync());
     }
 
     // SS §6 : cette route n'accepte que du JSON, qu'un site piégé ne peut pas envoyer sans autorisation.
     [Fact]
     public async Task FormSentByATrappedWebsiteIsRefused()
     {
-        using var apiStartedInMemoryForThisTest = new ApiFactoryWithFakeRepositoryAndEmails();
-        var clientThatKeepsTheCookiesOfTheBrowser = CreateClientThatKeepsCookiesLikeABrowser(apiStartedInMemoryForThisTest);
+        using var api = new ApiFactoryWithFakes();
+        var browserClient = CreateBrowserClient(api);
 
-        var answerGivenToTheTrappedWebsite = await clientThatKeepsTheCookiesOfTheBrowser.PostAsync(AddressOfTheTwoFactorLoginEndpoint, new FormUrlEncodedContent(new Dictionary<string, string> { { "code", "123456" } }));
+        var response = await browserClient.PostAsync(TwoFactorLoginEndpoint, new FormUrlEncodedContent(new Dictionary<string, string> { { "code", "123456" } }));
 
-        Assert.Equal(HttpStatusCode.UnsupportedMediaType, answerGivenToTheTrappedWebsite.StatusCode);
+        Assert.Equal(HttpStatusCode.UnsupportedMediaType, response.StatusCode);
     }
 
     [Fact]
     public async Task GetRequestOnTheRouteOfTheCodeIsNotAllowed()
     {
-        using var apiStartedInMemoryForThisTest = new ApiFactoryWithFakeRepositoryAndEmails();
-        var clientThatKeepsTheCookiesOfTheBrowser = CreateClientThatKeepsCookiesLikeABrowser(apiStartedInMemoryForThisTest);
+        using var api = new ApiFactoryWithFakes();
+        var browserClient = CreateBrowserClient(api);
 
-        var answerToTheRequestSentWithGet = await clientThatKeepsTheCookiesOfTheBrowser.GetAsync(AddressOfTheTwoFactorLoginEndpoint);
+        var response = await browserClient.GetAsync(TwoFactorLoginEndpoint);
 
-        Assert.Equal(HttpStatusCode.MethodNotAllowed, answerToTheRequestSentWithGet.StatusCode);
+        Assert.Equal(HttpStatusCode.MethodNotAllowed, response.StatusCode);
     }
 
     // --- La limite de débit
@@ -390,35 +391,35 @@ public class TwoFactorLoginEndpointTests
     [Fact]
     public async Task EleventhAttemptOfTheMinuteFromOneAddressIsRefusedAndOtherAddressesStillPass()
     {
-        using var apiStartedInMemoryForThisTest = new ApiFactoryWithFakeRepositoryAndEmails();
-        var clientOfTheFirstVisitorIpAddress = CreateClientThatKeepsCookiesLikeABrowser(apiStartedInMemoryForThisTest);
-        clientOfTheFirstVisitorIpAddress.DefaultRequestHeaders.Add(StartupFilterThatReadsTheVisitorAddress.NameOfTheHeaderGivingTheVisitorAddress, "203.0.113.10");
-        var clientOfTheSecondVisitorIpAddress = CreateClientThatKeepsCookiesLikeABrowser(apiStartedInMemoryForThisTest);
-        clientOfTheSecondVisitorIpAddress.DefaultRequestHeaders.Add(StartupFilterThatReadsTheVisitorAddress.NameOfTheHeaderGivingTheVisitorAddress, "203.0.113.11");
+        using var api = new ApiFactoryWithFakes();
+        var firstClient = CreateBrowserClient(api);
+        firstClient.DefaultRequestHeaders.Add(VisitorAddressStartupFilter.VisitorAddressHeader, "203.0.113.10");
+        var secondClient = CreateBrowserClient(api);
+        secondClient.DefaultRequestHeaders.Add(VisitorAddressStartupFilter.VisitorAddressHeader, "203.0.113.11");
 
-        for (var numberOfTheAttemptBeingSent = 1; numberOfTheAttemptBeingSent <= 10; numberOfTheAttemptBeingSent++)
+        for (var attemptNumber = 1; attemptNumber <= 10; attemptNumber++)
         {
-            var answerToOneCodeAttemptUnderTheLimit = await SendTwoFactorLoginRequestToTheApiAsync(clientOfTheFirstVisitorIpAddress, "123456");
-            Assert.Equal(HttpStatusCode.Unauthorized, answerToOneCodeAttemptUnderTheLimit.StatusCode);
+            var allowedResponse = await SendTwoFactorLoginRequestAsync(firstClient, "123456");
+            Assert.Equal(HttpStatusCode.Unauthorized, allowedResponse.StatusCode);
         }
 
-        var answerToTheAttemptOverTheLimit = await SendTwoFactorLoginRequestToTheApiAsync(clientOfTheFirstVisitorIpAddress, "123456");
-        await CheckThatAnswerIsProblemWithThisExactTitleAsync(answerToTheAttemptOverTheLimit, HttpStatusCode.TooManyRequests, "Trop de demandes. Réessaie plus tard.");
+        var overLimitResponse = await SendTwoFactorLoginRequestAsync(firstClient, "123456");
+        await AssertProblemTitleAsync(overLimitResponse, HttpStatusCode.TooManyRequests, "Trop de demandes. Réessaie plus tard.");
 
-        var answerGivenToRequestFromTheOtherAddress = await SendTwoFactorLoginRequestToTheApiAsync(clientOfTheSecondVisitorIpAddress, "123456");
-        Assert.Equal(HttpStatusCode.Unauthorized, answerGivenToRequestFromTheOtherAddress.StatusCode);
+        var otherAddressResponse = await SendTwoFactorLoginRequestAsync(secondClient, "123456");
+        Assert.Equal(HttpStatusCode.Unauthorized, otherAddressResponse.StatusCode);
 
-        var answerGivenByTheRouteOfThePassword = await SendLoginRequestToTheApiAsync(clientOfTheFirstVisitorIpAddress, "adresse-inconnue@exemple.test");
-        Assert.Equal(HttpStatusCode.Unauthorized, answerGivenByTheRouteOfThePassword.StatusCode);
+        var passwordRouteResponse = await SendLoginRequestAsync(firstClient, "adresse-inconnue@exemple.test");
+        Assert.Equal(HttpStatusCode.Unauthorized, passwordRouteResponse.StatusCode);
     }
 
     [Fact]
     public void LimitOfTheCodeAttemptsIsWrittenWithItsExactValues()
     {
-        var optionsOfTheCodeAttemptsLimit = RateLimitingConfiguration.CreateOptionsOfTheTwoFactorCodeAttemptsLimit();
+        var codeLimit = RateLimitingConfiguration.CreateTwoFactorCodeLimit();
 
-        Assert.Equal(10, optionsOfTheCodeAttemptsLimit.PermitLimit);
-        Assert.Equal(TimeSpan.FromMinutes(1), optionsOfTheCodeAttemptsLimit.Window);
+        Assert.Equal(10, codeLimit.PermitLimit);
+        Assert.Equal(TimeSpan.FromMinutes(1), codeLimit.Window);
     }
 
     // --- Les pannes, vues du visiteur
@@ -427,36 +428,36 @@ public class TwoFactorLoginEndpointTests
     [Fact]
     public async Task DatabaseFailureAnswersAGenericErrorInProduction()
     {
-        using var apiStartedLikeInProductionForThisTest = new ApiFactoryRunningLikeInProduction();
-        var activatedAccountUsedByThisTest = AddActivatedAccountToTheFakeRepositoryOfTheApi(apiStartedLikeInProductionForThisTest);
-        var clientThatKeepsTheCookiesOfTheBrowser = CreateClientThatKeepsCookiesLikeABrowser(apiStartedLikeInProductionForThisTest);
-        await SendLoginRequestToTheApiAsync(clientThatKeepsTheCookiesOfTheBrowser);
-        apiStartedLikeInProductionForThisTest.RepositoryThatKeepsSessionsInMemory.DatabaseIsDownDuringThisTest = true;
+        using var productionApi = new ApiFactoryInProduction();
+        var activatedAccount = await AddActivatedAccountAsync(productionApi);
+        var browserClient = CreateBrowserClient(productionApi);
+        await SendLoginRequestAsync(browserClient);
+        productionApi.SessionRepository.IsDown = true;
 
-        var answerGivenDuringTheSimulatedFailure = await SendTwoFactorLoginRequestToTheApiAsync(clientThatKeepsTheCookiesOfTheBrowser, CalculateCodeShownOnThePhoneNow(apiStartedLikeInProductionForThisTest, activatedAccountUsedByThisTest.SecretOfTheAuthenticatorApplication));
+        var response = await SendTwoFactorLoginRequestAsync(browserClient, CalculateCurrentCode(productionApi, activatedAccount.Secret));
 
-        await CheckThatAnswerIsProblemWithThisExactTitleAsync(answerGivenDuringTheSimulatedFailure, HttpStatusCode.InternalServerError, "Une erreur est survenue. Réessaie plus tard.");
-        var textOfTheAnswerDuringTheFailure = await answerGivenDuringTheSimulatedFailure.Content.ReadAsStringAsync();
-        Assert.DoesNotContain(FakeUserSessionRepository.TechnicalDetailOfTheSimulatedSessionFailure, textOfTheAnswerDuringTheFailure);
-        Assert.Null(FindCookieWrittenByTheAnswer(answerGivenDuringTheSimulatedFailure, SessionCookiesConfiguration.NameOfTheUserSessionCookie));
+        await AssertProblemTitleAsync(response, HttpStatusCode.InternalServerError, "Une erreur est survenue. Réessaie plus tard.");
+        var responseText = await response.Content.ReadAsStringAsync();
+        Assert.DoesNotContain(FakeUserSessionRepository.FailureDetail, responseText);
+        Assert.Null(FindCookie(response, SessionCookiesConfiguration.SessionCookieName));
     }
 
     // Une clé perdue ne se voit pas comme un mauvais code : le visiteur reçoit 500, sans détail, et la panne va dans le journal technique.
     [Fact]
     public async Task LostEncryptionKeyAnswersAGenericErrorAndIsWrittenInTheTechnicalLog()
     {
-        using var apiStartedLikeInProductionForThisTest = new ApiFactoryRunningLikeInProduction();
-        var activatedAccountUsedByThisTest = AddActivatedAccountToTheFakeRepositoryOfTheApi(apiStartedLikeInProductionForThisTest);
-        activatedAccountUsedByThisTest.UserAccount.EncryptedTotpSecret = new AesGcmTotpSecretProtector(TwoFactorTestTools.CreateNewEncryptionKeyForOneTest()).EncryptSecretOfThisUserAccount(activatedAccountUsedByThisTest.SecretOfTheAuthenticatorApplication, activatedAccountUsedByThisTest.UserAccount.Id);
-        var clientThatKeepsTheCookiesOfTheBrowser = CreateClientThatKeepsCookiesLikeABrowser(apiStartedLikeInProductionForThisTest);
-        await SendLoginRequestToTheApiAsync(clientThatKeepsTheCookiesOfTheBrowser);
+        using var productionApi = new ApiFactoryInProduction();
+        var activatedAccount = await AddActivatedAccountAsync(productionApi);
+        activatedAccount.UserAccount.ActivateTwoFactor(new AesGcmTotpSecretProtector(TwoFactorTestTools.CreateEncryptionKey()).Encrypt(activatedAccount.Secret, activatedAccount.UserAccount.Id));
+        var browserClient = CreateBrowserClient(productionApi);
+        await SendLoginRequestAsync(browserClient);
 
-        var answerToTheRequestCarryingTheCode = await SendTwoFactorLoginRequestToTheApiAsync(clientThatKeepsTheCookiesOfTheBrowser, CalculateCodeShownOnThePhoneNow(apiStartedLikeInProductionForThisTest, activatedAccountUsedByThisTest.SecretOfTheAuthenticatorApplication));
+        var codeResponse = await SendTwoFactorLoginRequestAsync(browserClient, CalculateCurrentCode(productionApi, activatedAccount.Secret));
 
-        await CheckThatAnswerIsProblemWithThisExactTitleAsync(answerToTheRequestCarryingTheCode, HttpStatusCode.InternalServerError, "Une erreur est survenue. Réessaie plus tard.");
-        var textOfTheWholeTechnicalLog = string.Join("\n", apiStartedLikeInProductionForThisTest.LoggerThatKeepsTheMessagesInMemory.MessagesWrittenInTheLog);
-        Assert.Contains("AuthenticationTagMismatchException", textOfTheWholeTechnicalLog);
-        Assert.DoesNotContain(activatedAccountUsedByThisTest.SecretOfTheAuthenticatorApplication, textOfTheWholeTechnicalLog);
+        await AssertProblemTitleAsync(codeResponse, HttpStatusCode.InternalServerError, "Une erreur est survenue. Réessaie plus tard.");
+        var logText = string.Join("\n", productionApi.LoggerProvider.Messages);
+        Assert.Contains("AuthenticationTagMismatchException", logText);
+        Assert.DoesNotContain(activatedAccount.Secret, logText);
     }
 
     // --- Le journal technique
@@ -465,26 +466,26 @@ public class TwoFactorLoginEndpointTests
     [Fact]
     public async Task TechnicalLogNeverContainsTheCodesOrTheTokensOfTheLogin()
     {
-        using var apiWithTheMostDetailedLog = new ApiFactoryLoggingEverything();
-        var activatedAccountUsedByThisTest = AddActivatedAccountToTheFakeRepositoryOfTheApi(apiWithTheMostDetailedLog);
-        var clientThatKeepsTheCookiesOfTheBrowser = CreateClientThatKeepsCookiesLikeABrowser(apiWithTheMostDetailedLog);
-        var codeThatIsWrongInThisTest = FindCodeThatIsWrongNow(apiWithTheMostDetailedLog, activatedAccountUsedByThisTest.SecretOfTheAuthenticatorApplication);
-        var codeShownOnThePhoneInThisTest = CalculateCodeShownOnThePhoneNow(apiWithTheMostDetailedLog, activatedAccountUsedByThisTest.SecretOfTheAuthenticatorApplication);
+        using var api = new ApiFactoryLoggingEverything();
+        var activatedAccount = await AddActivatedAccountAsync(api);
+        var browserClient = CreateBrowserClient(api);
+        var wrongCode = FindWrongCode(api, activatedAccount.Secret);
+        var rightCode = CalculateCurrentCode(api, activatedAccount.Secret);
 
-        var answerToTheLoginRequestWithThePassword = await SendLoginRequestToTheApiAsync(clientThatKeepsTheCookiesOfTheBrowser);
-        await SendTwoFactorLoginRequestToTheApiAsync(clientThatKeepsTheCookiesOfTheBrowser, codeThatIsWrongInThisTest);
-        var answerToTheRightCodeOfTheVisitor = await SendTwoFactorLoginRequestToTheApiAsync(clientThatKeepsTheCookiesOfTheBrowser, codeShownOnThePhoneInThisTest);
+        var loginResponse = await SendLoginRequestAsync(browserClient);
+        await SendTwoFactorLoginRequestAsync(browserClient, wrongCode);
+        var rightCodeResponse = await SendTwoFactorLoginRequestAsync(browserClient, rightCode);
 
-        await SendLoginRequestToTheApiAsync(clientThatKeepsTheCookiesOfTheBrowser);
-        await SendTwoFactorLoginRequestToTheApiAsync(clientThatKeepsTheCookiesOfTheBrowser, activatedAccountUsedByThisTest.BackupCodeInItsCleanForm);
+        await SendLoginRequestAsync(browserClient);
+        await SendTwoFactorLoginRequestAsync(browserClient, activatedAccount.BackupCode);
 
-        var textOfTheWholeTechnicalLog = string.Join("\n", apiWithTheMostDetailedLog.LoggerThatKeepsTheMessagesInMemory.MessagesWrittenInTheLog);
-        Assert.NotEmpty(textOfTheWholeTechnicalLog);
-        Assert.DoesNotContain(codeThatIsWrongInThisTest, textOfTheWholeTechnicalLog);
-        Assert.DoesNotContain(codeShownOnThePhoneInThisTest, textOfTheWholeTechnicalLog);
-        Assert.DoesNotContain(activatedAccountUsedByThisTest.BackupCodeInItsCleanForm, textOfTheWholeTechnicalLog);
-        Assert.DoesNotContain(activatedAccountUsedByThisTest.SecretOfTheAuthenticatorApplication, textOfTheWholeTechnicalLog);
-        Assert.DoesNotContain(FindCookieWrittenByTheAnswer(answerToTheLoginRequestWithThePassword, NameOfTheWaitingLoginCookieInTheseTests)!.Value.ToString(), textOfTheWholeTechnicalLog);
-        Assert.DoesNotContain(FindCookieWrittenByTheAnswer(answerToTheRightCodeOfTheVisitor, SessionCookiesConfiguration.NameOfTheUserSessionCookie)!.Value.ToString(), textOfTheWholeTechnicalLog);
+        var logText = string.Join("\n", api.LoggerProvider.Messages);
+        Assert.NotEmpty(logText);
+        Assert.DoesNotContain(wrongCode, logText);
+        Assert.DoesNotContain(rightCode, logText);
+        Assert.DoesNotContain(activatedAccount.BackupCode, logText);
+        Assert.DoesNotContain(activatedAccount.Secret, logText);
+        Assert.DoesNotContain(FindCookie(loginResponse, WaitingLoginCookieName)!.Value.ToString(), logText);
+        Assert.DoesNotContain(FindCookie(rightCodeResponse, SessionCookiesConfiguration.SessionCookieName)!.Value.ToString(), logText);
     }
 }

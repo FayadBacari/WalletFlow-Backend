@@ -11,83 +11,83 @@ namespace WalletFlow.Tests.Api;
 public class UnconfirmedAccountsCleanupBackgroundServiceTests
 {
     // Crée la tâche à tester, branchée sur ce faux accès à la base.
-    private static UnconfirmedAccountsCleanupBackgroundService CreateCleanupTaskWithThisRepository(
-        FakeUserAccountRepository repositoryThatKeepsAccountsInMemory,
-        ILogger<UnconfirmedAccountsCleanupBackgroundService>? loggerOfTheCleanupsForThisTest = null)
+    private static UnconfirmedAccountsCleanupBackgroundService CreateCleanupTask(
+        FakeUserAccountRepository accountRepository,
+        ILogger<UnconfirmedAccountsCleanupBackgroundService>? logger = null)
     {
-        var clockThatOnlyMovesWhenTestsAskIt = new FakeTimeProviderForTests();
-        var servicesUsedByTheCleanupTask = new ServiceCollection();
-        servicesUsedByTheCleanupTask.AddSingleton<IUserAccountRepository>(repositoryThatKeepsAccountsInMemory);
-        servicesUsedByTheCleanupTask.AddSingleton<TimeProvider>(clockThatOnlyMovesWhenTestsAskIt);
-        servicesUsedByTheCleanupTask.AddScoped<UnconfirmedAccountsCleanupService>();
-        var providerOfTheCleanupTaskServices = servicesUsedByTheCleanupTask.BuildServiceProvider();
+        var clock = new FakeTimeProvider();
+        var services = new ServiceCollection();
+        services.AddSingleton<IUserAccountRepository>(accountRepository);
+        services.AddSingleton<TimeProvider>(clock);
+        services.AddScoped<UnconfirmedAccountsCleanupService>();
+        var serviceProvider = services.BuildServiceProvider();
 
         return new UnconfirmedAccountsCleanupBackgroundService(
-            providerOfTheCleanupTaskServices.GetRequiredService<IServiceScopeFactory>(),
-            clockThatOnlyMovesWhenTestsAskIt,
-            loggerOfTheCleanupsForThisTest ?? NullLogger<UnconfirmedAccountsCleanupBackgroundService>.Instance);
+            serviceProvider.GetRequiredService<IServiceScopeFactory>(),
+            clock,
+            logger ?? NullLogger<UnconfirmedAccountsCleanupBackgroundService>.Instance);
     }
 
     // La panne est notée dans le journal technique : sans cela, personne ne saurait que l'effacement échoue.
     [Fact]
     public async Task DatabaseFailureIsWrittenInTheTechnicalLog()
     {
-        var repositoryThatKeepsAccountsInMemory = new FakeUserAccountRepository { DatabaseIsDownDuringTheCleanup = true };
-        var providerThatKeepsTheLogMessages = new LoggerProviderThatKeepsTheMessages();
-        using var factoryOfTheLoggersForThisTest = new LoggerFactory(new ILoggerProvider[] { providerThatKeepsTheLogMessages });
-        var cleanupTaskBeingTestedWithFakeRepository = CreateCleanupTaskWithThisRepository(
-            repositoryThatKeepsAccountsInMemory,
-            new Logger<UnconfirmedAccountsCleanupBackgroundService>(factoryOfTheLoggersForThisTest));
+        var accountRepository = new FakeUserAccountRepository { FailsDuringCleanup = true };
+        var loggerProvider = new MemoryLoggerProvider();
+        using var loggerFactory = new LoggerFactory(new ILoggerProvider[] { loggerProvider });
+        var cleanupTask = CreateCleanupTask(
+            accountRepository,
+            new Logger<UnconfirmedAccountsCleanupBackgroundService>(loggerFactory));
 
-        await cleanupTaskBeingTestedWithFakeRepository.RunOneCleanupOfTheUnconfirmedAccountsAsync();
+        await cleanupTask.RunCleanupAsync();
 
-        Assert.Contains(providerThatKeepsTheLogMessages.MessagesWrittenInTheLog, messageWrittenInTheTechnicalLog =>
-            messageWrittenInTheTechnicalLog.StartsWith("Error") && messageWrittenInTheTechnicalLog.Contains("a échoué"));
+        Assert.Contains(loggerProvider.Messages, message =>
+            message.StartsWith("Error") && message.Contains("a échoué"));
     }
 
     [Fact]
     public async Task OneCleanupAsksTheDatabaseToDeleteTheExpiredAccounts()
     {
-        var repositoryThatKeepsAccountsInMemory = new FakeUserAccountRepository();
-        var cleanupTaskBeingTestedWithFakeRepository = CreateCleanupTaskWithThisRepository(repositoryThatKeepsAccountsInMemory);
+        var accountRepository = new FakeUserAccountRepository();
+        var cleanupTask = CreateCleanupTask(accountRepository);
 
-        await cleanupTaskBeingTestedWithFakeRepository.RunOneCleanupOfTheUnconfirmedAccountsAsync();
+        await cleanupTask.RunCleanupAsync();
 
-        Assert.Single(repositoryThatKeepsAccountsInMemory.DatesOfTheCleanupsRequested);
+        Assert.Single(accountRepository.CleanupDates);
     }
 
     // Une panne de la base ne doit pas arrêter l'API : la tâche réessaiera au prochain passage.
     [Fact]
     public async Task DatabaseFailureDoesNotStopTheCleanupTask()
     {
-        var repositoryThatKeepsAccountsInMemory = new FakeUserAccountRepository { DatabaseIsDownDuringTheCleanup = true };
-        var cleanupTaskBeingTestedWithFakeRepository = CreateCleanupTaskWithThisRepository(repositoryThatKeepsAccountsInMemory);
+        var accountRepository = new FakeUserAccountRepository { FailsDuringCleanup = true };
+        var cleanupTask = CreateCleanupTask(accountRepository);
 
-        await cleanupTaskBeingTestedWithFakeRepository.RunOneCleanupOfTheUnconfirmedAccountsAsync();
+        await cleanupTask.RunCleanupAsync();
 
-        repositoryThatKeepsAccountsInMemory.DatabaseIsDownDuringTheCleanup = false;
-        await cleanupTaskBeingTestedWithFakeRepository.RunOneCleanupOfTheUnconfirmedAccountsAsync();
+        accountRepository.FailsDuringCleanup = false;
+        await cleanupTask.RunCleanupAsync();
 
-        Assert.Single(repositoryThatKeepsAccountsInMemory.DatesOfTheCleanupsRequested);
+        Assert.Single(accountRepository.CleanupDates);
     }
 
     // La tâche tourne une fois par jour : le test ne peut pas attendre un jour pour le vérifier.
     [Fact]
     public void CleanupTaskRunsOncePerDay()
     {
-        Assert.Equal(TimeSpan.FromDays(1), UnconfirmedAccountsCleanupBackgroundService.DurationBetweenTwoCleanupsOfTheAccounts);
+        Assert.Equal(TimeSpan.FromDays(1), UnconfirmedAccountsCleanupBackgroundService.CleanupInterval);
     }
 
     // La tâche est bien lancée avec l'API, dès son démarrage.
     [Fact]
     public async Task CleanupTaskRunsWhenTheApiStarts()
     {
-        using var apiStartedInMemoryForThisTest = new ApiFactoryWithFakeRepositoryAndEmails();
-        apiStartedInMemoryForThisTest.CreateClient();
+        using var api = new ApiFactoryWithFakes();
+        api.CreateClient();
 
-        for (var numberOfTheCheckBeingDone = 1; numberOfTheCheckBeingDone <= 100; numberOfTheCheckBeingDone++)
+        for (var checkNumber = 1; checkNumber <= 100; checkNumber++)
         {
-            if (apiStartedInMemoryForThisTest.RepositoryThatKeepsAccountsInMemory.DatesOfTheCleanupsRequested.Count > 0)
+            if (api.AccountRepository.CleanupDates.Count > 0)
             {
                 break;
             }
@@ -95,6 +95,6 @@ public class UnconfirmedAccountsCleanupBackgroundServiceTests
             await Task.Delay(TimeSpan.FromMilliseconds(50));
         }
 
-        Assert.NotEmpty(apiStartedInMemoryForThisTest.RepositoryThatKeepsAccountsInMemory.DatesOfTheCleanupsRequested);
+        Assert.NotEmpty(api.AccountRepository.CleanupDates);
     }
 }

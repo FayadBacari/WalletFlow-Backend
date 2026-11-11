@@ -9,25 +9,25 @@ public class LocalFolderEmailSenderTests
     [Fact]
     public async Task EmailIsWrittenInNewFileWithItsRecipientSubjectAndBody()
     {
-        var temporaryFolderCreatedForThisTest = Path.Combine(Path.GetTempPath(), "walletflow-test-" + Guid.NewGuid());
-        var senderBeingTestedWithTemporaryFolder = new LocalFolderEmailSender(temporaryFolderCreatedForThisTest);
+        var temporaryFolder = Path.Combine(Path.GetTempPath(), "walletflow-test-" + Guid.NewGuid());
+        var sender = new LocalFolderEmailSender(temporaryFolder);
 
         try
         {
-            await senderBeingTestedWithTemporaryFolder.SendEmailToItsRecipientAsync(
-                new EmailMessageToSend("destinataire@exemple.test", "Objet du test", "Texte du test"));
+            await sender.SendAsync(
+                new EmailMessage("destinataire@exemple.test", "Objet du test", "Texte du test"));
 
-            var filesWrittenInTheTemporaryFolder = Directory.GetFiles(temporaryFolderCreatedForThisTest);
-            var fileWrittenForTheEmailBeingTested = Assert.Single(filesWrittenInTheTemporaryFolder);
-            var contentOfTheFileWrittenByTheSender = await File.ReadAllTextAsync(fileWrittenForTheEmailBeingTested);
+            var files = Directory.GetFiles(temporaryFolder);
+            var file = Assert.Single(files);
+            var content = await File.ReadAllTextAsync(file);
 
-            Assert.Contains("destinataire@exemple.test", contentOfTheFileWrittenByTheSender);
-            Assert.Contains("Objet du test", contentOfTheFileWrittenByTheSender);
-            Assert.Contains("Texte du test", contentOfTheFileWrittenByTheSender);
+            Assert.Contains("destinataire@exemple.test", content);
+            Assert.Contains("Objet du test", content);
+            Assert.Contains("Texte du test", content);
         }
         finally
         {
-            Directory.Delete(temporaryFolderCreatedForThisTest, true);
+            Directory.Delete(temporaryFolder, true);
         }
     }
 
@@ -35,22 +35,22 @@ public class LocalFolderEmailSenderTests
     [Fact]
     public async Task FolderThatCannotBeCreatedRaisesTheEmailFailure()
     {
-        var pathOfTheFileBlockingTheFolder = Path.Combine(Path.GetTempPath(), "walletflow-test-" + Guid.NewGuid());
-        await File.WriteAllTextAsync(pathOfTheFileBlockingTheFolder, "ce fichier prend la place du dossier");
-        var senderBeingTestedWithBlockedFolder = new LocalFolderEmailSender(pathOfTheFileBlockingTheFolder);
+        var blockingFilePath = Path.Combine(Path.GetTempPath(), "walletflow-test-" + Guid.NewGuid());
+        await File.WriteAllTextAsync(blockingFilePath, "ce fichier prend la place du dossier");
+        var sender = new LocalFolderEmailSender(blockingFilePath);
 
         try
         {
-            var failureRaisedByTheEmailSender = await Assert.ThrowsAsync<EmailCouldNotBeSentException>(() =>
-                senderBeingTestedWithBlockedFolder.SendEmailToItsRecipientAsync(
-                    new EmailMessageToSend("destinataire@exemple.test", "Objet du test", "Texte du test")));
+            var exception = await Assert.ThrowsAsync<EmailCouldNotBeSentException>(() =>
+                sender.SendAsync(
+                    new EmailMessage("destinataire@exemple.test", "Objet du test", "Texte du test")));
 
             // Ce message peut finir dans les journaux : il ne contient jamais l'adresse (SS §7).
-            Assert.DoesNotContain("destinataire@exemple.test", failureRaisedByTheEmailSender.Message);
+            Assert.DoesNotContain("destinataire@exemple.test", exception.Message);
         }
         finally
         {
-            File.Delete(pathOfTheFileBlockingTheFolder);
+            File.Delete(blockingFilePath);
         }
     }
 
@@ -64,21 +64,21 @@ public class LocalFolderEmailSenderTests
             return;
         }
 
-        var temporaryFolderCreatedForThisTest = Path.Combine(Path.GetTempPath(), "walletflow-test-" + Guid.NewGuid());
-        Directory.CreateDirectory(temporaryFolderCreatedForThisTest);
-        File.SetUnixFileMode(temporaryFolderCreatedForThisTest, UnixFileMode.UserRead | UnixFileMode.UserExecute);
-        var senderBeingTestedWithReadOnlyFolder = new LocalFolderEmailSender(temporaryFolderCreatedForThisTest);
+        var temporaryFolder = Path.Combine(Path.GetTempPath(), "walletflow-test-" + Guid.NewGuid());
+        Directory.CreateDirectory(temporaryFolder);
+        File.SetUnixFileMode(temporaryFolder, UnixFileMode.UserRead | UnixFileMode.UserExecute);
+        var sender = new LocalFolderEmailSender(temporaryFolder);
 
         try
         {
             await Assert.ThrowsAsync<EmailCouldNotBeSentException>(() =>
-                senderBeingTestedWithReadOnlyFolder.SendEmailToItsRecipientAsync(
-                    new EmailMessageToSend("destinataire@exemple.test", "Objet du test", "Texte du test")));
+                sender.SendAsync(
+                    new EmailMessage("destinataire@exemple.test", "Objet du test", "Texte du test")));
         }
         finally
         {
-            File.SetUnixFileMode(temporaryFolderCreatedForThisTest, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
-            Directory.Delete(temporaryFolderCreatedForThisTest, true);
+            File.SetUnixFileMode(temporaryFolder, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            Directory.Delete(temporaryFolder, true);
         }
     }
 }

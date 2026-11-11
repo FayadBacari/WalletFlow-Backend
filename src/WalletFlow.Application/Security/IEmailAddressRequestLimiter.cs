@@ -5,5 +5,5 @@ namespace WalletFlow.Application.Security;
 public interface IEmailAddressRequestLimiter
 {
     // Compte une demande de plus pour cette adresse. Renvoie faux si la limite est déjà atteinte.
-    bool TryToCountNewRequestForThisEmailAddress(string emailAddressInItsStoredForm);
+    bool TryCountRequest(string email);
 }

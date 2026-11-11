@@ -3,7 +3,7 @@ using Microsoft.EntityFrameworkCore;
 using WalletFlow.Domain.UsersAndSecurity;
 using WalletFlow.Infrastructure.Persistence;
 using WalletFlow.Infrastructure.Persistence.Repositories;
-using static WalletFlow.Tests.Infrastructure.LocalDatabaseForTheTests;
+using static WalletFlow.Tests.Infrastructure.LocalTestDatabase;
 
 namespace WalletFlow.Tests.Infrastructure;
 
@@ -11,96 +11,139 @@ namespace WalletFlow.Tests.Infrastructure;
 // Chaque test travaille dans une transaction annulée à la fin : la base reste vide.
 public class TwoFactorAuthenticationRepositoryTests
 {
-    private const string SecretOfThePhoneEncryptedInTheseTests = "secret-chiffre-de-ces-tests";
+    private const string Secret = "secret-chiffre-de-ces-tests";
 
-    private static readonly DateTime CurrentDateUsedInTheseTests = new DateTime(2026, 11, 5, 12, 0, 0, DateTimeKind.Utc);
+    private static readonly DateTime Now = new DateTime(2026, 11, 5, 12, 0, 0, DateTimeKind.Utc);
 
     // Enregistre un nouveau compte confirmé avec cette adresse, puis oublie les objets gardés en mémoire.
-    private static async Task<User> SaveNewConfirmedAccountWithThisEmailAddressAsync(WalletFlowDatabaseContext databaseContextOfThisRepositoryTest, string emailAddressOfTheNewAccountToSave)
+    private static async Task<User> SaveConfirmedAccountAsync(WalletFlowDatabaseContext databaseContext, string emailAddress)
     {
-        var newAccountToSaveInTheRealDatabase = new User
+        var newAccount = new User
         {
-            Email = emailAddressOfTheNewAccountToSave,
+            Email = emailAddress,
             PasswordHash = "empreinte-de-test",
             IsEmailConfirmed = true
         };
-        databaseContextOfThisRepositoryTest.Users.Add(newAccountToSaveInTheRealDatabase);
-        await databaseContextOfThisRepositoryTest.SaveChangesAsync();
-        databaseContextOfThisRepositoryTest.ChangeTracker.Clear();
+        databaseContext.Users.Add(newAccount);
+        await databaseContext.SaveChangesAsync();
+        databaseContext.ChangeTracker.Clear();
 
-        return newAccountToSaveInTheRealDatabase;
+        return newAccount;
     }
 
     // Crée ce nombre de codes de secours, sans les enregistrer.
-    private static List<BackupCode> CreateBackupCodesForThisAccount(Guid identifierOfTheAccountOwningTheCodes, int numberOfBackupCodesToCreate)
+    private static List<BackupCode> CreateBackupCodes(Guid accountId, int backupCodeCount)
     {
-        var newBackupCodesOfTheAccount = new List<BackupCode>();
+        var backupCodes = new List<BackupCode>();
 
-        for (var numberOfTheBackupCodeBeingCreated = 1; numberOfTheBackupCodeBeingCreated <= numberOfBackupCodesToCreate; numberOfTheBackupCodeBeingCreated++)
+        for (var codeNumber = 1; codeNumber <= backupCodeCount; codeNumber++)
         {
-            newBackupCodesOfTheAccount.Add(new BackupCode { CodeHash = "empreinte-du-code-" + numberOfTheBackupCodeBeingCreated, UserId = identifierOfTheAccountOwningTheCodes });
+            backupCodes.Add(new BackupCode { CodeHash = "empreinte-du-code-" + codeNumber, UserId = accountId });
         }
 
-        return newBackupCodesOfTheAccount;
+        return backupCodes;
     }
 
     // Crée un événement du journal, sans l'enregistrer.
-    private static SecurityEvent CreateSecurityEventForThisAccount(Guid identifierOfTheAccountInTheJournal, SecurityEventType typeOfTheEventToCreate)
+    private static SecurityEvent CreateSecurityEvent(Guid accountId, SecurityEventType eventType)
     {
         return new SecurityEvent
         {
-            Type = typeOfTheEventToCreate,
+            Type = eventType,
             Result = SecurityEventResult.Success,
-            OccurredAt = CurrentDateUsedInTheseTests,
+            OccurredAt = Now,
             IpAddress = IPAddress.Parse("203.0.113.7"),
-            UserId = identifierOfTheAccountInTheJournal
+            UserId = accountId
         };
     }
 
-    // Active un compte directement, comme le ferait une activation déjà réussie, puis oublie les objets gardés en mémoire.
-    private static async Task ActivateThisAccountDirectlyInTheDatabaseAsync(WalletFlowDatabaseContext databaseContextOfThisRepositoryTest, Guid identifierOfTheAccountToActivate, int numberOfBackupCodesToCreate)
+    // Prépare une activation comme le fait le cas d'utilisation : secret chiffré, codes de secours et événement. Rien n'est encore écrit.
+    private static void PrepareActivation(
+        WalletFlowDatabaseContext databaseContext,
+        User account,
+        List<BackupCode> backupCodes,
+        SecurityEvent securityEvent)
     {
-        var accountReadJustBeforeTheActivation = await databaseContextOfThisRepositoryTest.Users.SingleAsync(userSearchedInTheDatabaseTable => userSearchedInTheDatabaseTable.Id == identifierOfTheAccountToActivate);
-        await new TwoFactorAuthenticationRepository(databaseContextOfThisRepositoryTest).TryToSaveTwoFactorActivationOfThisAccountAsync(
-            accountReadJustBeforeTheActivation,
-            SecretOfThePhoneEncryptedInTheseTests,
-            CreateBackupCodesForThisAccount(identifierOfTheAccountToActivate, numberOfBackupCodesToCreate),
-            CreateSecurityEventForThisAccount(identifierOfTheAccountToActivate, SecurityEventType.TwoFactorActivation));
-        databaseContextOfThisRepositoryTest.ChangeTracker.Clear();
+        account.ActivateTwoFactor(Secret);
+        new TwoFactorAuthenticationRepository(databaseContext).PrepareBackupCodes(backupCodes);
+        new SecurityEventRepository(databaseContext).PrepareEvent(securityEvent);
+    }
+
+    // Prépare une désactivation comme le fait le cas d'utilisation : secret oublié, codes de secours effacés et événement.
+    private static async Task PrepareDeactivationAsync(
+        WalletFlowDatabaseContext databaseContext,
+        User account,
+        SecurityEvent securityEvent)
+    {
+        account.DeactivateTwoFactor();
+        await new TwoFactorAuthenticationRepository(databaseContext).PrepareBackupCodesRemovalAsync(account.Id);
+        new SecurityEventRepository(databaseContext).PrepareEvent(securityEvent);
+    }
+
+    // Prépare une connexion réussie comme le fait le cas d'utilisation, avec le code de secours utilisé s'il y en a un.
+    private static void PrepareBackupCodeLogin(
+        WalletFlowDatabaseContext databaseContext,
+        User account,
+        UserSession session,
+        BackupCode? backupCode,
+        SecurityEvent securityEvent)
+    {
+        if (backupCode != null)
+        {
+            backupCode.MarkAsUsed(session.LastActivityAt);
+        }
+
+        account.ResetLoginCounters();
+        new UserAccountRepository(databaseContext).PrepareUnchangedCheck(account);
+        new UserSessionRepository(databaseContext).PrepareSession(session);
+        new SecurityEventRepository(databaseContext).PrepareEvent(securityEvent);
+    }
+
+    // Active un compte directement, comme le ferait une activation déjà réussie, puis oublie les objets gardés en mémoire.
+    private static async Task ActivateDirectlyInDatabaseAsync(WalletFlowDatabaseContext databaseContext, Guid accountId, int backupCodeCount)
+    {
+        var account = await databaseContext.Users.SingleAsync(row => row.Id == accountId);
+        PrepareActivation(
+            databaseContext,
+            account,
+            CreateBackupCodes(accountId, backupCodeCount),
+            CreateSecurityEvent(accountId, SecurityEventType.TwoFactorActivation));
+        Assert.True(await TrySaveChangesAsync(databaseContext));
+        databaseContext.ChangeTracker.Clear();
     }
 
     // Une autre requête change le compteur directement en base : les objets gardés en mémoire ne le voient pas.
-    private static async Task SimulateAnotherRequestCountingOneAttemptAsync(WalletFlowDatabaseContext databaseContextOfThisRepositoryTest, Guid identifierOfTheAccountChangedByTheRequest)
+    private static async Task SimulateConcurrentAttemptAsync(WalletFlowDatabaseContext databaseContext, Guid accountId)
     {
-        await databaseContextOfThisRepositoryTest.Users
-            .Where(userSearchedInTheDatabaseTable => userSearchedInTheDatabaseTable.Id == identifierOfTheAccountChangedByTheRequest)
-            .ExecuteUpdateAsync(setterOfTheColumnsOfTheUser => setterOfTheColumnsOfTheUser.SetProperty(
-                userBeingUpdatedInTheDatabase => userBeingUpdatedInTheDatabase.FailedLoginAttemptCount,
-                (short)1));
+        await WriteAsAnotherRequestAsync(databaseContext, () => databaseContext.Users
+            .Where(row => row.Id == accountId)
+            .ExecuteUpdateAsync(setters => setters.SetProperty(
+                row => row.FailedLoginAttemptCount,
+                (short)1)));
     }
 
     // Une autre requête enregistre son activation directement en base : les objets gardés en mémoire ne le voient pas.
-    private static async Task SimulateAnotherRequestActivatingTheAccountAsync(WalletFlowDatabaseContext databaseContextOfThisRepositoryTest, Guid identifierOfTheAccountChangedByTheRequest)
+    private static async Task SimulateConcurrentActivationAsync(WalletFlowDatabaseContext databaseContext, Guid accountId)
     {
-        await databaseContextOfThisRepositoryTest.Users
-            .Where(userSearchedInTheDatabaseTable => userSearchedInTheDatabaseTable.Id == identifierOfTheAccountChangedByTheRequest)
-            .ExecuteUpdateAsync(setterOfTheColumnsOfTheUser => setterOfTheColumnsOfTheUser
-                .SetProperty(userBeingUpdatedInTheDatabase => userBeingUpdatedInTheDatabase.IsTwoFactorEnabled, true)
-                .SetProperty(userBeingUpdatedInTheDatabase => userBeingUpdatedInTheDatabase.EncryptedTotpSecret, "secret-de-l-autre-requete"));
+        await WriteAsAnotherRequestAsync(databaseContext, () => databaseContext.Users
+            .Where(row => row.Id == accountId)
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(row => row.IsTwoFactorEnabled, true)
+                .SetProperty(row => row.EncryptedTotpSecret, "secret-de-l-autre-requete")));
     }
 
     // Compte les événements de ce type dans le vrai journal, pour ce compte.
-    private static async Task<int> CountSecurityEventsOfThisAccountAsync(WalletFlowDatabaseContext databaseContextOfThisRepositoryTest, Guid identifierOfTheAccountInTheJournal, SecurityEventType typeOfTheEventsToCount)
+    private static async Task<int> CountSecurityEventsAsync(WalletFlowDatabaseContext databaseContext, Guid accountId, SecurityEventType type)
     {
-        return await databaseContextOfThisRepositoryTest.SecurityEvents.CountAsync(eventSearchedInTheDatabaseTable =>
-            eventSearchedInTheDatabaseTable.UserId == identifierOfTheAccountInTheJournal
-            && eventSearchedInTheDatabaseTable.Type == typeOfTheEventsToCount);
+        return await databaseContext.SecurityEvents.CountAsync(row =>
+            row.UserId == accountId
+            && row.Type == type);
     }
 
     // Vérifie que la base n'a rien gardé de l'activation pour ce compte, à part ce qu'un test y a écrit lui-même.
-    private static async Task<int> CountBackupCodesOfThisAccountAsync(WalletFlowDatabaseContext databaseContextOfThisRepositoryTest, Guid identifierOfTheAccountOwningTheCodes)
+    private static async Task<int> CountBackupCodesAsync(WalletFlowDatabaseContext databaseContext, Guid accountId)
     {
-        return await databaseContextOfThisRepositoryTest.BackupCodes.CountAsync(backupCodeSearchedInTheDatabaseTable => backupCodeSearchedInTheDatabaseTable.UserId == identifierOfTheAccountOwningTheCodes);
+        return await databaseContext.BackupCodes.CountAsync(row => row.UserId == accountId);
     }
 
     // --- L'activation
@@ -109,78 +152,79 @@ public class TwoFactorAuthenticationRepositoryTests
     [Fact]
     public async Task ActivationIsReallySavedWithItsSecretItsCodesAndItsEvent()
     {
-        await using var databaseContextOfThisRepositoryTest = CreateDatabaseContextConnectedToLocalDatabase();
-        await using var transactionCancelledAtTheEndOfThisTest = await databaseContextOfThisRepositoryTest.Database.BeginTransactionAsync();
-        var repositoryBeingTestedOnTheRealDatabase = new TwoFactorAuthenticationRepository(databaseContextOfThisRepositoryTest);
-        var accountSavedInDatabaseByThisTest = await SaveNewConfirmedAccountWithThisEmailAddressAsync(databaseContextOfThisRepositoryTest, "test-activation-reussie@exemple.test");
-        var accountReadJustBeforeTheActivation = await databaseContextOfThisRepositoryTest.Users.SingleAsync(userSearchedInTheDatabaseTable => userSearchedInTheDatabaseTable.Id == accountSavedInDatabaseByThisTest.Id);
+        await using var databaseContext = CreateDatabaseContext();
+        await using var transaction = await databaseContext.Database.BeginTransactionAsync();
+        var savedAccount = await SaveConfirmedAccountAsync(databaseContext, "test-activation-reussie@exemple.test");
+        var account = await databaseContext.Users.SingleAsync(row => row.Id == savedAccount.Id);
 
-        var activationWasSavedInTheDatabase = await repositoryBeingTestedOnTheRealDatabase.TryToSaveTwoFactorActivationOfThisAccountAsync(
-            accountReadJustBeforeTheActivation,
-            SecretOfThePhoneEncryptedInTheseTests,
-            CreateBackupCodesForThisAccount(accountSavedInDatabaseByThisTest.Id, 10),
-            CreateSecurityEventForThisAccount(accountSavedInDatabaseByThisTest.Id, SecurityEventType.TwoFactorActivation));
+        PrepareActivation(
+            databaseContext,
+            account,
+            CreateBackupCodes(savedAccount.Id, 10),
+            CreateSecurityEvent(savedAccount.Id, SecurityEventType.TwoFactorActivation));
+        var saved = await TrySaveChangesAsync(databaseContext);
 
-        Assert.True(activationWasSavedInTheDatabase);
+        Assert.True(saved);
 
         // On oublie les objets en mémoire : tout ce qui suit est vraiment relu dans la base.
-        databaseContextOfThisRepositoryTest.ChangeTracker.Clear();
-        var accountReadBackFromTheRealDatabase = await databaseContextOfThisRepositoryTest.Users.AsNoTracking().SingleAsync(userSearchedInTheDatabaseTable => userSearchedInTheDatabaseTable.Id == accountSavedInDatabaseByThisTest.Id);
-        Assert.True(accountReadBackFromTheRealDatabase.IsTwoFactorEnabled);
-        Assert.Equal(SecretOfThePhoneEncryptedInTheseTests, accountReadBackFromTheRealDatabase.EncryptedTotpSecret);
-        Assert.Equal(10, await CountBackupCodesOfThisAccountAsync(databaseContextOfThisRepositoryTest, accountSavedInDatabaseByThisTest.Id));
-        Assert.Equal(1, await CountSecurityEventsOfThisAccountAsync(databaseContextOfThisRepositoryTest, accountSavedInDatabaseByThisTest.Id, SecurityEventType.TwoFactorActivation));
+        databaseContext.ChangeTracker.Clear();
+        var reloadedAccount = await databaseContext.Users.AsNoTracking().SingleAsync(row => row.Id == savedAccount.Id);
+        Assert.True(reloadedAccount.IsTwoFactorEnabled);
+        Assert.Equal(Secret, reloadedAccount.EncryptedTotpSecret);
+        Assert.Equal(10, await CountBackupCodesAsync(databaseContext, savedAccount.Id));
+        Assert.Equal(1, await CountSecurityEventsAsync(databaseContext, savedAccount.Id, SecurityEventType.TwoFactorActivation));
     }
 
     // Tout ou rien : un conflit n'écrit ni le secret, ni les codes, ni l'événement. Le même enregistrement réussit ensuite, une fois le compte relu.
     [Fact]
     public async Task ConflictOnTheAccountSavesNothingOfTheActivationAndItCanBeSavedAfterwards()
     {
-        await using var databaseContextOfThisRepositoryTest = CreateDatabaseContextConnectedToLocalDatabase();
-        await using var transactionCancelledAtTheEndOfThisTest = await databaseContextOfThisRepositoryTest.Database.BeginTransactionAsync();
-        var repositoryBeingTestedOnTheRealDatabase = new TwoFactorAuthenticationRepository(databaseContextOfThisRepositoryTest);
-        var accountSavedInDatabaseByThisTest = await SaveNewConfirmedAccountWithThisEmailAddressAsync(databaseContextOfThisRepositoryTest, "test-activation-conflit@exemple.test");
-        var accountReadJustBeforeTheConflict = await databaseContextOfThisRepositoryTest.Users.SingleAsync(userSearchedInTheDatabaseTable => userSearchedInTheDatabaseTable.Id == accountSavedInDatabaseByThisTest.Id);
-        await SimulateAnotherRequestCountingOneAttemptAsync(databaseContextOfThisRepositoryTest, accountSavedInDatabaseByThisTest.Id);
-        var backupCodesCreatedForThisTwoFactorActivation = CreateBackupCodesForThisAccount(accountSavedInDatabaseByThisTest.Id, 10);
-        var securityEventOfThisTwoFactorActivation = CreateSecurityEventForThisAccount(accountSavedInDatabaseByThisTest.Id, SecurityEventType.TwoFactorActivation);
+        await using var databaseContext = CreateDatabaseContext();
+        await using var transaction = await databaseContext.Database.BeginTransactionAsync();
+        var savedAccount = await SaveConfirmedAccountAsync(databaseContext, "test-activation-conflit@exemple.test");
+        var account = await databaseContext.Users.SingleAsync(row => row.Id == savedAccount.Id);
+        await SimulateConcurrentAttemptAsync(databaseContext, savedAccount.Id);
+        var backupCodes = CreateBackupCodes(savedAccount.Id, 10);
+        var securityEvent = CreateSecurityEvent(savedAccount.Id, SecurityEventType.TwoFactorActivation);
 
-        var firstTryWasSavedInTheDatabase = await repositoryBeingTestedOnTheRealDatabase.TryToSaveTwoFactorActivationOfThisAccountAsync(accountReadJustBeforeTheConflict, SecretOfThePhoneEncryptedInTheseTests, backupCodesCreatedForThisTwoFactorActivation, securityEventOfThisTwoFactorActivation);
+        PrepareActivation(databaseContext, account, backupCodes, securityEvent);
+        var firstSaved = await TrySaveChangesAsync(databaseContext);
 
-        Assert.False(firstTryWasSavedInTheDatabase);
-        Assert.Equal(0, await CountBackupCodesOfThisAccountAsync(databaseContextOfThisRepositoryTest, accountSavedInDatabaseByThisTest.Id));
-        Assert.Equal(0, await CountSecurityEventsOfThisAccountAsync(databaseContextOfThisRepositoryTest, accountSavedInDatabaseByThisTest.Id, SecurityEventType.TwoFactorActivation));
-        var accountReadAgainAfterTheConflict = await databaseContextOfThisRepositoryTest.Users.SingleAsync(userSearchedInTheDatabaseTable => userSearchedInTheDatabaseTable.Id == accountSavedInDatabaseByThisTest.Id);
-        Assert.False(accountReadAgainAfterTheConflict.IsTwoFactorEnabled);
-        Assert.Null(accountReadAgainAfterTheConflict.EncryptedTotpSecret);
+        Assert.False(firstSaved);
+        Assert.Equal(0, await CountBackupCodesAsync(databaseContext, savedAccount.Id));
+        Assert.Equal(0, await CountSecurityEventsAsync(databaseContext, savedAccount.Id, SecurityEventType.TwoFactorActivation));
+        var reloadedAccount = await databaseContext.Users.SingleAsync(row => row.Id == savedAccount.Id);
+        Assert.False(reloadedAccount.IsTwoFactorEnabled);
+        Assert.Null(reloadedAccount.EncryptedTotpSecret);
 
-        var secondTryWasSavedInTheDatabase = await repositoryBeingTestedOnTheRealDatabase.TryToSaveTwoFactorActivationOfThisAccountAsync(accountReadAgainAfterTheConflict, SecretOfThePhoneEncryptedInTheseTests, backupCodesCreatedForThisTwoFactorActivation, securityEventOfThisTwoFactorActivation);
+        PrepareActivation(databaseContext, reloadedAccount, backupCodes, securityEvent);
+        var secondSaved = await TrySaveChangesAsync(databaseContext);
 
-        Assert.True(secondTryWasSavedInTheDatabase);
-        Assert.Equal(10, await CountBackupCodesOfThisAccountAsync(databaseContextOfThisRepositoryTest, accountSavedInDatabaseByThisTest.Id));
+        Assert.True(secondSaved);
+        Assert.Equal(10, await CountBackupCodesAsync(databaseContext, savedAccount.Id));
     }
 
     // Deux activations simultanées : la seconde ne remplace pas le secret de la première, et le compte n'a jamais 20 codes.
     [Fact]
     public async Task SecondActivationAtTheSameMomentSavesNothing()
     {
-        await using var databaseContextOfThisRepositoryTest = CreateDatabaseContextConnectedToLocalDatabase();
-        await using var transactionCancelledAtTheEndOfThisTest = await databaseContextOfThisRepositoryTest.Database.BeginTransactionAsync();
-        var repositoryBeingTestedOnTheRealDatabase = new TwoFactorAuthenticationRepository(databaseContextOfThisRepositoryTest);
-        var accountSavedInDatabaseByThisTest = await SaveNewConfirmedAccountWithThisEmailAddressAsync(databaseContextOfThisRepositoryTest, "test-activation-double@exemple.test");
-        var accountReadJustBeforeTheOtherActivation = await databaseContextOfThisRepositoryTest.Users.SingleAsync(userSearchedInTheDatabaseTable => userSearchedInTheDatabaseTable.Id == accountSavedInDatabaseByThisTest.Id);
-        await SimulateAnotherRequestActivatingTheAccountAsync(databaseContextOfThisRepositoryTest, accountSavedInDatabaseByThisTest.Id);
+        await using var databaseContext = CreateDatabaseContext();
+        await using var transaction = await databaseContext.Database.BeginTransactionAsync();
+        var savedAccount = await SaveConfirmedAccountAsync(databaseContext, "test-activation-double@exemple.test");
+        var account = await databaseContext.Users.SingleAsync(row => row.Id == savedAccount.Id);
+        await SimulateConcurrentActivationAsync(databaseContext, savedAccount.Id);
 
-        var activationWasSavedInTheDatabase = await repositoryBeingTestedOnTheRealDatabase.TryToSaveTwoFactorActivationOfThisAccountAsync(
-            accountReadJustBeforeTheOtherActivation,
-            SecretOfThePhoneEncryptedInTheseTests,
-            CreateBackupCodesForThisAccount(accountSavedInDatabaseByThisTest.Id, 10),
-            CreateSecurityEventForThisAccount(accountSavedInDatabaseByThisTest.Id, SecurityEventType.TwoFactorActivation));
+        PrepareActivation(
+            databaseContext,
+            account,
+            CreateBackupCodes(savedAccount.Id, 10),
+            CreateSecurityEvent(savedAccount.Id, SecurityEventType.TwoFactorActivation));
+        var saved = await TrySaveChangesAsync(databaseContext);
 
-        Assert.False(activationWasSavedInTheDatabase);
-        Assert.Equal(0, await CountBackupCodesOfThisAccountAsync(databaseContextOfThisRepositoryTest, accountSavedInDatabaseByThisTest.Id));
-        var accountReadBackFromTheRealDatabase = await databaseContextOfThisRepositoryTest.Users.AsNoTracking().SingleAsync(userSearchedInTheDatabaseTable => userSearchedInTheDatabaseTable.Id == accountSavedInDatabaseByThisTest.Id);
-        Assert.Equal("secret-de-l-autre-requete", accountReadBackFromTheRealDatabase.EncryptedTotpSecret);
+        Assert.False(saved);
+        Assert.Equal(0, await CountBackupCodesAsync(databaseContext, savedAccount.Id));
+        var reloadedAccount = await databaseContext.Users.AsNoTracking().SingleAsync(row => row.Id == savedAccount.Id);
+        Assert.Equal("secret-de-l-autre-requete", reloadedAccount.EncryptedTotpSecret);
     }
 
     // --- La lecture des codes
@@ -188,44 +232,44 @@ public class TwoFactorAuthenticationRepositoryTests
     [Fact]
     public async Task OnlyUnusedBackupCodesOfThisAccountAreFound()
     {
-        await using var databaseContextOfThisRepositoryTest = CreateDatabaseContextConnectedToLocalDatabase();
-        await using var transactionCancelledAtTheEndOfThisTest = await databaseContextOfThisRepositoryTest.Database.BeginTransactionAsync();
-        var repositoryBeingTestedOnTheRealDatabase = new TwoFactorAuthenticationRepository(databaseContextOfThisRepositoryTest);
-        var accountSavedInDatabaseByThisTest = await SaveNewConfirmedAccountWithThisEmailAddressAsync(databaseContextOfThisRepositoryTest, "test-codes-inutilises@exemple.test");
-        var otherAccountSavedByThisTest = await SaveNewConfirmedAccountWithThisEmailAddressAsync(databaseContextOfThisRepositoryTest, "test-codes-autre-compte@exemple.test");
-        await ActivateThisAccountDirectlyInTheDatabaseAsync(databaseContextOfThisRepositoryTest, accountSavedInDatabaseByThisTest.Id, 3);
-        await ActivateThisAccountDirectlyInTheDatabaseAsync(databaseContextOfThisRepositoryTest, otherAccountSavedByThisTest.Id, 2);
-        var backupCodeAlreadyUsedBeforeThisTest = await databaseContextOfThisRepositoryTest.BackupCodes.FirstAsync(backupCodeSearchedInTheDatabaseTable => backupCodeSearchedInTheDatabaseTable.UserId == accountSavedInDatabaseByThisTest.Id);
-        backupCodeAlreadyUsedBeforeThisTest.UsedAt = CurrentDateUsedInTheseTests;
-        await databaseContextOfThisRepositoryTest.SaveChangesAsync();
-        databaseContextOfThisRepositoryTest.ChangeTracker.Clear();
+        await using var databaseContext = CreateDatabaseContext();
+        await using var transaction = await databaseContext.Database.BeginTransactionAsync();
+        var repository = new TwoFactorAuthenticationRepository(databaseContext);
+        var savedAccount = await SaveConfirmedAccountAsync(databaseContext, "test-codes-inutilises@exemple.test");
+        var otherAccount = await SaveConfirmedAccountAsync(databaseContext, "test-codes-autre-compte@exemple.test");
+        await ActivateDirectlyInDatabaseAsync(databaseContext, savedAccount.Id, 3);
+        await ActivateDirectlyInDatabaseAsync(databaseContext, otherAccount.Id, 2);
+        var backupCode = await databaseContext.BackupCodes.FirstAsync(row => row.UserId == savedAccount.Id);
+        backupCode.MarkAsUsed(Now);
+        await databaseContext.SaveChangesAsync();
+        databaseContext.ChangeTracker.Clear();
 
-        var unusedBackupCodesFoundInTheRealDatabase = await repositoryBeingTestedOnTheRealDatabase.FindUnusedBackupCodesOfThisAccountAsync(accountSavedInDatabaseByThisTest.Id);
+        var unusedBackupCodes = await repository.FindUnusedBackupCodesAsync(savedAccount.Id);
 
-        Assert.Equal(2, unusedBackupCodesFoundInTheRealDatabase.Count);
-        foreach (var unusedBackupCodeFoundInTheRealDatabase in unusedBackupCodesFoundInTheRealDatabase)
+        Assert.Equal(2, unusedBackupCodes.Count);
+        foreach (var unusedBackupCode in unusedBackupCodes)
         {
-            Assert.Equal(accountSavedInDatabaseByThisTest.Id, unusedBackupCodeFoundInTheRealDatabase.UserId);
-            Assert.NotEqual(backupCodeAlreadyUsedBeforeThisTest.Id, unusedBackupCodeFoundInTheRealDatabase.Id);
-            Assert.Null(unusedBackupCodeFoundInTheRealDatabase.UsedAt);
+            Assert.Equal(savedAccount.Id, unusedBackupCode.UserId);
+            Assert.NotEqual(backupCode.Id, unusedBackupCode.Id);
+            Assert.Null(unusedBackupCode.UsedAt);
         }
 
         // Cette lecture ne sert qu'à comparer : EF Core ne doit pas suivre ces lignes.
-        Assert.Empty(databaseContextOfThisRepositoryTest.ChangeTracker.Entries<BackupCode>());
+        Assert.Empty(databaseContext.ChangeTracker.Entries<BackupCode>());
     }
 
     [Fact]
     public async Task BackupCodeIsFoundByItsIdentifierAndUnknownIdentifierFindsNothing()
     {
-        await using var databaseContextOfThisRepositoryTest = CreateDatabaseContextConnectedToLocalDatabase();
-        await using var transactionCancelledAtTheEndOfThisTest = await databaseContextOfThisRepositoryTest.Database.BeginTransactionAsync();
-        var repositoryBeingTestedOnTheRealDatabase = new TwoFactorAuthenticationRepository(databaseContextOfThisRepositoryTest);
-        var accountSavedInDatabaseByThisTest = await SaveNewConfirmedAccountWithThisEmailAddressAsync(databaseContextOfThisRepositoryTest, "test-code-par-identifiant@exemple.test");
-        await ActivateThisAccountDirectlyInTheDatabaseAsync(databaseContextOfThisRepositoryTest, accountSavedInDatabaseByThisTest.Id, 1);
-        var backupCodeSavedForThisUserAccount = await databaseContextOfThisRepositoryTest.BackupCodes.AsNoTracking().SingleAsync(backupCodeSearchedInTheDatabaseTable => backupCodeSearchedInTheDatabaseTable.UserId == accountSavedInDatabaseByThisTest.Id);
+        await using var databaseContext = CreateDatabaseContext();
+        await using var transaction = await databaseContext.Database.BeginTransactionAsync();
+        var repository = new TwoFactorAuthenticationRepository(databaseContext);
+        var savedAccount = await SaveConfirmedAccountAsync(databaseContext, "test-code-par-identifiant@exemple.test");
+        await ActivateDirectlyInDatabaseAsync(databaseContext, savedAccount.Id, 1);
+        var backupCode = await databaseContext.BackupCodes.AsNoTracking().SingleAsync(row => row.UserId == savedAccount.Id);
 
-        Assert.Equal(backupCodeSavedForThisUserAccount.CodeHash, (await repositoryBeingTestedOnTheRealDatabase.FindBackupCodeByItsIdentifierAsync(backupCodeSavedForThisUserAccount.Id))!.CodeHash);
-        Assert.Null(await repositoryBeingTestedOnTheRealDatabase.FindBackupCodeByItsIdentifierAsync(Guid.NewGuid()));
+        Assert.Equal(backupCode.CodeHash, (await repository.FindBackupCodeAsync(backupCode.Id))!.CodeHash);
+        Assert.Null(await repository.FindBackupCodeAsync(Guid.NewGuid()));
     }
 
     // --- La connexion avec un code de secours
@@ -233,74 +277,77 @@ public class TwoFactorAuthenticationRepositoryTests
     [Fact]
     public async Task LoginWithABackupCodeReallyMarksItAsUsedAtTheDateOfTheLogin()
     {
-        await using var databaseContextOfThisRepositoryTest = CreateDatabaseContextConnectedToLocalDatabase();
-        await using var transactionCancelledAtTheEndOfThisTest = await databaseContextOfThisRepositoryTest.Database.BeginTransactionAsync();
-        var accountSavedInDatabaseByThisTest = await SaveNewConfirmedAccountWithThisEmailAddressAsync(databaseContextOfThisRepositoryTest, "test-connexion-code-secours@exemple.test");
-        await ActivateThisAccountDirectlyInTheDatabaseAsync(databaseContextOfThisRepositoryTest, accountSavedInDatabaseByThisTest.Id, 2);
-        var accountReadJustBeforeTheLogin = await databaseContextOfThisRepositoryTest.Users.SingleAsync(userSearchedInTheDatabaseTable => userSearchedInTheDatabaseTable.Id == accountSavedInDatabaseByThisTest.Id);
-        var backupCodeUsedForTheLogin = await databaseContextOfThisRepositoryTest.BackupCodes.FirstAsync(backupCodeSearchedInTheDatabaseTable => backupCodeSearchedInTheDatabaseTable.UserId == accountSavedInDatabaseByThisTest.Id);
+        await using var databaseContext = CreateDatabaseContext();
+        await using var transaction = await databaseContext.Database.BeginTransactionAsync();
+        var savedAccount = await SaveConfirmedAccountAsync(databaseContext, "test-connexion-code-secours@exemple.test");
+        await ActivateDirectlyInDatabaseAsync(databaseContext, savedAccount.Id, 2);
+        var account = await databaseContext.Users.SingleAsync(row => row.Id == savedAccount.Id);
+        var backupCode = await databaseContext.BackupCodes.FirstAsync(row => row.UserId == savedAccount.Id);
 
-        var loginWasSavedInTheDatabase = await new UserSessionRepository(databaseContextOfThisRepositoryTest).TryToSaveSuccessfulLoginOfThisAccountAsync(
-            accountReadJustBeforeTheLogin,
-            new UserSession { Id = new string('c', 64), LastActivityAt = CurrentDateUsedInTheseTests, UserId = accountSavedInDatabaseByThisTest.Id },
-            null,
-            backupCodeUsedForTheLogin,
-            CreateSecurityEventForThisAccount(accountSavedInDatabaseByThisTest.Id, SecurityEventType.Login));
+        PrepareBackupCodeLogin(
+            databaseContext,
+            account,
+            new UserSession { Id = new string('c', 64), LastActivityAt = Now, UserId = savedAccount.Id },
+            backupCode,
+            CreateSecurityEvent(savedAccount.Id, SecurityEventType.Login));
+        var saved = await TrySaveChangesAsync(databaseContext);
 
-        Assert.True(loginWasSavedInTheDatabase);
-        databaseContextOfThisRepositoryTest.ChangeTracker.Clear();
-        var backupCodeReadBackFromTheRealDatabase = await databaseContextOfThisRepositoryTest.BackupCodes.AsNoTracking().SingleAsync(backupCodeSearchedInTheDatabaseTable => backupCodeSearchedInTheDatabaseTable.Id == backupCodeUsedForTheLogin.Id);
-        Assert.Equal(CurrentDateUsedInTheseTests, backupCodeReadBackFromTheRealDatabase.UsedAt);
-        Assert.Single(await new TwoFactorAuthenticationRepository(databaseContextOfThisRepositoryTest).FindUnusedBackupCodesOfThisAccountAsync(accountSavedInDatabaseByThisTest.Id));
+        Assert.True(saved);
+        databaseContext.ChangeTracker.Clear();
+        var reloadedBackupCode = await databaseContext.BackupCodes.AsNoTracking().SingleAsync(row => row.Id == backupCode.Id);
+        Assert.Equal(Now, reloadedBackupCode.UsedAt);
+        Assert.Single(await new TwoFactorAuthenticationRepository(databaseContext).FindUnusedBackupCodesAsync(savedAccount.Id));
     }
 
     // Deux requêtes avec le même code : celle qui écrit en second n'ouvre aucune session.
     [Fact]
     public async Task BackupCodeUsedByAnotherRequestJustBeforeTheSaveOpensNoSession()
     {
-        await using var databaseContextOfThisRepositoryTest = CreateDatabaseContextConnectedToLocalDatabase();
-        await using var transactionCancelledAtTheEndOfThisTest = await databaseContextOfThisRepositoryTest.Database.BeginTransactionAsync();
-        var accountSavedInDatabaseByThisTest = await SaveNewConfirmedAccountWithThisEmailAddressAsync(databaseContextOfThisRepositoryTest, "test-code-secours-course@exemple.test");
-        await ActivateThisAccountDirectlyInTheDatabaseAsync(databaseContextOfThisRepositoryTest, accountSavedInDatabaseByThisTest.Id, 1);
-        var accountReadJustBeforeTheLogin = await databaseContextOfThisRepositoryTest.Users.SingleAsync(userSearchedInTheDatabaseTable => userSearchedInTheDatabaseTable.Id == accountSavedInDatabaseByThisTest.Id);
-        var backupCodeUsedForTheLogin = await databaseContextOfThisRepositoryTest.BackupCodes.SingleAsync(backupCodeSearchedInTheDatabaseTable => backupCodeSearchedInTheDatabaseTable.UserId == accountSavedInDatabaseByThisTest.Id);
+        await using var databaseContext = CreateDatabaseContext();
+        await using var transaction = await databaseContext.Database.BeginTransactionAsync();
+        var savedAccount = await SaveConfirmedAccountAsync(databaseContext, "test-code-secours-course@exemple.test");
+        await ActivateDirectlyInDatabaseAsync(databaseContext, savedAccount.Id, 1);
+        var account = await databaseContext.Users.SingleAsync(row => row.Id == savedAccount.Id);
+        var backupCode = await databaseContext.BackupCodes.SingleAsync(row => row.UserId == savedAccount.Id);
 
-        await databaseContextOfThisRepositoryTest.BackupCodes
-            .Where(backupCodeSearchedInTheDatabaseTable => backupCodeSearchedInTheDatabaseTable.Id == backupCodeUsedForTheLogin.Id)
-            .ExecuteUpdateAsync(setterOfTheColumnsOfTheCode => setterOfTheColumnsOfTheCode.SetProperty(
-                backupCodeBeingUpdatedInTheDatabase => backupCodeBeingUpdatedInTheDatabase.UsedAt,
-                CurrentDateUsedInTheseTests));
+        await WriteAsAnotherRequestAsync(databaseContext, () => databaseContext.BackupCodes
+            .Where(row => row.Id == backupCode.Id)
+            .ExecuteUpdateAsync(setters => setters.SetProperty(
+                row => row.UsedAt,
+                Now)));
 
-        var loginWasSavedInTheDatabase = await new UserSessionRepository(databaseContextOfThisRepositoryTest).TryToSaveSuccessfulLoginOfThisAccountAsync(
-            accountReadJustBeforeTheLogin,
-            new UserSession { Id = new string('d', 64), LastActivityAt = CurrentDateUsedInTheseTests.AddSeconds(1), UserId = accountSavedInDatabaseByThisTest.Id },
-            null,
-            backupCodeUsedForTheLogin,
-            CreateSecurityEventForThisAccount(accountSavedInDatabaseByThisTest.Id, SecurityEventType.Login));
+        PrepareBackupCodeLogin(
+            databaseContext,
+            account,
+            new UserSession { Id = new string('d', 64), LastActivityAt = Now.AddSeconds(1), UserId = savedAccount.Id },
+            backupCode,
+            CreateSecurityEvent(savedAccount.Id, SecurityEventType.Login));
+        var saved = await TrySaveChangesAsync(databaseContext);
 
-        Assert.False(loginWasSavedInTheDatabase);
-        Assert.Equal(0, await databaseContextOfThisRepositoryTest.UserSessions.CountAsync(sessionSearchedInTheDatabaseTable => sessionSearchedInTheDatabaseTable.UserId == accountSavedInDatabaseByThisTest.Id));
+        Assert.False(saved);
+        Assert.Equal(0, await databaseContext.UserSessions.CountAsync(row => row.UserId == savedAccount.Id));
     }
 
     // Une connexion lancée sans code ne peut pas s'enregistrer si la double authentification vient d'être activée.
     [Fact]
     public async Task LoginReadBeforeAnActivationOpensNoSession()
     {
-        await using var databaseContextOfThisRepositoryTest = CreateDatabaseContextConnectedToLocalDatabase();
-        await using var transactionCancelledAtTheEndOfThisTest = await databaseContextOfThisRepositoryTest.Database.BeginTransactionAsync();
-        var accountSavedInDatabaseByThisTest = await SaveNewConfirmedAccountWithThisEmailAddressAsync(databaseContextOfThisRepositoryTest, "test-connexion-avant-activation@exemple.test");
-        var accountReadJustBeforeTheActivation = await databaseContextOfThisRepositoryTest.Users.SingleAsync(userSearchedInTheDatabaseTable => userSearchedInTheDatabaseTable.Id == accountSavedInDatabaseByThisTest.Id);
-        await SimulateAnotherRequestActivatingTheAccountAsync(databaseContextOfThisRepositoryTest, accountSavedInDatabaseByThisTest.Id);
+        await using var databaseContext = CreateDatabaseContext();
+        await using var transaction = await databaseContext.Database.BeginTransactionAsync();
+        var savedAccount = await SaveConfirmedAccountAsync(databaseContext, "test-connexion-avant-activation@exemple.test");
+        var account = await databaseContext.Users.SingleAsync(row => row.Id == savedAccount.Id);
+        await SimulateConcurrentActivationAsync(databaseContext, savedAccount.Id);
 
-        var loginWasSavedInTheDatabase = await new UserSessionRepository(databaseContextOfThisRepositoryTest).TryToSaveSuccessfulLoginOfThisAccountAsync(
-            accountReadJustBeforeTheActivation,
-            new UserSession { Id = new string('e', 64), LastActivityAt = CurrentDateUsedInTheseTests, UserId = accountSavedInDatabaseByThisTest.Id },
+        PrepareBackupCodeLogin(
+            databaseContext,
+            account,
+            new UserSession { Id = new string('e', 64), LastActivityAt = Now, UserId = savedAccount.Id },
             null,
-            null,
-            CreateSecurityEventForThisAccount(accountSavedInDatabaseByThisTest.Id, SecurityEventType.Login));
+            CreateSecurityEvent(savedAccount.Id, SecurityEventType.Login));
+        var saved = await TrySaveChangesAsync(databaseContext);
 
-        Assert.False(loginWasSavedInTheDatabase);
-        Assert.Equal(0, await databaseContextOfThisRepositoryTest.UserSessions.CountAsync(sessionSearchedInTheDatabaseTable => sessionSearchedInTheDatabaseTable.UserId == accountSavedInDatabaseByThisTest.Id));
+        Assert.False(saved);
+        Assert.Equal(0, await databaseContext.UserSessions.CountAsync(row => row.UserId == savedAccount.Id));
     }
 
     // --- La désactivation
@@ -308,85 +355,86 @@ public class TwoFactorAuthenticationRepositoryTests
     [Fact]
     public async Task DeactivationReallyErasesTheSecretAndEveryBackupCodeOfThisAccountOnly()
     {
-        await using var databaseContextOfThisRepositoryTest = CreateDatabaseContextConnectedToLocalDatabase();
-        await using var transactionCancelledAtTheEndOfThisTest = await databaseContextOfThisRepositoryTest.Database.BeginTransactionAsync();
-        var repositoryBeingTestedOnTheRealDatabase = new TwoFactorAuthenticationRepository(databaseContextOfThisRepositoryTest);
-        var accountSavedInDatabaseByThisTest = await SaveNewConfirmedAccountWithThisEmailAddressAsync(databaseContextOfThisRepositoryTest, "test-desactivation@exemple.test");
-        var otherAccountSavedByThisTest = await SaveNewConfirmedAccountWithThisEmailAddressAsync(databaseContextOfThisRepositoryTest, "test-desactivation-autre@exemple.test");
-        await ActivateThisAccountDirectlyInTheDatabaseAsync(databaseContextOfThisRepositoryTest, accountSavedInDatabaseByThisTest.Id, 10);
-        await ActivateThisAccountDirectlyInTheDatabaseAsync(databaseContextOfThisRepositoryTest, otherAccountSavedByThisTest.Id, 10);
-        var backupCodeAlreadyUsedBeforeThisTest = await databaseContextOfThisRepositoryTest.BackupCodes.FirstAsync(backupCodeSearchedInTheDatabaseTable => backupCodeSearchedInTheDatabaseTable.UserId == accountSavedInDatabaseByThisTest.Id);
-        backupCodeAlreadyUsedBeforeThisTest.UsedAt = CurrentDateUsedInTheseTests;
-        await databaseContextOfThisRepositoryTest.SaveChangesAsync();
-        databaseContextOfThisRepositoryTest.ChangeTracker.Clear();
-        var accountReadJustBeforeTheDeactivation = await databaseContextOfThisRepositoryTest.Users.SingleAsync(userSearchedInTheDatabaseTable => userSearchedInTheDatabaseTable.Id == accountSavedInDatabaseByThisTest.Id);
+        await using var databaseContext = CreateDatabaseContext();
+        await using var transaction = await databaseContext.Database.BeginTransactionAsync();
+        var savedAccount = await SaveConfirmedAccountAsync(databaseContext, "test-desactivation@exemple.test");
+        var otherAccount = await SaveConfirmedAccountAsync(databaseContext, "test-desactivation-autre@exemple.test");
+        await ActivateDirectlyInDatabaseAsync(databaseContext, savedAccount.Id, 10);
+        await ActivateDirectlyInDatabaseAsync(databaseContext, otherAccount.Id, 10);
+        var backupCode = await databaseContext.BackupCodes.FirstAsync(row => row.UserId == savedAccount.Id);
+        backupCode.MarkAsUsed(Now);
+        await databaseContext.SaveChangesAsync();
+        databaseContext.ChangeTracker.Clear();
+        var account = await databaseContext.Users.SingleAsync(row => row.Id == savedAccount.Id);
 
-        var deactivationWasSavedInTheDatabase = await repositoryBeingTestedOnTheRealDatabase.TryToSaveTwoFactorDeactivationOfThisAccountAsync(accountReadJustBeforeTheDeactivation, CreateSecurityEventForThisAccount(accountSavedInDatabaseByThisTest.Id, SecurityEventType.TwoFactorDeactivation));
+        await PrepareDeactivationAsync(databaseContext, account, CreateSecurityEvent(savedAccount.Id, SecurityEventType.TwoFactorDeactivation));
+        var saved = await TrySaveChangesAsync(databaseContext);
 
-        Assert.True(deactivationWasSavedInTheDatabase);
-        databaseContextOfThisRepositoryTest.ChangeTracker.Clear();
-        var accountReadBackFromTheRealDatabase = await databaseContextOfThisRepositoryTest.Users.AsNoTracking().SingleAsync(userSearchedInTheDatabaseTable => userSearchedInTheDatabaseTable.Id == accountSavedInDatabaseByThisTest.Id);
-        Assert.False(accountReadBackFromTheRealDatabase.IsTwoFactorEnabled);
-        Assert.Null(accountReadBackFromTheRealDatabase.EncryptedTotpSecret);
-        Assert.Equal(0, await CountBackupCodesOfThisAccountAsync(databaseContextOfThisRepositoryTest, accountSavedInDatabaseByThisTest.Id));
-        Assert.Equal(10, await CountBackupCodesOfThisAccountAsync(databaseContextOfThisRepositoryTest, otherAccountSavedByThisTest.Id));
-        Assert.Equal(1, await CountSecurityEventsOfThisAccountAsync(databaseContextOfThisRepositoryTest, accountSavedInDatabaseByThisTest.Id, SecurityEventType.TwoFactorDeactivation));
+        Assert.True(saved);
+        databaseContext.ChangeTracker.Clear();
+        var reloadedAccount = await databaseContext.Users.AsNoTracking().SingleAsync(row => row.Id == savedAccount.Id);
+        Assert.False(reloadedAccount.IsTwoFactorEnabled);
+        Assert.Null(reloadedAccount.EncryptedTotpSecret);
+        Assert.Equal(0, await CountBackupCodesAsync(databaseContext, savedAccount.Id));
+        Assert.Equal(10, await CountBackupCodesAsync(databaseContext, otherAccount.Id));
+        Assert.Equal(1, await CountSecurityEventsAsync(databaseContext, savedAccount.Id, SecurityEventType.TwoFactorDeactivation));
     }
 
     // Tout ou rien : un conflit ne touche ni le secret, ni les codes, ni le journal.
     [Fact]
     public async Task ConflictOnTheAccountSavesNothingOfTheDeactivation()
     {
-        await using var databaseContextOfThisRepositoryTest = CreateDatabaseContextConnectedToLocalDatabase();
-        await using var transactionCancelledAtTheEndOfThisTest = await databaseContextOfThisRepositoryTest.Database.BeginTransactionAsync();
-        var repositoryBeingTestedOnTheRealDatabase = new TwoFactorAuthenticationRepository(databaseContextOfThisRepositoryTest);
-        var accountSavedInDatabaseByThisTest = await SaveNewConfirmedAccountWithThisEmailAddressAsync(databaseContextOfThisRepositoryTest, "test-desactivation-conflit@exemple.test");
-        await ActivateThisAccountDirectlyInTheDatabaseAsync(databaseContextOfThisRepositoryTest, accountSavedInDatabaseByThisTest.Id, 10);
-        var accountReadJustBeforeTheConflict = await databaseContextOfThisRepositoryTest.Users.SingleAsync(userSearchedInTheDatabaseTable => userSearchedInTheDatabaseTable.Id == accountSavedInDatabaseByThisTest.Id);
-        await SimulateAnotherRequestCountingOneAttemptAsync(databaseContextOfThisRepositoryTest, accountSavedInDatabaseByThisTest.Id);
+        await using var databaseContext = CreateDatabaseContext();
+        await using var transaction = await databaseContext.Database.BeginTransactionAsync();
+        var savedAccount = await SaveConfirmedAccountAsync(databaseContext, "test-desactivation-conflit@exemple.test");
+        await ActivateDirectlyInDatabaseAsync(databaseContext, savedAccount.Id, 10);
+        var account = await databaseContext.Users.SingleAsync(row => row.Id == savedAccount.Id);
+        await SimulateConcurrentAttemptAsync(databaseContext, savedAccount.Id);
 
-        var deactivationWasSavedInTheDatabase = await repositoryBeingTestedOnTheRealDatabase.TryToSaveTwoFactorDeactivationOfThisAccountAsync(accountReadJustBeforeTheConflict, CreateSecurityEventForThisAccount(accountSavedInDatabaseByThisTest.Id, SecurityEventType.TwoFactorDeactivation));
+        await PrepareDeactivationAsync(databaseContext, account, CreateSecurityEvent(savedAccount.Id, SecurityEventType.TwoFactorDeactivation));
+        var saved = await TrySaveChangesAsync(databaseContext);
 
-        Assert.False(deactivationWasSavedInTheDatabase);
-        var accountReadBackFromTheRealDatabase = await databaseContextOfThisRepositoryTest.Users.AsNoTracking().SingleAsync(userSearchedInTheDatabaseTable => userSearchedInTheDatabaseTable.Id == accountSavedInDatabaseByThisTest.Id);
-        Assert.True(accountReadBackFromTheRealDatabase.IsTwoFactorEnabled);
-        Assert.Equal(SecretOfThePhoneEncryptedInTheseTests, accountReadBackFromTheRealDatabase.EncryptedTotpSecret);
-        Assert.Equal(10, await CountBackupCodesOfThisAccountAsync(databaseContextOfThisRepositoryTest, accountSavedInDatabaseByThisTest.Id));
-        Assert.Equal(0, await CountSecurityEventsOfThisAccountAsync(databaseContextOfThisRepositoryTest, accountSavedInDatabaseByThisTest.Id, SecurityEventType.TwoFactorDeactivation));
+        Assert.False(saved);
+        var reloadedAccount = await databaseContext.Users.AsNoTracking().SingleAsync(row => row.Id == savedAccount.Id);
+        Assert.True(reloadedAccount.IsTwoFactorEnabled);
+        Assert.Equal(Secret, reloadedAccount.EncryptedTotpSecret);
+        Assert.Equal(10, await CountBackupCodesAsync(databaseContext, savedAccount.Id));
+        Assert.Equal(0, await CountSecurityEventsAsync(databaseContext, savedAccount.Id, SecurityEventType.TwoFactorDeactivation));
     }
 
     // Une désactivation qui voit un code utilisé à l'instant recommence : elle n'efface jamais une ligne qu'elle n'a pas relue.
     [Fact]
     public async Task BackupCodeUsedByAnotherRequestJustBeforeTheDeactivationSavesNothing()
     {
-        await using var databaseContextOfThisRepositoryTest = CreateDatabaseContextConnectedToLocalDatabase();
-        await using var transactionCancelledAtTheEndOfThisTest = await databaseContextOfThisRepositoryTest.Database.BeginTransactionAsync();
-        var accountSavedInDatabaseByThisTest = await SaveNewConfirmedAccountWithThisEmailAddressAsync(databaseContextOfThisRepositoryTest, "test-desactivation-code@exemple.test");
-        await ActivateThisAccountDirectlyInTheDatabaseAsync(databaseContextOfThisRepositoryTest, accountSavedInDatabaseByThisTest.Id, 1);
-        var accountReadJustBeforeTheDeactivation = await databaseContextOfThisRepositoryTest.Users.SingleAsync(userSearchedInTheDatabaseTable => userSearchedInTheDatabaseTable.Id == accountSavedInDatabaseByThisTest.Id);
-        var backupCodeTrackedByTheContext = await databaseContextOfThisRepositoryTest.BackupCodes.SingleAsync(backupCodeSearchedInTheDatabaseTable => backupCodeSearchedInTheDatabaseTable.UserId == accountSavedInDatabaseByThisTest.Id);
-        await databaseContextOfThisRepositoryTest.BackupCodes
-            .Where(backupCodeSearchedInTheDatabaseTable => backupCodeSearchedInTheDatabaseTable.Id == backupCodeTrackedByTheContext.Id)
-            .ExecuteUpdateAsync(setterOfTheColumnsOfTheCode => setterOfTheColumnsOfTheCode.SetProperty(
-                backupCodeBeingUpdatedInTheDatabase => backupCodeBeingUpdatedInTheDatabase.UsedAt,
-                CurrentDateUsedInTheseTests));
+        await using var databaseContext = CreateDatabaseContext();
+        await using var transaction = await databaseContext.Database.BeginTransactionAsync();
+        var savedAccount = await SaveConfirmedAccountAsync(databaseContext, "test-desactivation-code@exemple.test");
+        await ActivateDirectlyInDatabaseAsync(databaseContext, savedAccount.Id, 1);
+        var account = await databaseContext.Users.SingleAsync(row => row.Id == savedAccount.Id);
+        var trackedCode = await databaseContext.BackupCodes.SingleAsync(row => row.UserId == savedAccount.Id);
+        await WriteAsAnotherRequestAsync(databaseContext, () => databaseContext.BackupCodes
+            .Where(row => row.Id == trackedCode.Id)
+            .ExecuteUpdateAsync(setters => setters.SetProperty(
+                row => row.UsedAt,
+                Now)));
 
-        var deactivationWasSavedInTheDatabase = await new TwoFactorAuthenticationRepository(databaseContextOfThisRepositoryTest).TryToSaveTwoFactorDeactivationOfThisAccountAsync(accountReadJustBeforeTheDeactivation, CreateSecurityEventForThisAccount(accountSavedInDatabaseByThisTest.Id, SecurityEventType.TwoFactorDeactivation));
+        await PrepareDeactivationAsync(databaseContext, account, CreateSecurityEvent(savedAccount.Id, SecurityEventType.TwoFactorDeactivation));
+        var saved = await TrySaveChangesAsync(databaseContext);
 
-        Assert.False(deactivationWasSavedInTheDatabase);
-        Assert.Equal(1, await CountBackupCodesOfThisAccountAsync(databaseContextOfThisRepositoryTest, accountSavedInDatabaseByThisTest.Id));
+        Assert.False(saved);
+        Assert.Equal(1, await CountBackupCodesAsync(databaseContext, savedAccount.Id));
     }
 
     // Le journal accepte le nouveau type d'événement : c'est le contrôle ck_evenement_type de la vraie base qui répond.
     [Fact]
     public async Task DeactivationEventIsAcceptedByTheRealJournal()
     {
-        await using var databaseContextOfThisRepositoryTest = CreateDatabaseContextConnectedToLocalDatabase();
-        await using var transactionCancelledAtTheEndOfThisTest = await databaseContextOfThisRepositoryTest.Database.BeginTransactionAsync();
-        var accountSavedInDatabaseByThisTest = await SaveNewConfirmedAccountWithThisEmailAddressAsync(databaseContextOfThisRepositoryTest, "test-journal-desactivation@exemple.test");
+        await using var databaseContext = CreateDatabaseContext();
+        await using var transaction = await databaseContext.Database.BeginTransactionAsync();
+        var savedAccount = await SaveConfirmedAccountAsync(databaseContext, "test-journal-desactivation@exemple.test");
 
-        await new SecurityEventRepository(databaseContextOfThisRepositoryTest).SaveSecurityEventInTheJournalAsync(CreateSecurityEventForThisAccount(accountSavedInDatabaseByThisTest.Id, SecurityEventType.TwoFactorDeactivation));
+        await new SecurityEventRepository(databaseContext).SaveEventAsync(CreateSecurityEvent(savedAccount.Id, SecurityEventType.TwoFactorDeactivation));
 
-        Assert.Equal(1, await CountSecurityEventsOfThisAccountAsync(databaseContextOfThisRepositoryTest, accountSavedInDatabaseByThisTest.Id, SecurityEventType.TwoFactorDeactivation));
+        Assert.Equal(1, await CountSecurityEventsAsync(databaseContext, savedAccount.Id, SecurityEventType.TwoFactorDeactivation));
     }
 }

@@ -15,41 +15,38 @@ namespace WalletFlow.Api.Controllers;
 [IgnoreAntiforgeryToken]
 public class AccountConfirmationController : ControllerBase
 {
-    public const string MessageSentWhenTheAccountIsConfirmed = "Ton adresse e-mail est confirmée. Tu peux maintenant te connecter.";
+    public const string ConfirmedMessage = "Ton adresse e-mail est confirmée. Tu peux maintenant te connecter.";
 
-    private readonly AccountConfirmationService serviceThatConfirmsTheNewUserAccounts;
+    private readonly AccountConfirmationService confirmationService;
 
     // Reçoit le cas d'utilisation de la confirmation.
-    public AccountConfirmationController(AccountConfirmationService serviceThatConfirmsTheNewUserAccounts)
+    public AccountConfirmationController(AccountConfirmationService confirmationService)
     {
-        this.serviceThatConfirmsTheNewUserAccounts = serviceThatConfirmsTheNewUserAccounts;
+        this.confirmationService = confirmationService;
     }
 
     // POST api/account/confirm-email : active le compte, avec le jeton du lien et le mot de passe.
     [HttpPost("confirm-email")]
-    [EnableRateLimiting(RateLimitingConfiguration.PolicyNameForConfirmationAttemptsPerIpAddress)]
-    [RequestSizeLimit(RequestSizeConfiguration.MaximumNumberOfBytesInOneAccountRequest)]
-    public async Task<IActionResult> ConfirmNewAccountFromTheVisitorRequest(ConfirmAccountRequest requestSentByTheVisitorToConfirm)
+    [EnableRateLimiting(RateLimitingConfiguration.ConfirmationPolicy)]
+    [RequestSizeLimit(RequestSizeConfiguration.MaximumAccountRequestBytes)]
+    public async Task<IActionResult> ConfirmAccount(ConfirmAccountRequest request)
     {
-        var resultOfTheConfirmationOfTheAccount = await serviceThatConfirmsTheNewUserAccounts.ConfirmAccountWithLinkTokenAndPasswordAsync(
-            requestSentByTheVisitorToConfirm.Token,
-            requestSentByTheVisitorToConfirm.Password);
+        var result = await confirmationService.ConfirmAsync(
+            request.Token,
+            request.Password);
 
-        if (resultOfTheConfirmationOfTheAccount.IsConfirmed)
+        if (result == AccountConfirmationResult.AccountConfirmed)
         {
-            return Ok(new MessageResponse(MessageSentWhenTheAccountIsConfirmed));
+            return Ok(new MessageResponse(ConfirmedMessage));
         }
 
-        if (resultOfTheConfirmationOfTheAccount.LinkErrorMessage != null)
+        if (result == AccountConfirmationResult.WrongPassword)
         {
-            ModelState.AddModelError(nameof(ConfirmAccountRequest.Token), resultOfTheConfirmationOfTheAccount.LinkErrorMessage);
+            ModelState.AddModelError(nameof(ConfirmAccountRequest.Password), ErrorMessages.WrongConfirmationPassword);
+            return ValidationProblem();
         }
 
-        if (resultOfTheConfirmationOfTheAccount.PasswordErrorMessage != null)
-        {
-            ModelState.AddModelError(nameof(ConfirmAccountRequest.Password), resultOfTheConfirmationOfTheAccount.PasswordErrorMessage);
-        }
-
+        ModelState.AddModelError(nameof(ConfirmAccountRequest.Token), ErrorMessages.ConfirmationLinkNoLongerValid);
         return ValidationProblem();
     }
 }

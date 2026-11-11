@@ -1,7 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using WalletFlow.Domain.BagsAndSuggestions;
 using WalletFlow.Domain.UsersAndSecurity;
-using static WalletFlow.Tests.Infrastructure.LocalDatabaseForTheTests;
+using static WalletFlow.Tests.Infrastructure.LocalTestDatabase;
 
 namespace WalletFlow.Tests.Infrastructure;
 
@@ -13,32 +13,33 @@ public class BagDeletionTests
     [Fact]
     public async Task BagWithItsHistoryLoadedIsDeletedAndTheDatabaseRulesApply()
     {
-        await using var databaseContextOfThisBagTest = CreateDatabaseContextConnectedToLocalDatabase();
-        await using var transactionCancelledAtTheEndOfThisTest = await databaseContextOfThisBagTest.Database.BeginTransactionAsync();
+        await using var databaseContext = CreateDatabaseContext();
+        await using var transaction = await databaseContext.Database.BeginTransactionAsync();
 
-        var userOwningTheBagsOfThisTest = new User { Email = "test-sac-suppression@exemple.test", PasswordHash = "empreinte-de-test" };
-        var bagThatIsDeletedByThisTest = new Bag { Name = "Sac supprimé", UserId = userOwningTheBagsOfThisTest.Id };
-        var otherBagKeptByThisTest = new Bag { Name = "Sac conservé", UserId = userOwningTheBagsOfThisTest.Id };
-        var movementComingFromTheAvailableMoney = new BagMovement { AmountInCents = 1000, DestinationBagId = bagThatIsDeletedByThisTest.Id };
-        var movementBetweenTheTwoBagsOfThisTest = new BagMovement { AmountInCents = 500, SourceBagId = bagThatIsDeletedByThisTest.Id, DestinationBagId = otherBagKeptByThisTest.Id };
-        databaseContextOfThisBagTest.Users.Add(userOwningTheBagsOfThisTest);
-        databaseContextOfThisBagTest.Bags.AddRange(bagThatIsDeletedByThisTest, otherBagKeptByThisTest);
-        databaseContextOfThisBagTest.BagMovements.AddRange(movementComingFromTheAvailableMoney, movementBetweenTheTwoBagsOfThisTest);
-        await databaseContextOfThisBagTest.SaveChangesAsync();
+        var user = new User { Email = "test-sac-suppression@exemple.test", PasswordHash = "empreinte-de-test" };
+        var deletedBag = new Bag { Name = "Sac supprimé", UserId = user.Id };
+        var otherBag = new Bag { Name = "Sac conservé", UserId = user.Id };
+        var movementDate = new DateTime(2026, 11, 10, 12, 0, 0, DateTimeKind.Utc);
+        var incomingMovement = new BagMovement { AmountInCents = 1000, MovedAt = movementDate, DestinationBagId = deletedBag.Id };
+        var transferMovement = new BagMovement { AmountInCents = 500, MovedAt = movementDate, SourceBagId = deletedBag.Id, DestinationBagId = otherBag.Id };
+        databaseContext.Users.Add(user);
+        databaseContext.Bags.AddRange(deletedBag, otherBag);
+        databaseContext.BagMovements.AddRange(incomingMovement, transferMovement);
+        await databaseContext.SaveChangesAsync();
 
-        databaseContextOfThisBagTest.Bags.Remove(bagThatIsDeletedByThisTest);
-        await databaseContextOfThisBagTest.SaveChangesAsync();
+        databaseContext.Bags.Remove(deletedBag);
+        await databaseContext.SaveChangesAsync();
 
         // On oublie les objets en mémoire : tout ce qui suit est vraiment relu dans la base.
-        databaseContextOfThisBagTest.ChangeTracker.Clear();
+        databaseContext.ChangeTracker.Clear();
 
-        Assert.False(await databaseContextOfThisBagTest.Bags.AnyAsync(bagSearchedInTheDatabaseTable => bagSearchedInTheDatabaseTable.Id == bagThatIsDeletedByThisTest.Id));
+        Assert.False(await databaseContext.Bags.AnyAsync(row => row.Id == deletedBag.Id));
 
         // Le mouvement avec l'argent disponible disparaît, celui avec l'autre sac garde l'autre sac.
-        Assert.False(await databaseContextOfThisBagTest.BagMovements.AnyAsync(movementSearchedInTheDatabaseTable => movementSearchedInTheDatabaseTable.Id == movementComingFromTheAvailableMoney.Id));
-        var movementKeptInTheHistoryOfTheOtherBag = await databaseContextOfThisBagTest.BagMovements.SingleAsync(movementSearchedInTheDatabaseTable =>
-            movementSearchedInTheDatabaseTable.Id == movementBetweenTheTwoBagsOfThisTest.Id);
-        Assert.Null(movementKeptInTheHistoryOfTheOtherBag.SourceBagId);
-        Assert.Equal(otherBagKeptByThisTest.Id, movementKeptInTheHistoryOfTheOtherBag.DestinationBagId);
+        Assert.False(await databaseContext.BagMovements.AnyAsync(row => row.Id == incomingMovement.Id));
+        var keptMovement = await databaseContext.BagMovements.SingleAsync(row =>
+            row.Id == transferMovement.Id);
+        Assert.Null(keptMovement.SourceBagId);
+        Assert.Equal(otherBag.Id, keptMovement.DestinationBagId);
     }
 }

@@ -8,40 +8,40 @@ public class DefaultCategoriesTests
     [Fact]
     public void NewUserReceivesExactlyTheEightCategoriesOfTheBusinessRules()
     {
-        var defaultCategoriesCreatedForTheNewUser = DefaultCategories.CreateTheEightDefaultCategoriesForNewUser(Guid.NewGuid());
+        var categories = DefaultCategories.CreateForUser(Guid.NewGuid());
 
-        var namesOfTheCategoriesCreatedForTheNewUser = new List<string>();
-        foreach (var categoryCreatedForTheNewUser in defaultCategoriesCreatedForTheNewUser)
+        var names = new List<string>();
+        foreach (var category in categories)
         {
-            namesOfTheCategoriesCreatedForTheNewUser.Add(categoryCreatedForTheNewUser.Name);
+            names.Add(category.Name);
         }
 
         Assert.Equal(
             new List<string> { "Logement", "Alimentation", "Transport", "Loisirs", "Santé", "Shopping", "Revenus", "Autres" },
-            namesOfTheCategoriesCreatedForTheNewUser);
+            names);
     }
 
     [Fact]
     public void OnlyTheOtherCategoryCarriesTheOtherCategoryMark()
     {
-        var defaultCategoriesCreatedForTheNewUser = DefaultCategories.CreateTheEightDefaultCategoriesForNewUser(Guid.NewGuid());
+        var categories = DefaultCategories.CreateForUser(Guid.NewGuid());
 
-        foreach (var categoryCreatedForTheNewUser in defaultCategoriesCreatedForTheNewUser)
+        foreach (var category in categories)
         {
-            Assert.Equal(categoryCreatedForTheNewUser.Name == "Autres", categoryCreatedForTheNewUser.IsOtherCategory);
+            Assert.Equal(category.Name == "Autres", category.IsOtherCategory);
         }
     }
 
     [Fact]
     public void EveryDefaultCategoryBelongsToTheNewUser()
     {
-        var identifierOfTheNewlyRegisteredUser = Guid.NewGuid();
+        var userId = Guid.NewGuid();
 
-        var defaultCategoriesCreatedForTheNewUser = DefaultCategories.CreateTheEightDefaultCategoriesForNewUser(identifierOfTheNewlyRegisteredUser);
+        var categories = DefaultCategories.CreateForUser(userId);
 
-        foreach (var categoryCreatedForTheNewUser in defaultCategoriesCreatedForTheNewUser)
+        foreach (var category in categories)
         {
-            Assert.Equal(identifierOfTheNewlyRegisteredUser, categoryCreatedForTheNewUser.UserId);
+            Assert.Equal(userId, category.UserId);
         }
     }
 }

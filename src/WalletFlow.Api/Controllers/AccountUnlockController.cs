@@ -15,32 +15,32 @@ namespace WalletFlow.Api.Controllers;
 [IgnoreAntiforgeryToken]
 public class AccountUnlockController : ControllerBase
 {
-    public const string MessageSentWhenTheAccountIsUnlocked = "Ton compte est débloqué. Tu peux de nouveau te connecter.";
+    public const string UnlockedMessage = "Ton compte est débloqué. Tu peux de nouveau te connecter.";
 
-    private readonly AccountUnlockService serviceThatUnlocksTheUserAccounts;
+    private readonly AccountUnlockService unlockService;
 
     // Reçoit le cas d'utilisation du déblocage.
-    public AccountUnlockController(AccountUnlockService serviceThatUnlocksTheUserAccounts)
+    public AccountUnlockController(AccountUnlockService unlockService)
     {
-        this.serviceThatUnlocksTheUserAccounts = serviceThatUnlocksTheUserAccounts;
+        this.unlockService = unlockService;
     }
 
     // POST api/account/unlock : débloque le compte, avec le jeton du lien. Ne connecte personne.
     [HttpPost("unlock")]
-    [EnableRateLimiting(RateLimitingConfiguration.PolicyNameForAccountUnlockAttemptsPerIpAddress)]
-    [RequestSizeLimit(RequestSizeConfiguration.MaximumNumberOfBytesInOneAccountRequest)]
-    public async Task<IActionResult> UnlockAccountFromTheVisitorRequest(UnlockAccountRequest requestSentByTheVisitorToUnlock)
+    [EnableRateLimiting(RateLimitingConfiguration.AccountUnlockPolicy)]
+    [RequestSizeLimit(RequestSizeConfiguration.MaximumAccountRequestBytes)]
+    public async Task<IActionResult> Unlock(UnlockAccountRequest request)
     {
-        var resultOfTheAccountUnlockRequest = await serviceThatUnlocksTheUserAccounts.UnlockAccountWithLinkTokenAsync(
-            requestSentByTheVisitorToUnlock.Token,
+        var result = await unlockService.UnlockAsync(
+            request.Token,
             HttpContext.Connection.RemoteIpAddress);
 
-        if (resultOfTheAccountUnlockRequest.IsUnlocked)
+        if (result == AccountUnlockResult.AccountUnlocked)
         {
-            return Ok(new MessageResponse(MessageSentWhenTheAccountIsUnlocked));
+            return Ok(new MessageResponse(UnlockedMessage));
         }
 
-        ModelState.AddModelError(nameof(UnlockAccountRequest.Token), resultOfTheAccountUnlockRequest.LinkErrorMessage!);
+        ModelState.AddModelError(nameof(UnlockAccountRequest.Token), ErrorMessages.UnlockLinkNoLongerValid);
         return ValidationProblem();
     }
 }

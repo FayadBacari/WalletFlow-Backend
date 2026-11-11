@@ -5,14 +5,14 @@ namespace WalletFlow.Tests.Domain;
 // Vérifie les règles du blocage d'un compte (GR Auth, SS §2, DD §3).
 public class AccountLockoutRulesTests
 {
-    private static readonly DateTime CurrentDateUsedInTheseTests = new DateTime(2026, 11, 4, 12, 0, 0, DateTimeKind.Utc);
+    private static readonly DateTime Now = new DateTime(2026, 11, 4, 12, 0, 0, DateTimeKind.Utc);
 
     // Compte ce nombre d'essais sur le compte, à la date de ces tests.
-    private static void CountThisNumberOfLoginAttemptsOnTheAccount(User accountThatReceivesTheLoginAttempts, int numberOfLoginAttemptsToCount)
+    private static void CountLoginAttempts(User account, int attemptCount)
     {
-        for (var numberOfTheAttemptBeingCounted = 1; numberOfTheAttemptBeingCounted <= numberOfLoginAttemptsToCount; numberOfTheAttemptBeingCounted++)
+        for (var attemptNumber = 1; attemptNumber <= attemptCount; attemptNumber++)
         {
-            AccountLockoutRules.CountOneLoginAttemptAndLockAccountOnTheLastOne(accountThatReceivesTheLoginAttempts, CurrentDateUsedInTheseTests);
+            account.CountLoginAttempt(Now);
         }
     }
 
@@ -25,105 +25,105 @@ public class AccountLockoutRulesTests
     [InlineData(6, 480)]
     [InlineData(7, 960)]
     [InlineData(8, 1440)] // 1920 minutes sans la limite de 24 heures
-    public void LockoutDurationDoublesUpToTheMaximumOfTwentyFourHours(short numberOfLockoutsOfTheAccount, int numberOfMinutesExpectedForThisLockout)
+    public void LockoutDurationDoublesUpToTheMaximumOfTwentyFourHours(short lockoutCount, int expectedMinutes)
     {
-        var durationCalculatedForThisLockoutNumber = AccountLockoutRules.CalculateDurationOfTheLockoutWithThisNumber(numberOfLockoutsOfTheAccount);
+        var duration = AccountLockoutRules.CalculateLockoutDuration(lockoutCount);
 
-        Assert.Equal(TimeSpan.FromMinutes(numberOfMinutesExpectedForThisLockout), durationCalculatedForThisLockoutNumber);
+        Assert.Equal(TimeSpan.FromMinutes(expectedMinutes), duration);
     }
 
     [Fact]
     public void FourLoginAttemptsDoNotLockTheAccount()
     {
-        var accountBeingTestedWithTheseAttempts = new User();
+        var account = new User();
 
-        CountThisNumberOfLoginAttemptsOnTheAccount(accountBeingTestedWithTheseAttempts, 4);
+        CountLoginAttempts(account, 4);
 
-        Assert.Equal(4, accountBeingTestedWithTheseAttempts.FailedLoginAttemptCount);
-        Assert.Equal(0, accountBeingTestedWithTheseAttempts.LockoutCount);
-        Assert.Null(accountBeingTestedWithTheseAttempts.LockoutEndsAt);
+        Assert.Equal(4, account.FailedLoginAttemptCount);
+        Assert.Equal(0, account.LockoutCount);
+        Assert.Null(account.LockoutEndsAt);
     }
 
     [Fact]
     public void FifthLoginAttemptLocksTheAccountForFifteenMinutes()
     {
-        var accountBeingTestedWithTheseAttempts = new User();
-        CountThisNumberOfLoginAttemptsOnTheAccount(accountBeingTestedWithTheseAttempts, 4);
+        var account = new User();
+        CountLoginAttempts(account, 4);
 
-        var thisLoginAttemptLockedTheAccount = AccountLockoutRules.CountOneLoginAttemptAndLockAccountOnTheLastOne(accountBeingTestedWithTheseAttempts, CurrentDateUsedInTheseTests);
+        var lockedNow = account.CountLoginAttempt(Now);
 
-        Assert.True(thisLoginAttemptLockedTheAccount);
-        Assert.Equal(5, accountBeingTestedWithTheseAttempts.FailedLoginAttemptCount);
-        Assert.Equal(1, accountBeingTestedWithTheseAttempts.LockoutCount);
-        Assert.Equal(CurrentDateUsedInTheseTests.AddMinutes(15), accountBeingTestedWithTheseAttempts.LockoutEndsAt);
+        Assert.True(lockedNow);
+        Assert.Equal(5, account.FailedLoginAttemptCount);
+        Assert.Equal(1, account.LockoutCount);
+        Assert.Equal(Now.AddMinutes(15), account.LockoutEndsAt);
     }
 
     [Fact]
     public void AttemptsBeforeTheFifthSayTheyDidNotLockTheAccount()
     {
-        var accountBeingTestedWithTheseAttempts = new User();
+        var account = new User();
 
-        var firstLoginAttemptLockedTheAccount = AccountLockoutRules.CountOneLoginAttemptAndLockAccountOnTheLastOne(accountBeingTestedWithTheseAttempts, CurrentDateUsedInTheseTests);
+        var firstAttemptLocked = account.CountLoginAttempt(Now);
 
-        Assert.False(firstLoginAttemptLockedTheAccount);
+        Assert.False(firstAttemptLocked);
     }
 
     [Fact]
     public void AccountIsLockedUntilTheExactEndOfTheLockout()
     {
-        var accountBeingTestedWithTheseAttempts = new User { LockoutEndsAt = CurrentDateUsedInTheseTests };
+        var account = new User { LockoutEndsAt = Now };
 
-        Assert.True(AccountLockoutRules.CheckThatAccountIsLockedAtThisDate(accountBeingTestedWithTheseAttempts, CurrentDateUsedInTheseTests.AddTicks(-1)));
-        Assert.False(AccountLockoutRules.CheckThatAccountIsLockedAtThisDate(accountBeingTestedWithTheseAttempts, CurrentDateUsedInTheseTests));
+        Assert.True(account.IsLockedAt(Now.AddTicks(-1)));
+        Assert.False(account.IsLockedAt(Now));
     }
 
     [Fact]
     public void AccountWithoutLockoutEndDateIsNotLocked()
     {
-        Assert.False(AccountLockoutRules.CheckThatAccountIsLockedAtThisDate(new User(), CurrentDateUsedInTheseTests));
+        Assert.False(new User().IsLockedAt(Now));
     }
 
     // Sans cette remise à zéro, le compteur resterait à 5 et le premier essai après le blocage bloquerait de nouveau.
     [Fact]
     public void FirstAttemptAfterTheLockoutCountsFromZeroAgain()
     {
-        var accountBeingTestedWithTheseAttempts = new User
+        var account = new User
         {
             FailedLoginAttemptCount = 5,
             LockoutCount = 1,
-            LockoutEndsAt = CurrentDateUsedInTheseTests
+            LockoutEndsAt = Now
         };
 
-        var thisLoginAttemptLockedTheAccount = AccountLockoutRules.CountOneLoginAttemptAndLockAccountOnTheLastOne(accountBeingTestedWithTheseAttempts, CurrentDateUsedInTheseTests);
+        var lockedNow = account.CountLoginAttempt(Now);
 
-        Assert.False(thisLoginAttemptLockedTheAccount);
-        Assert.Equal(1, accountBeingTestedWithTheseAttempts.FailedLoginAttemptCount);
-        Assert.Equal(1, accountBeingTestedWithTheseAttempts.LockoutCount);
-        Assert.Null(accountBeingTestedWithTheseAttempts.LockoutEndsAt);
+        Assert.False(lockedNow);
+        Assert.Equal(1, account.FailedLoginAttemptCount);
+        Assert.Equal(1, account.LockoutCount);
+        Assert.Null(account.LockoutEndsAt);
     }
 
     [Fact]
     public void SecondLockoutOfTheAccountLastsThirtyMinutes()
     {
-        var accountBeingTestedWithTheseAttempts = new User();
-        CountThisNumberOfLoginAttemptsOnTheAccount(accountBeingTestedWithTheseAttempts, 5);
+        var account = new User();
+        CountLoginAttempts(account, 5);
 
-        CountThisNumberOfLoginAttemptsOnTheAccount(accountBeingTestedWithTheseAttempts, 5);
+        CountLoginAttempts(account, 5);
 
-        Assert.Equal(2, accountBeingTestedWithTheseAttempts.LockoutCount);
-        Assert.Equal(CurrentDateUsedInTheseTests.AddMinutes(30), accountBeingTestedWithTheseAttempts.LockoutEndsAt);
+        Assert.Equal(2, account.LockoutCount);
+        Assert.Equal(Now.AddMinutes(30), account.LockoutEndsAt);
     }
 
     // Le compteur s'arrête à 8 : la durée maximale est alors atteinte (DD).
     [Fact]
     public void LockoutCountStopsAtEightAndTheDurationStaysAtTwentyFourHours()
     {
-        var accountBeingTestedWithTheseAttempts = new User { LockoutCount = 8 };
+        var account = new User { LockoutCount = 8 };
 
-        CountThisNumberOfLoginAttemptsOnTheAccount(accountBeingTestedWithTheseAttempts, 5);
+        CountLoginAttempts(account, 5);
 
-        Assert.Equal(8, accountBeingTestedWithTheseAttempts.LockoutCount);
-        Assert.Equal(CurrentDateUsedInTheseTests.AddHours(24), accountBeingTestedWithTheseAttempts.LockoutEndsAt);
+        Assert.Equal(8, account.LockoutCount);
+        Assert.Equal(Now.AddHours(24), account.LockoutEndsAt);
     }
 
     // Un compteur à 5 sans date de fin ne devrait pas exister. S'il existe, le compte ne doit pas rester coincé,
@@ -131,45 +131,45 @@ public class AccountLockoutRulesTests
     [Fact]
     public void CounterAtTheMaximumWithoutEndDateGivesFiveNewAttempts()
     {
-        var accountBeingTestedWithTheseAttempts = new User { FailedLoginAttemptCount = 5 };
+        var account = new User { FailedLoginAttemptCount = 5 };
 
-        AccountLockoutRules.CountOneLoginAttemptAndLockAccountOnTheLastOne(accountBeingTestedWithTheseAttempts, CurrentDateUsedInTheseTests);
+        account.CountLoginAttempt(Now);
 
-        Assert.Equal(1, accountBeingTestedWithTheseAttempts.FailedLoginAttemptCount);
+        Assert.Equal(1, account.FailedLoginAttemptCount);
     }
 
     // Le lien de déblocage et la récupération n'effacent pas l'historique : le prochain blocage reste plus long (GR Auth).
     [Fact]
     public void UnlockingEndsTheLockoutButKeepsTheNumberOfLockouts()
     {
-        var accountBeingTestedWithTheseAttempts = new User
+        var account = new User
         {
             FailedLoginAttemptCount = 5,
             LockoutCount = 3,
-            LockoutEndsAt = CurrentDateUsedInTheseTests.AddHours(1)
+            LockoutEndsAt = Now.AddHours(1)
         };
 
-        AccountLockoutRules.RemoveCurrentLockoutOfThisAccount(accountBeingTestedWithTheseAttempts);
+        account.Unlock();
 
-        Assert.Equal(0, accountBeingTestedWithTheseAttempts.FailedLoginAttemptCount);
-        Assert.Null(accountBeingTestedWithTheseAttempts.LockoutEndsAt);
-        Assert.Equal(3, accountBeingTestedWithTheseAttempts.LockoutCount);
+        Assert.Equal(0, account.FailedLoginAttemptCount);
+        Assert.Null(account.LockoutEndsAt);
+        Assert.Equal(3, account.LockoutCount);
     }
 
     [Fact]
     public void SuccessfulLoginResetsEveryCounterOfTheAccount()
     {
-        var accountBeingTestedWithTheseAttempts = new User
+        var account = new User
         {
             FailedLoginAttemptCount = 5,
             LockoutCount = 3,
-            LockoutEndsAt = CurrentDateUsedInTheseTests
+            LockoutEndsAt = Now
         };
 
-        AccountLockoutRules.ResetLoginCountersAfterSuccessfulLogin(accountBeingTestedWithTheseAttempts);
+        account.ResetLoginCounters();
 
-        Assert.Equal(0, accountBeingTestedWithTheseAttempts.FailedLoginAttemptCount);
-        Assert.Equal(0, accountBeingTestedWithTheseAttempts.LockoutCount);
-        Assert.Null(accountBeingTestedWithTheseAttempts.LockoutEndsAt);
+        Assert.Equal(0, account.FailedLoginAttemptCount);
+        Assert.Equal(0, account.LockoutCount);
+        Assert.Null(account.LockoutEndsAt);
     }
 }
