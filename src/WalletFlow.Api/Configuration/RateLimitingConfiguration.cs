@@ -14,6 +14,9 @@ public static class RateLimitingConfiguration
     public const string AccountUnlockPolicy = "lien-de-deblocage-par-adresse-ip";
     public const string TwoFactorCodePolicy = "code-de-double-authentification-par-adresse-ip";
     public const string TwoFactorSettingsPolicy = "reglage-de-la-double-authentification-par-adresse-ip";
+    public const string PasswordChangePolicy = "changement-de-mot-de-passe-par-adresse-ip";
+    public const string EmailChangePolicy = "changement-d-adresse-par-adresse-ip";
+    public const string EmailChangeLinkPolicy = "lien-de-changement-d-adresse-par-adresse-ip";
 
     // Connexion : 10 essais par minute et par adresse IP, en plus des 5 tentatives par compte.
     public static FixedWindowRateLimiterOptions CreateLoginLimit()
@@ -75,6 +78,36 @@ public static class RateLimitingConfiguration
         };
     }
 
+    // Changement de mot de passe : 10 par heure et par adresse IP.
+    public static FixedWindowRateLimiterOptions CreatePasswordChangeLimit()
+    {
+        return new FixedWindowRateLimiterOptions
+        {
+            PermitLimit = 10,
+            Window = TimeSpan.FromHours(1)
+        };
+    }
+
+    // Changement d'adresse e-mail : 10 par heure et par adresse IP, en plus des 3 par heure et par nouvelle adresse.
+    public static FixedWindowRateLimiterOptions CreateEmailChangeLimit()
+    {
+        return new FixedWindowRateLimiterOptions
+        {
+            PermitLimit = 10,
+            Window = TimeSpan.FromHours(1)
+        };
+    }
+
+    // Lien de changement d'adresse : 10 essais par heure et par adresse IP.
+    public static FixedWindowRateLimiterOptions CreateEmailChangeLinkLimit()
+    {
+        return new FixedWindowRateLimiterOptions
+        {
+            PermitLimit = 10,
+            Window = TimeSpan.FromHours(1)
+        };
+    }
+
     // Ajoute les limites de débit aux services de l'API.
     public static IServiceCollection AddWalletFlowRateLimiting(this IServiceCollection services)
     {
@@ -90,6 +123,9 @@ public static class RateLimitingConfiguration
             AddLimitPerIp(options, AccountUnlockPolicy, CreateAccountRecoveryLimit());
             AddLimitPerIp(options, TwoFactorCodePolicy, CreateTwoFactorCodeLimit());
             AddLimitPerIp(options, TwoFactorSettingsPolicy, CreateTwoFactorSettingsLimit());
+            AddLimitPerIp(options, PasswordChangePolicy, CreatePasswordChangeLimit());
+            AddLimitPerIp(options, EmailChangePolicy, CreateEmailChangeLimit());
+            AddLimitPerIp(options, EmailChangeLinkPolicy, CreateEmailChangeLinkLimit());
         });
 
         return services;

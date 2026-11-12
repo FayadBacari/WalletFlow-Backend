@@ -10,7 +10,7 @@ public class PasswordRulesTests
     public void ComposedAndDecomposedAccentsGiveTheSameNormalizedPassword()
     {
         var composedPassword = "Mot-De-Passé-1";
-        var decomposedPassword = "Mot-De-Passé-1";
+        var decomposedPassword = "Mot-De-Passe\u0301-1";
 
         Assert.NotEqual(composedPassword, decomposedPassword);
         Assert.Equal(composedPassword, PasswordRules.Normalize(decomposedPassword));
@@ -136,6 +136,6 @@ public class PasswordRulesTests
     [Fact]
     public void CombiningAccentIsAllowedNextToRealSpecialCharacter()
     {
-        Assert.True(PasswordRules.IsValid("Abcdefghijé1!"));
+        Assert.True(PasswordRules.IsValid("Abcdefghije\u03011!"));
     }
 }

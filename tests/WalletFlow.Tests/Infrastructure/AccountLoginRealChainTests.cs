@@ -155,7 +155,7 @@ public class AccountLoginRealChainTests
         await using var transaction = await databaseContext.Database.BeginTransactionAsync();
         await RegisterThenConfirmAsync(databaseContext, "chaine-accent@exemple.test", "Mot-De-Passé-1");
 
-        var result = await LogInAsync(databaseContext, "chaine-accent@exemple.test", "Mot-De-Passé-1");
+        var result = await LogInAsync(databaseContext, "chaine-accent@exemple.test", "Mot-De-Passe\u0301-1");
 
         Assert.IsType<AccountLoginResult.LoggedIn>(result);
     }

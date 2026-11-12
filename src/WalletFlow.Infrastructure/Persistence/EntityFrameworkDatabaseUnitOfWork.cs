@@ -30,5 +30,17 @@ public class EntityFrameworkDatabaseUnitOfWork : IDatabaseUnitOfWork
             databaseContext.ChangeTracker.Clear();
             return false;
         }
+        catch (DbUpdateException exception)
+        {
+            // Une autre requête vient de donner à un compte l'adresse que ces changements donnent au leur : c'est aussi un conflit.
+            // Tout est oublié, et le passage suivant voit que l'adresse est prise. Toute autre erreur reste une panne.
+            if (!PostgresErrors.IsEmailAlreadyUsed(exception))
+            {
+                throw;
+            }
+
+            databaseContext.ChangeTracker.Clear();
+            return false;
+        }
     }
 }

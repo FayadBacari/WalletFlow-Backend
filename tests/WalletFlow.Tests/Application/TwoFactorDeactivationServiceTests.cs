@@ -113,7 +113,7 @@ public class TwoFactorDeactivationServiceTests
         var activatedAccount = services.AddActivatedAccount();
         activatedAccount.UserAccount.ReplacePasswordHash(FakePasswordHasher.HashPrefix + "Mot-De-Passé-1");
 
-        var result = await DeactivateAsync(activatedAccount.UserAccount, "Mot-De-Passé-1", activatedAccount.BackupCodes[0]);
+        var result = await DeactivateAsync(activatedAccount.UserAccount, "Mot-De-Passe\u0301-1", activatedAccount.BackupCodes[0]);
 
         Assert.Equal(TwoFactorDeactivationResult.TwoFactorDeactivated, result);
     }

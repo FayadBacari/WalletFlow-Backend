@@ -9,6 +9,9 @@ public interface IUserSessionRepository
     // Prépare l'enregistrement d'une nouvelle session.
     void PrepareSession(UserSession session);
 
+    // Prépare l'effacement de toutes les sessions du compte, après un changement de mot de passe (SS §3).
+    Task PrepareAllSessionsRemovalAsync(Guid userId);
+
     // Prépare l'enregistrement d'un nouvel appareil du compte.
     void PrepareDevice(Device device);
 

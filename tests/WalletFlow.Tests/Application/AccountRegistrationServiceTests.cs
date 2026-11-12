@@ -41,7 +41,7 @@ public class AccountRegistrationServiceTests
     {
         var service = CreateRegistrationService();
 
-        await service.RegisterAsync(TypedEmail, "Mot-De-Passé-1");
+        await service.RegisterAsync(TypedEmail, "Mot-De-Passe\u0301-1");
 
         Assert.Equal(FakePasswordHasher.HashPrefix + "Mot-De-Passé-1", accountRepository.SavedUsers[0].PasswordHash);
     }
@@ -52,7 +52,7 @@ public class AccountRegistrationServiceTests
     {
         var service = CreateRegistrationService();
 
-        var result = await service.RegisterAsync(TypedEmail, "Abcdefgh-1é");
+        var result = await service.RegisterAsync(TypedEmail, "Abcdefgh-1e\u0301");
 
         var refusal = Assert.IsType<AccountRegistrationResult.RefusedByRules>(result);
         Assert.True(refusal.IsPasswordInvalid);

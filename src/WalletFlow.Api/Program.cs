@@ -7,6 +7,7 @@ using WalletFlow.Api.Configuration;
 using WalletFlow.Api.Filters;
 using WalletFlow.Api.Middlewares;
 using WalletFlow.Application.AccountRecovery;
+using WalletFlow.Application.AccountSettings;
 using WalletFlow.Application.Configuration;
 using WalletFlow.Application.Persistence;
 using WalletFlow.Application.Security;
@@ -92,6 +93,12 @@ builder.Services.AddScoped<TwoFactorCodeCheckingService>();
 builder.Services.AddScoped<TwoFactorLoginService>();
 builder.Services.AddScoped<TwoFactorActivationService>();
 builder.Services.AddScoped<TwoFactorDeactivationService>();
+builder.Services.AddScoped<AccountIdentityCheckingService>();
+builder.Services.AddScoped<ProfileService>();
+builder.Services.AddScoped<PersonalNameChangeService>();
+builder.Services.AddScoped<PasswordChangeService>();
+builder.Services.AddScoped<EmailChangeRequestService>();
+builder.Services.AddScoped<EmailChangeConfirmationService>();
 
 // Tâches de fond : effacent chaque jour les comptes non confirmés dont le lien a expiré (GR Auth) et les sessions expirées,
 // et préparent les e-mails de récupération et de déblocage.

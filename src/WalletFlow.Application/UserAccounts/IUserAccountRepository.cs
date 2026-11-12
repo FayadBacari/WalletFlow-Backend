@@ -29,6 +29,9 @@ public interface IUserAccountRepository
     // Prépare le remplacement du lien de confirmation d'un compte : ses anciens liens seront effacés, et le nouveau enregistré.
     Task PrepareConfirmationTokenReplacementAsync(EmailToken newToken);
 
+    // Prépare l'effacement des liens de récupération et de déblocage du compte, à la confirmation d'une nouvelle adresse (SS §2).
+    Task PrepareRecoveryAndUnlockLinksRemovalAsync(Guid accountId);
+
     // Demande que le prochain enregistrement contrôle ce compte même si rien n'y a changé :
     // il échouera si une autre requête a modifié le compte depuis sa lecture.
     void PrepareUnchangedCheck(User account);

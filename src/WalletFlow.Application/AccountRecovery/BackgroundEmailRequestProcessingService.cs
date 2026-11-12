@@ -1,3 +1,4 @@
+using WalletFlow.Application.AccountSettings;
 using WalletFlow.Application.Configuration;
 using WalletFlow.Application.Emails;
 using WalletFlow.Application.Security;
@@ -6,7 +7,8 @@ using WalletFlow.Domain.UsersAndSecurity;
 
 namespace WalletFlow.Application.AccountRecovery;
 
-// Cas d'utilisation : prépare et envoie un e-mail de récupération ou de déblocage, en arrière-plan (GR Auth, SS §2).
+// Cas d'utilisation : prépare et envoie en arrière-plan les e-mails dont le temps d'envoi ne doit rien révéler :
+// récupération, déblocage et changement d'adresse (GR Auth, GR Compte, SS §2).
 public class BackgroundEmailRequestProcessingService
 {
     private readonly IUserAccountRepository accountRepository;
@@ -14,6 +16,7 @@ public class BackgroundEmailRequestProcessingService
     private readonly ISecureTokenGenerator tokenGenerator;
     private readonly IEmailSender emailSender;
     private readonly IAccountRecoveryEmails recoveryEmails;
+    private readonly IAccountChangeEmails changeEmails;
     private readonly PublicWebsiteSettings websiteSettings;
     private readonly TimeProvider clock;
 
@@ -24,6 +27,7 @@ public class BackgroundEmailRequestProcessingService
         ISecureTokenGenerator tokenGenerator,
         IEmailSender emailSender,
         IAccountRecoveryEmails recoveryEmails,
+        IAccountChangeEmails changeEmails,
         PublicWebsiteSettings websiteSettings,
         TimeProvider clock)
     {
@@ -32,6 +36,7 @@ public class BackgroundEmailRequestProcessingService
         this.tokenGenerator = tokenGenerator;
         this.emailSender = emailSender;
         this.recoveryEmails = recoveryEmails;
+        this.changeEmails = changeEmails;
         this.websiteSettings = websiteSettings;
         this.clock = clock;
     }
@@ -49,7 +54,46 @@ public class BackgroundEmailRequestProcessingService
             return await ProcessUnlockAsync(unlockRequest);
         }
 
+        if (request is BackgroundEmailRequest.EmailChange emailChangeRequest)
+        {
+            return await ProcessEmailChangeAsync(emailChangeRequest);
+        }
+
+        if (request is BackgroundEmailRequest.EmailChangedNotice noticeRequest)
+        {
+            return await TrySendEmailAsync(changeEmails.CreateEmailChangedEmail(noticeRequest.OldEmailAddress), noticeRequest.AccountId);
+        }
+
         throw new InvalidOperationException("Cette forme de demande d'e-mail n'est pas prévue.");
+    }
+
+    // Une adresse libre reçoit le lien qui la confirme. Une adresse déjà utilisée ne reçoit pas de lien : son propriétaire est prévenu.
+    // L'utilisateur a déjà reçu la même réponse dans les deux cas (SS §2). Un compte effacé depuis sa demande ne reçoit rien.
+    private async Task<BackgroundEmailRequestResult> ProcessEmailChangeAsync(BackgroundEmailRequest.EmailChange request)
+    {
+        var account = await accountRepository.FindByIdAsync(request.AccountId);
+        if (account == null)
+        {
+            return new BackgroundEmailRequestResult();
+        }
+
+        var addressOwner = await accountRepository.FindByEmailAsync(request.NewEmailAddress);
+        if (addressOwner != null)
+        {
+            var warningEmail = changeEmails.CreateAddressAlreadyUsedEmail(request.NewEmailAddress);
+            return await TrySendEmailAsync(warningEmail, account.Id);
+        }
+
+        var linkToken = await ReplaceLinkAsync(
+            account.Id,
+            EmailTokenType.EmailChange,
+            EmailTokenValidityDurations.EmailChangeLink,
+            request.NewEmailAddress);
+        var linkEmail = changeEmails.CreateEmailChangeLinkEmail(
+            request.NewEmailAddress,
+            websiteSettings.BuildLink("/confirm-email-change", linkToken.Token));
+
+        return await TrySendEmailAsync(linkEmail, account.Id);
     }
 
     // Choisit l'e-mail selon l'état du compte. Une adresse sans compte ne reçoit rien, et laisse une trace sans identifiant.
@@ -72,7 +116,8 @@ public class BackgroundEmailRequestProcessingService
         var recoveryToken = await ReplaceLinkAsync(
             existingAccount.Id,
             EmailTokenType.PasswordRecovery,
-            EmailTokenValidityDurations.PasswordRecoveryLink);
+            EmailTokenValidityDurations.PasswordRecoveryLink,
+            null);
         var recoveryEmail = recoveryEmails.CreateRecoveryEmail(
             existingAccount.Email,
             websiteSettings.BuildLink("/reset-password", recoveryToken.Token));
@@ -109,7 +154,8 @@ public class BackgroundEmailRequestProcessingService
         var unlockToken = await ReplaceLinkAsync(
             lockedAccount.Id,
             EmailTokenType.AccountUnlock,
-            EmailTokenValidityDurations.AccountUnlockLink);
+            EmailTokenValidityDurations.AccountUnlockLink,
+            null);
         var unlockEmail = recoveryEmails.CreateUnlockEmail(
             lockedAccount.Email,
             websiteSettings.BuildLink("/unlock-account", unlockToken.Token),
@@ -119,7 +165,8 @@ public class BackgroundEmailRequestProcessingService
     }
 
     // Tire un nouveau jeton et remplace l'ancien lien du même type, qui ne marche plus (SS §2). Seule l'empreinte va en base.
-    private async Task<GeneratedSecureToken> ReplaceLinkAsync(Guid accountId, EmailTokenType linkType, TimeSpan validity)
+    // La nouvelle adresse n'accompagne que le lien d'un changement d'adresse : sinon, elle est vide (DD §4.2).
+    private async Task<GeneratedSecureToken> ReplaceLinkAsync(Guid accountId, EmailTokenType linkType, TimeSpan validity, string? newEmail)
     {
         var linkToken = tokenGenerator.GenerateToken();
 
@@ -128,6 +175,7 @@ public class BackgroundEmailRequestProcessingService
             Type = linkType,
             TokenHash = linkToken.Hash,
             ExpiresAt = clock.GetUtcNow().UtcDateTime + validity,
+            NewEmail = newEmail,
             UserId = accountId
         });
 

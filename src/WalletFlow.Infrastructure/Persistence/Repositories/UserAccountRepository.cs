@@ -1,5 +1,4 @@
 using Microsoft.EntityFrameworkCore;
-using Npgsql;
 using WalletFlow.Application.UserAccounts;
 using WalletFlow.Domain.AccountsAndCategories;
 using WalletFlow.Domain.UsersAndSecurity;
@@ -10,9 +9,6 @@ namespace WalletFlow.Infrastructure.Persistence.Repositories;
 // Les objets lus ici sont suivis par EF Core : l'unité de travail enregistre ce que leurs règles ont changé (voir IDatabaseUnitOfWork).
 public class UserAccountRepository : IUserAccountRepository
 {
-    // Nom donné par PostgreSQL à la contrainte UNIQUE de la colonne email_utilisateur.
-    private const string EmailUniqueConstraint = "utilisateur_email_utilisateur_key";
-
     private readonly WalletFlowDatabaseContext databaseContext;
 
     // Reçoit l'accès à la base de la requête en cours.
@@ -97,7 +93,7 @@ public class UserAccountRepository : IUserAccountRepository
         }
         catch (DbUpdateException exception)
         {
-            if (!IsEmailUniqueViolation(exception))
+            if (!PostgresErrors.IsEmailAlreadyUsed(exception))
             {
                 throw;
             }
@@ -121,6 +117,19 @@ public class UserAccountRepository : IUserAccountRepository
         databaseContext.EmailTokens.Add(newToken);
     }
 
+    // Prépare l'effacement des liens de récupération et de déblocage du compte : ils sont partis vers l'ancienne adresse (SS §2).
+    // EF Core suit ces liens : si l'un d'eux vient de servir ou d'être remplacé, l'enregistrement échoue et le passage recommence.
+    public async Task PrepareRecoveryAndUnlockLinksRemovalAsync(Guid accountId)
+    {
+        var links = await databaseContext.EmailTokens
+            .Where(token =>
+                token.UserId == accountId
+                && (token.Type == EmailTokenType.PasswordRecovery || token.Type == EmailTokenType.AccountUnlock))
+            .ToListAsync();
+
+        databaseContext.EmailTokens.RemoveRange(links);
+    }
+
     // Le compte sera écrit même si rien n'y a changé : cette écriture contrôle en base la version de la ligne,
     // et elle échoue si une autre requête a changé le compte depuis sa lecture. EF Core n'écrit une ligne que si une colonne
     // a changé : le compteur d'essais est donc réécrit avec sa propre valeur.
@@ -141,16 +150,5 @@ public class UserAccountRepository : IUserAccountRepository
                     && token.Type == EmailTokenType.SignupConfirmation
                     && token.ExpiresAt > now))
             .ExecuteDeleteAsync();
-    }
-
-    // Renvoie vrai si l'erreur vient de la contrainte d'unicité de l'adresse e-mail.
-    private static bool IsEmailUniqueViolation(DbUpdateException exception)
-    {
-        if (exception.InnerException is not PostgresException postgresException)
-        {
-            return false;
-        }
-
-        return postgresException.ConstraintName == EmailUniqueConstraint;
     }
 }

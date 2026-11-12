@@ -713,7 +713,7 @@ public class AccountLoginServiceTests
         var account = AddAccount();
         account.ReplacePasswordHash(FakePasswordHasher.HashPrefix + "Mot-De-Passé-1");
 
-        var result = await LogInAsync(AccountEmail, "Mot-De-Passé-1");
+        var result = await LogInAsync(AccountEmail, "Mot-De-Passe\u0301-1");
 
         Assert.IsType<AccountLoginResult.LoggedIn>(result);
     }

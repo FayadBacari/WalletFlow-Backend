@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using WalletFlow.Application.AccountRecovery;
+using WalletFlow.Application.AccountSettings;
 using WalletFlow.Application.Emails;
 using WalletFlow.Application.Persistence;
 using WalletFlow.Application.Security;
@@ -47,6 +48,7 @@ public static class InfrastructureServicesRegistration
         services.AddSingleton<ISecureTokenGenerator, RandomSecureTokenGenerator>();
         services.AddSingleton<IEmailAddressRequestLimiter, InMemoryEmailAddressRequestLimiter>();
         services.AddSingleton<IPasswordRecoveryRequestLimiter, InMemoryPasswordRecoveryRequestLimiter>();
+        services.AddSingleton<IEmailChangeRequestLimiter, InMemoryEmailChangeRequestLimiter>();
         services.AddSingleton<IAuthenticatorCodeTool, OtpNetAuthenticatorCodeTool>();
         services.AddSingleton<IWaitingLoginStore, InMemoryWaitingLoginStore>();
         services.AddSingleton<IWaitingSecretStore, InMemoryWaitingSecretStore>();
@@ -78,6 +80,7 @@ public static class InfrastructureServicesRegistration
     {
         services.AddSingleton<IAccountRegistrationEmails, FrenchAccountRegistrationEmails>();
         services.AddSingleton<IAccountRecoveryEmails, FrenchAccountRecoveryEmails>();
+        services.AddSingleton<IAccountChangeEmails, FrenchAccountChangeEmails>();
         return services;
     }
 

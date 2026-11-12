@@ -4,5 +4,7 @@ namespace WalletFlow.Application.AccountRecovery;
 public enum BackgroundEmailRequestType
 {
     PasswordRecovery,
-    AccountUnlock
+    AccountUnlock,
+    EmailChange,
+    EmailChangedNotice
 }

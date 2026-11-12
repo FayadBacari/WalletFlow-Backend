@@ -12,7 +12,7 @@ namespace WalletFlow.Application.Persistence;
 public interface IDatabaseUnitOfWork
 {
     // Enregistre tout ce qui a été changé ou préparé, ou rien du tout.
-    // Renvoie faux si une autre requête vient de modifier ou d'effacer les mêmes lignes : tout est alors oublié,
-    // et il faut relire les objets avant de recommencer.
+    // Renvoie faux si une autre requête vient de modifier ou d'effacer les mêmes lignes, ou de prendre l'adresse e-mail
+    // que ces changements donnent à un compte : tout est alors oublié, et il faut relire les objets avant de recommencer.
     Task<bool> TrySaveChangesAsync();
 }

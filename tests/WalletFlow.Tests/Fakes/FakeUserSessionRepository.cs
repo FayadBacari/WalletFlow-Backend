@@ -12,6 +12,7 @@ public class FakeUserSessionRepository : IUserSessionRepository, ITransactionalF
     private readonly object pendingChangesLock = new object();
     private readonly List<UserSession> preparedSessions = new List<UserSession>();
     private readonly List<Device> preparedDevices = new List<Device>();
+    private readonly List<Guid> accountsLosingAllSessions = new List<Guid>();
 
     // Ce que la fausse base contient.
     public List<UserSession> SavedSessions { get; } = new List<UserSession>();
@@ -40,6 +41,17 @@ public class FakeUserSessionRepository : IUserSessionRepository, ITransactionalF
         {
             preparedSessions.Add(session);
         }
+    }
+
+    // Garde de côté la fermeture de toutes les sessions du compte : elle ne se fera qu'avec les autres changements.
+    public Task PrepareAllSessionsRemovalAsync(Guid userId)
+    {
+        lock (pendingChangesLock)
+        {
+            accountsLosingAllSessions.Add(userId);
+        }
+
+        return Task.CompletedTask;
     }
 
     // Garde l'appareil de côté : il ne sera gardé qu'avec les autres changements.
@@ -158,13 +170,14 @@ public class FakeUserSessionRepository : IUserSessionRepository, ITransactionalF
         }
     }
 
-    // Oublie les sessions et les appareils préparés.
+    // Oublie les sessions, les appareils et les fermetures préparés.
     public void Rollback()
     {
         lock (pendingChangesLock)
         {
             preparedSessions.Clear();
             preparedDevices.Clear();
+            accountsLosingAllSessions.Clear();
         }
     }
 
@@ -173,15 +186,22 @@ public class FakeUserSessionRepository : IUserSessionRepository, ITransactionalF
     {
     }
 
-    // Garde les sessions et les appareils préparés.
+    // Ferme d'abord les sessions des comptes concernés, puis garde les sessions et les appareils préparés :
+    // une nouvelle session préparée avec la fermeture lui survit, comme dans la vraie base.
     public void Commit()
     {
         lock (pendingChangesLock)
         {
+            foreach (var accountId in accountsLosingAllSessions)
+            {
+                SavedSessions.RemoveAll(session => session.UserId == accountId);
+            }
+
             SavedSessions.AddRange(preparedSessions);
             SavedDevices.AddRange(preparedDevices);
             preparedSessions.Clear();
             preparedDevices.Clear();
+            accountsLosingAllSessions.Clear();
         }
     }
 }

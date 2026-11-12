@@ -33,4 +33,26 @@ public abstract class BackgroundEmailRequest
 
         public required Guid AccountId { get; init; }
     }
+
+    // L'utilisateur demande une nouvelle adresse : elle reçoit un lien si elle est libre, sinon son propriétaire est prévenu (GR Compte).
+    public sealed class EmailChange : BackgroundEmailRequest
+    {
+        public override BackgroundEmailRequestType Type => BackgroundEmailRequestType.EmailChange;
+
+        public required Guid AccountId { get; init; }
+
+        // Nouvelle adresse demandée, déjà vérifiée et en minuscules.
+        public required string NewEmailAddress { get; init; }
+    }
+
+    // La nouvelle adresse vient d'être confirmée : l'ancienne adresse est prévenue (GR Compte).
+    public sealed class EmailChangedNotice : BackgroundEmailRequest
+    {
+        public override BackgroundEmailRequestType Type => BackgroundEmailRequestType.EmailChangedNotice;
+
+        public required Guid AccountId { get; init; }
+
+        // L'adresse que le compte vient de quitter : elle ne sert plus à se connecter.
+        public required string OldEmailAddress { get; init; }
+    }
 }

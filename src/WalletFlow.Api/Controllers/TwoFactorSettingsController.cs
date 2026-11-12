@@ -1,6 +1,6 @@
-using System.Security.Claims;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
+using WalletFlow.Api.Authentication;
 using WalletFlow.Api.Configuration;
 using WalletFlow.Api.Contracts;
 using WalletFlow.Application.TwoFactorAuthentication;
@@ -34,7 +34,7 @@ public class TwoFactorSettingsController : ControllerBase
     public async Task<IActionResult> StartActivation(StartTwoFactorActivationRequest request)
     {
         var result = await activationService.StartAsync(
-            ReadUserId(),
+            SessionClaims.ReadUserId(User),
             request.Password,
             HttpContext.Connection.RemoteIpAddress);
 
@@ -48,7 +48,7 @@ public class TwoFactorSettingsController : ControllerBase
             return Problem(statusCode: StatusCodes.Status409Conflict, title: ErrorMessages.TwoFactorAlreadyEnabled);
         }
 
-        ModelState.AddModelError(nameof(StartTwoFactorActivationRequest.Password), ErrorMessages.WrongActivationPassword);
+        ModelState.AddModelError(nameof(StartTwoFactorActivationRequest.Password), ErrorMessages.WrongCurrentPassword);
         return ValidationProblem();
     }
 
@@ -57,7 +57,7 @@ public class TwoFactorSettingsController : ControllerBase
     public async Task<IActionResult> FinishActivation(TwoFactorCodeRequest request)
     {
         var result = await activationService.FinishAsync(
-            ReadUserId(),
+            SessionClaims.ReadUserId(User),
             request.Code,
             HttpContext.Connection.RemoteIpAddress);
 
@@ -80,7 +80,7 @@ public class TwoFactorSettingsController : ControllerBase
     public async Task<IActionResult> Deactivate(DeactivateTwoFactorRequest request)
     {
         var result = await deactivationService.DeactivateAsync(
-            ReadUserId(),
+            SessionClaims.ReadUserId(User),
             request.Password,
             request.Code,
             HttpContext.Connection.RemoteIpAddress);
@@ -98,19 +98,5 @@ public class TwoFactorSettingsController : ControllerBase
         // Le même message pour les deux champs : l'erreur ne dit pas lequel est faux.
         ModelState.AddModelError(ApiErrorConfiguration.GeneralErrorsKey, ErrorMessages.WrongPasswordOrCode);
         return ValidationProblem();
-    }
-
-    // L'identifiant de l'utilisateur vient toujours de la session, jamais de la requête (SS §4).
-    private Guid ReadUserId()
-    {
-        var claimValue = User.FindFirstValue(ClaimTypes.NameIdentifier);
-
-        // Le gestionnaire des sessions écrit toujours cet identifiant : sans lui, la requête n'aurait pas passé l'authentification.
-        if (claimValue == null)
-        {
-            throw new InvalidOperationException("La session ne donne pas l'identifiant de son propriétaire.");
-        }
-
-        return Guid.Parse(claimValue);
     }
 }

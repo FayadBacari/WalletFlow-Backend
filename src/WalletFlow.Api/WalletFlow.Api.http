@@ -129,3 +129,59 @@ X-CSRF-TOKEN: colle-ici-le-jeton-anti-csrf
 }
 
 ###
+
+# Profil (GR Compte) : l'adresse, le nom, le prénom et l'état de la double authentification. Il faut être connecté.
+GET {{WalletFlow_Api_SecureAddress}}/api/account/profile
+
+###
+
+# Nom et prénom : sans mot de passe. Un champ vide ou absent efface ce qu'il y avait.
+POST {{WalletFlow_Api_SecureAddress}}/api/account/name
+Content-Type: application/json
+X-CSRF-TOKEN: colle-ici-le-jeton-anti-csrf
+
+{
+  "lastName": "Dupont",
+  "firstName": "Élise"
+}
+
+###
+
+# Changement du mot de passe (GR Compte, SS §3) : le code n'est demandé que si la double authentification est activée.
+# Les autres sessions sont fermées, et la session en cours reçoit un nouveau cookie.
+POST {{WalletFlow_Api_SecureAddress}}/api/account/password
+Content-Type: application/json
+X-CSRF-TOKEN: colle-ici-le-jeton-anti-csrf
+
+{
+  "currentPassword": "Exemple-De-Mot-De-Passe-1",
+  "newPassword": "Nouveau-Mot-De-Passe-2",
+  "code": null
+}
+
+###
+
+# Demande d'une nouvelle adresse (GR Compte, SS §2) : la réponse est la même, que l'adresse soit libre ou déjà utilisée.
+POST {{WalletFlow_Api_SecureAddress}}/api/account/email
+Content-Type: application/json
+X-CSRF-TOKEN: colle-ici-le-jeton-anti-csrf
+
+{
+  "password": "Exemple-De-Mot-De-Passe-1",
+  "newEmail": "nouvelle-adresse@exemple.test",
+  "code": null
+}
+
+###
+
+# Confirmation de la nouvelle adresse : le jeton se lit après « #token= » dans le lien reçu, et le mot de passe est redemandé.
+# Cette route est appelée sans session.
+POST {{WalletFlow_Api_HostAddress}}/api/account/confirm-email-change
+Content-Type: application/json
+
+{
+  "token": "colle-ici-le-jeton-du-lien",
+  "password": "Exemple-De-Mot-De-Passe-1"
+}
+
+###

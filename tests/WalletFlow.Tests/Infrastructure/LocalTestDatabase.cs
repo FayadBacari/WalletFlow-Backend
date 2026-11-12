@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using WalletFlow.Application.Persistence;
 using WalletFlow.Application.Security;
+using WalletFlow.Domain.UsersAndSecurity;
 using WalletFlow.Infrastructure.Persistence;
 using WalletFlow.Infrastructure.Persistence.Repositories;
 
@@ -41,6 +42,17 @@ public static class LocalTestDatabase
     public static SecurityJournalService CreateSecurityJournal(WalletFlowDatabaseContext databaseContext, TimeProvider clock)
     {
         return new SecurityJournalService(new SecurityEventRepository(databaseContext), clock);
+    }
+
+    // Enregistre un nouveau compte confirmé avec cette adresse, puis oublie les objets gardés en mémoire.
+    public static async Task<User> SaveConfirmedAccountAsync(WalletFlowDatabaseContext databaseContext, string emailAddress)
+    {
+        var newAccount = new User { Email = emailAddress, PasswordHash = "empreinte-de-test", IsEmailConfirmed = true };
+        databaseContext.Users.Add(newAccount);
+        await databaseContext.SaveChangesAsync();
+        databaseContext.ChangeTracker.Clear();
+
+        return newAccount;
     }
 
     // Une autre requête écrit pendant celle du test. Dans l'API, chaque requête a sa propre transaction : la version de la ligne (xmin) change.

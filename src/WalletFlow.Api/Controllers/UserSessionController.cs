@@ -42,7 +42,9 @@ public class UserSessionController : ControllerBase
 
     // POST api/account/logout : détruit la session côté serveur, puis le cookie (SS §3).
     // Le cookie d'appareil reste : le navigateur reste reconnu à la prochaine connexion.
+    // Cette route ne lit aucun corps : la limite empêche seulement qu'on lui en envoie un énorme.
     [HttpPost("logout")]
+    [RequestSizeLimit(RequestSizeConfiguration.MaximumAccountRequestBytes)]
     public async Task<IActionResult> LogOut()
     {
         var sessionToken = Request.Cookies[SessionCookiesConfiguration.SessionCookieName];

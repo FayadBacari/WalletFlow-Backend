@@ -87,6 +87,7 @@ public class AccountRecoveryRealChainTests
                 tokenGenerator,
                 emailSender,
                 new FrenchAccountRecoveryEmails(),
+                new FrenchAccountChangeEmails(),
                 new PublicWebsiteSettings("https://walletflow.test"),
                 clock);
 
@@ -187,7 +188,7 @@ public class AccountRecoveryRealChainTests
         var linkToken = await RequestRecoveryThenReadTokenAsync(databaseContext, "chaine-recuperation-accent@exemple.test");
 
         await ResetPasswordAsync(databaseContext, linkToken, "Mot-De-Passé-1");
-        var result = await LogInAsync(databaseContext, "chaine-recuperation-accent@exemple.test", "Mot-De-Passé-1");
+        var result = await LogInAsync(databaseContext, "chaine-recuperation-accent@exemple.test", "Mot-De-Passe\u0301-1");
 
         Assert.IsType<AccountLoginResult.LoggedIn>(result);
     }

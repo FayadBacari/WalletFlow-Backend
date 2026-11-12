@@ -15,6 +15,7 @@ public class FakeUserAccountRepository : IUserAccountRepository, ITransactionalF
     private readonly ReadCopies<User> readAccounts = new ReadCopies<User>();
     private readonly ReadCopies<EmailToken> readTokens = new ReadCopies<EmailToken>();
     private readonly List<EmailToken> preparedSignupTokens = new List<EmailToken>();
+    private readonly List<Guid> accountsLosingRecoveryAndUnlockLinks = new List<Guid>();
     private Action? concurrentChanges = null;
 
     // Ce que la fausse base contient.
@@ -58,6 +59,9 @@ public class FakeUserAccountRepository : IUserAccountRepository, ITransactionalF
 
     // Le compte est effacé pendant la connexion : au-delà de ce nombre de recherches par identifiant, il n'existe plus.
     public int? SearchesBeforeAccountDisappears { get; set; } = null;
+
+    // Un autre compte prend la nouvelle adresse juste avant l'enregistrement d'un changement d'adresse.
+    public User? AccountTakingTheNewEmailBeforeSave { get; set; } = null;
 
     // Cherche en mémoire le compte qui utilise cette adresse.
     public Task<User?> FindByEmailAsync(string email)
@@ -163,6 +167,17 @@ public class FakeUserAccountRepository : IUserAccountRepository, ITransactionalF
         return Task.CompletedTask;
     }
 
+    // Garde de côté l'effacement des liens de récupération et de déblocage : il ne se fera qu'avec les autres changements.
+    public Task PrepareRecoveryAndUnlockLinksRemovalAsync(Guid accountId)
+    {
+        lock (pendingChangesLock)
+        {
+            accountsLosingRecoveryAndUnlockLinks.Add(accountId);
+        }
+
+        return Task.CompletedTask;
+    }
+
     // Les conflits sont simulés par les réglages de ce faux dépôt : ce contrôle n'a rien à faire en mémoire.
     public void PrepareUnchangedCheck(User account)
     {
@@ -230,6 +245,15 @@ public class FakeUserAccountRepository : IUserAccountRepository, ITransactionalF
                 return true;
             }
 
+            // Un autre compte prend la nouvelle adresse juste avant l'enregistrement du changement : la base refuserait l'adresse en double.
+            var otherAccount = AccountTakingTheNewEmailBeforeSave;
+            if (otherAccount != null && FindAccountWithNewEmailSinceRead() != null)
+            {
+                AccountTakingTheNewEmailBeforeSave = null;
+                concurrentChanges = () => SavedUsers.Add(otherAccount);
+                return true;
+            }
+
             return false;
         }
     }
@@ -275,6 +299,13 @@ public class FakeUserAccountRepository : IUserAccountRepository, ITransactionalF
                 SavedEmailTokens.Add(newSignupToken);
             }
 
+            foreach (var accountId in accountsLosingRecoveryAndUnlockLinks)
+            {
+                SavedEmailTokens.RemoveAll(token =>
+                    token.UserId == accountId
+                    && (token.Type == EmailTokenType.PasswordRecovery || token.Type == EmailTokenType.AccountUnlock));
+            }
+
             ClearTracking();
         }
     }
@@ -312,6 +343,12 @@ public class FakeUserAccountRepository : IUserAccountRepository, ITransactionalF
             && account.FailedLoginAttemptCount > 0);
     }
 
+    // Donne le compte dont l'adresse a changé depuis sa lecture, ou null.
+    private User? FindAccountWithNewEmailSinceRead()
+    {
+        return readAccounts.FindChangedSinceRead((copy, account) => account.Email != copy.Email);
+    }
+
     // L'autre requête a confirmé ce compte.
     private void ConfirmLikeOtherRequest(Guid accountId)
     {
@@ -339,5 +376,6 @@ public class FakeUserAccountRepository : IUserAccountRepository, ITransactionalF
         readAccounts.Clear();
         readTokens.Clear();
         preparedSignupTokens.Clear();
+        accountsLosingRecoveryAndUnlockLinks.Clear();
     }
 }

@@ -201,7 +201,7 @@ public class PasswordResetServiceTests
     {
         var account = AddAccountWithRecoveryLink();
 
-        await ResetPasswordAsync("Mot-De-Passé-1");
+        await ResetPasswordAsync("Mot-De-Passe\u0301-1");
 
         Assert.Equal(FakePasswordHasher.HashPrefix + "Mot-De-Passé-1", account.PasswordHash);
     }
@@ -211,7 +211,7 @@ public class PasswordResetServiceTests
     {
         AddAccountWithRecoveryLink();
 
-        var result = await ResetPasswordAsync("Abcdefgh-1é");
+        var result = await ResetPasswordAsync("Abcdefgh-1e\u0301");
 
         Assert.Equal(PasswordResetResult.PasswordBreaksRules, result);
     }

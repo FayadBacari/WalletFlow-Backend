@@ -33,6 +33,7 @@ public class BackgroundEmailRequestProcessingServiceTests
             tokenGenerator,
             emailSender,
             new FrenchAccountRecoveryEmails(),
+            new FrenchAccountChangeEmails(),
             new PublicWebsiteSettings("https://walletflow.test"),
             clock);
     }

@@ -95,7 +95,7 @@ public class TwoFactorSettingsEndpointTests
         var response = await SendSettingsRequestAsync(browserClient, ActivationStartEndpoint, new { password = WrongPassword }, csrfToken);
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
-        Assert.Equal(ErrorMessages.WrongActivationPassword, await ReadFieldErrorAsync(response, "Password"));
+        Assert.Equal(ErrorMessages.WrongCurrentPassword, await ReadFieldErrorAsync(response, "Password"));
         Assert.DoesNotContain("secret", await response.Content.ReadAsStringAsync());
     }
 

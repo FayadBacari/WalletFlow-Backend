@@ -53,7 +53,7 @@ public class AccountConfirmationServiceTests
         unconfirmedAccount.ReplacePasswordHash(FakePasswordHasher.HashPrefix + "Mot-De-Passé-1");
 
         var result = await service.ConfirmAsync(
-            LinkToken, "Mot-De-Passé-1");
+            LinkToken, "Mot-De-Passe\u0301-1");
 
         Assert.Equal(AccountConfirmationResult.AccountConfirmed, result);
     }

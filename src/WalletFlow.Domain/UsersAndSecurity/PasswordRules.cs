@@ -25,10 +25,11 @@ public static class PasswordRules
     }
 
     // Renvoie vrai si le mot de passe a la bonne longueur, aucun caractère invisible et les 4 types de caractères demandés.
+    // Un caractère invisible pourrait compter comme caractère spécial sans se voir, et on ne pourrait pas le retaper.
     public static bool IsValid(string password)
     {
         return HasValidLength(password)
-            && !ContainsInvisibleCharacter(password)
+            && !InvisibleCharacters.AreIn(password)
             && HasRequiredCharacterTypes(password);
     }
 
@@ -39,28 +40,6 @@ public static class PasswordRules
 
         return characterCount >= MinimumLength
             && characterCount <= MaximumLength;
-    }
-
-    // Renvoie vrai si le mot de passe contient un caractère invisible ou non attribué par Unicode :
-    // il pourrait compter comme caractère spécial sans se voir, et on ne pourrait pas le retaper.
-    private static bool ContainsInvisibleCharacter(string password)
-    {
-        foreach (var character in password.EnumerateRunes())
-        {
-            var category = Rune.GetUnicodeCategory(character);
-
-            if (category == UnicodeCategory.Control
-                || category == UnicodeCategory.Format
-                || category == UnicodeCategory.LineSeparator
-                || category == UnicodeCategory.ParagraphSeparator
-                || category == UnicodeCategory.PrivateUse
-                || category == UnicodeCategory.OtherNotAssigned)
-            {
-                return true;
-            }
-        }
-
-        return false;
     }
 
     // Renvoie vrai si le mot de passe contient une majuscule, une minuscule, un chiffre et un caractère spécial.

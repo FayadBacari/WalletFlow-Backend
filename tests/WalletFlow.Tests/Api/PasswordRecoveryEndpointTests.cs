@@ -431,7 +431,7 @@ public class PasswordRecoveryEndpointTests
     [Theory]
     [InlineData("""{"token":"jeton","newPassword":"Abc\ud800"}""")]
     [InlineData("""{"token":"jeton\ud800","newPassword":"Nouveau-Mot-De-Passe-2"}""")]
-    [InlineData("""{"token":"jeton","newPassword":"Abc￾"}""")]
+    [InlineData("""{"token":"jeton","newPassword":"Abc\uFFFE"}""")]
     [InlineData("""{"token":"nul\u0000","newPassword":"Nouveau-Mot-De-Passe-2"}""")]
     [InlineData("""{"token":"' OR 1=1 --","newPassword":"Nouveau-Mot-De-Passe-2"}""")]
     [InlineData("""{"newPassword":"Nouveau-Mot-De-Passe-2"}""")]

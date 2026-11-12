@@ -23,7 +23,8 @@ public static class ErrorMessages
 
     public const string RecoveryLinkNoLongerValid = "Ce lien n'est plus valable. Demande un nouveau lien avec « Mot de passe oublié ».";
 
-    public const string WrongActivationPassword = "Ce mot de passe n'est pas le bon.";
+    // Le mot de passe actuel, redemandé avant une action sensible (SS §2), ou à la confirmation d'une nouvelle adresse.
+    public const string WrongCurrentPassword = "Ce mot de passe n'est pas le bon.";
 
     public const string TwoFactorAlreadyEnabled = "La double authentification est déjà activée.";
 
@@ -37,4 +38,17 @@ public static class ErrorMessages
     public const string TwoFactorNotEnabled = "La double authentification n'est pas activée.";
 
     public const string LoginMustRestart = "Cette connexion n'est plus valable. Reconnecte-toi.";
+
+    public const string PersonalNameBreaksRules =
+        "Ce champ contient de 1 à 50 caractères, sans caractère invisible. Laisse-le vide pour l'effacer.";
+
+    public const string AccountChangedMeanwhile = "Ton compte vient de changer. Réessaie.";
+
+    public const string SameEmailAddress = "C'est déjà l'adresse de ton compte.";
+
+    public const string EmailChangeLinkNoLongerValid =
+        "Ce lien n'est plus valable. Demande un nouveau changement d'adresse depuis ton compte.";
+
+    // Seul le propriétaire de la boîte mail, qui a aussi le mot de passe du compte, peut lire ce message (voir EmailChangeConfirmationService).
+    public const string EmailAlreadyUsed = "Cette adresse est déjà utilisée par un autre compte.";
 }

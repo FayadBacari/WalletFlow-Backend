@@ -275,8 +275,8 @@ public class AccountLoginEndpointTests
 
     // Aucune de ces valeurs ne doit provoquer d'erreur 500 : le visiteur reçoit le refus normal.
     [Theory]
-    [InlineData("""{"email":"utilisateur@exemple.test","password":"Abc￾"}""")]     // caractère que .NET refuse de normaliser
-    [InlineData("""{"email":"utilisateur@exemple.test","password":"Abc￿"}""")]     // caractère interdit par Unicode
+    [InlineData("""{"email":"utilisateur@exemple.test","password":"Abc\uFFFE"}""")]     // caractère que .NET refuse de normaliser
+    [InlineData("""{"email":"utilisateur@exemple.test","password":"Abc\uFFFF"}""")]     // caractère interdit par Unicode
     [InlineData("""{"email":"utilisateur@exemple.test","password":"Abc\u0000def"}""")]  // caractère nul
     [InlineData("""{"email":"nul\u0000@exemple.test","password":"Mot-De-Passe-Valide-1"}""")] // caractère nul, refusé par PostgreSQL
     [InlineData("""{"email":"utilisateur@exemple.test\n","password":"Abc-Mauvais-1"}""")]     // retour à la ligne

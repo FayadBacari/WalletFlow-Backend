@@ -79,7 +79,7 @@ public class TwoFactorActivationServiceTests
         var account = services.AddAccountWithoutTwoFactor();
         account.ReplacePasswordHash(FakePasswordHasher.HashPrefix + "Mot-De-Passé-1");
 
-        var result = await services.CreateActivationService().StartAsync(account.Id, "Mot-De-Passé-1", IpAddress);
+        var result = await services.CreateActivationService().StartAsync(account.Id, "Mot-De-Passe\u0301-1", IpAddress);
 
         Assert.IsType<TwoFactorActivationStartResult.Started>(result);
     }

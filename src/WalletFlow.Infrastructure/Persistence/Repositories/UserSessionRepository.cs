@@ -22,6 +22,17 @@ public class UserSessionRepository : IUserSessionRepository
         databaseContext.UserSessions.Add(session);
     }
 
+    // Prépare l'effacement de toutes les sessions du compte, avec les autres changements (SS §3).
+    // Une session effacée entre-temps, par exemple par une déconnexion, fait échouer l'enregistrement, qui recommence.
+    public async Task PrepareAllSessionsRemovalAsync(Guid userId)
+    {
+        var sessions = await databaseContext.UserSessions
+            .Where(session => session.UserId == userId)
+            .ToListAsync();
+
+        databaseContext.UserSessions.RemoveRange(sessions);
+    }
+
     // Prépare l'enregistrement d'un nouvel appareil du compte.
     public void PrepareDevice(Device device)
     {

@@ -475,20 +475,20 @@ public class UserSessionEndpointTests
 
     // Ajouter une route publique doit être un choix conscient : ce test oblige à la déclarer ici.
     [Fact]
-    public void OnlyTheSevenExpectedRoutesCanBeCalledWithoutSession()
+    public void OnlyTheEightExpectedRoutesCanBeCalledWithoutSession()
     {
         using var api = new ApiFactoryWithFakes();
-        var publicRoutes = new List<string> { "api/account/confirm-email", "api/account/forgot-password", "api/account/login", "api/account/login/two-factor", "api/account/register", "api/account/reset-password", "api/account/unlock" };
+        var publicRoutes = new List<string> { "api/account/confirm-email", "api/account/confirm-email-change", "api/account/forgot-password", "api/account/login", "api/account/login/two-factor", "api/account/register", "api/account/reset-password", "api/account/unlock" };
 
         Assert.Equal(publicRoutes, ListRoutesWithAttribute<Microsoft.AspNetCore.Authorization.IAllowAnonymous>(api));
     }
 
     // SS §6 : seules les routes appelées sans session n'ont pas besoin du jeton anti-CSRF.
     [Fact]
-    public void OnlyTheSevenExpectedRoutesIgnoreTheCsrfToken()
+    public void OnlyTheEightExpectedRoutesIgnoreTheCsrfToken()
     {
         using var api = new ApiFactoryWithFakes();
-        var publicRoutes = new List<string> { "api/account/confirm-email", "api/account/forgot-password", "api/account/login", "api/account/login/two-factor", "api/account/register", "api/account/reset-password", "api/account/unlock" };
+        var publicRoutes = new List<string> { "api/account/confirm-email", "api/account/confirm-email-change", "api/account/forgot-password", "api/account/login", "api/account/login/two-factor", "api/account/register", "api/account/reset-password", "api/account/unlock" };
 
         Assert.Equal(publicRoutes, ListRoutesWithAttribute<IgnoreAntiforgeryTokenAttribute>(api));
     }

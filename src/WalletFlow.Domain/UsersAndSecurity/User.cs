@@ -6,6 +6,9 @@ namespace WalletFlow.Domain.UsersAndSecurity;
 // changent l'état du compte : aucun autre code ne peut le mettre dans un état interdit.
 public class User
 {
+    private string email = string.Empty;
+    private string? lastName = null;
+    private string? firstName = null;
     private string passwordHash = string.Empty;
     private bool isEmailConfirmed = false;
     private bool isTwoFactorEnabled = false;
@@ -18,7 +21,11 @@ public class User
     public Guid Id { get; init; } = Guid.NewGuid();
 
     // email_utilisateur : adresse de connexion, toujours en minuscules.
-    public string Email { get; init; } = string.Empty;
+    public string Email
+    {
+        get => email;
+        init => email = value;
+    }
 
     // mot_de_passe_hash : empreinte Argon2id du mot de passe, jamais le mot de passe lui-même.
     public string PasswordHash
@@ -28,10 +35,18 @@ public class User
     }
 
     // nom_utilisateur : facultatif.
-    public string? LastName { get; init; }
+    public string? LastName
+    {
+        get => lastName;
+        init => lastName = value;
+    }
 
     // prenom_utilisateur : facultatif.
-    public string? FirstName { get; init; }
+    public string? FirstName
+    {
+        get => firstName;
+        init => firstName = value;
+    }
 
     // role_utilisateur : utilisateur par défaut, administrateur seulement depuis le serveur.
     public UserRole Role { get; init; } = UserRole.User;
@@ -150,6 +165,39 @@ public class User
         }
 
         passwordHash = newHash;
+    }
+
+    // Remplace le nom et le prénom (GR Compte). Un nom vide (null) est effacé.
+    // Ils arrivent déjà sous leur forme enregistrée : une autre forme, ou un nom qui ne respecte pas les règles, est refusé
+    // (voir PersonalNameRules). Un texte fait seulement d'espaces, par exemple, aurait dû devenir null.
+    public void ReplaceName(string? newLastName, string? newFirstName)
+    {
+        if (!IsValidSavedName(newLastName) || !IsValidSavedName(newFirstName))
+        {
+            throw new ArgumentException("Le nom ou le prénom n'a pas sa forme enregistrée, ou ne respecte pas les règles du dictionnaire de données.");
+        }
+
+        lastName = newLastName;
+        firstName = newFirstName;
+    }
+
+    // Renvoie vrai si le nom est déjà sous sa forme enregistrée et respecte les règles.
+    private static bool IsValidSavedName(string? name)
+    {
+        return name == PersonalNameRules.Normalize(name)
+            && PersonalNameRules.IsValid(name);
+    }
+
+    // Remplace l'adresse de connexion par la nouvelle adresse, une fois confirmée (GR Compte).
+    // Elle arrive déjà sous sa forme enregistrée, en minuscules : une autre forme est refusée (voir EmailAddressRules).
+    public void ReplaceEmail(string newEmail)
+    {
+        if (newEmail != EmailAddressRules.Normalize(newEmail) || !EmailAddressRules.IsValid(newEmail))
+        {
+            throw new ArgumentException("La nouvelle adresse e-mail n'a pas le format enregistré en base.", nameof(newEmail));
+        }
+
+        email = newEmail;
     }
 
     // Active la double authentification avec son secret chiffré : l'un ne va jamais sans l'autre (DD §3).
