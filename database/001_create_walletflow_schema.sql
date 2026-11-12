@@ -130,6 +130,9 @@ CREATE TABLE categorie (
 -- Un utilisateur n'a qu'une seule catégorie « Autres ».
 CREATE UNIQUE INDEX ux_categorie_autres ON categorie (id_utilisateur) WHERE est_categorie_autres;
 
+-- Deux catégories d'un même utilisateur ne portent pas le même nom, sans tenir compte des majuscules.
+CREATE UNIQUE INDEX ux_categorie_nom ON categorie (id_utilisateur, lower(nom_categorie));
+
 CREATE TABLE transaction (
     id_transaction         UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
     id_transaction_externe VARCHAR(100) NOT NULL,

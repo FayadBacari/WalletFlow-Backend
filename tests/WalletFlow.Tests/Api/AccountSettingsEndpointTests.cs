@@ -382,26 +382,35 @@ public class AccountSettingsEndpointTests
 
     // --- Inventaire
 
-    // Toute route qui reçoit un corps déclare la limite de taille : une nouvelle route ne peut pas l'oublier.
+    // Toute route qui peut recevoir un corps (POST, PUT, DELETE) déclare une des limites de taille de l'API :
+    // une nouvelle route ne peut pas l'oublier, ni en choisir une plus grande.
     [Fact]
-    public void EveryPostRouteDeclaresTheSizeLimit()
+    public void EveryWriteRouteDeclaresASizeLimit()
     {
         using var api = new ApiFactoryWithFakes();
         var routeProvider = api.Services.GetRequiredService<IActionDescriptorCollectionProvider>();
+        var allowedLimits = new List<long?> { RequestSizeConfiguration.MaximumAccountRequestBytes, RequestSizeConfiguration.MaximumCategoryRequestBytes };
+        var writeMethods = new List<string> { HttpMethods.Post, HttpMethods.Put, HttpMethods.Delete };
         var routesWithoutLimit = new List<string>();
+        var writeRouteCount = 0;
 
         foreach (var route in routeProvider.ActionDescriptors.Items)
         {
             var httpMethods = route.EndpointMetadata.OfType<IHttpMethodMetadata>().SelectMany(metadata => metadata.HttpMethods);
             var sizeLimit = route.EndpointMetadata.OfType<IRequestSizeLimitMetadata>().LastOrDefault();
 
-            if (httpMethods.Contains(HttpMethods.Post)
-                && sizeLimit?.MaxRequestBodySize != RequestSizeConfiguration.MaximumAccountRequestBytes)
+            if (httpMethods.Intersect(writeMethods).Any())
             {
-                routesWithoutLimit.Add(route.AttributeRouteInfo!.Template!);
+                writeRouteCount = writeRouteCount + 1;
+
+                if (!allowedLimits.Contains(sizeLimit?.MaxRequestBodySize))
+                {
+                    routesWithoutLimit.Add(route.AttributeRouteInfo!.Template!);
+                }
             }
         }
 
         Assert.Empty(routesWithoutLimit);
+        Assert.True(writeRouteCount >= 19, "L'inventaire n'a trouvé que " + writeRouteCount + " routes : il ne regarde plus les bonnes.");
     }
 }

@@ -51,4 +51,18 @@ public static class ErrorMessages
 
     // Seul le propriétaire de la boîte mail, qui a aussi le mot de passe du compte, peut lire ce message (voir EmailChangeConfirmationService).
     public const string EmailAlreadyUsed = "Cette adresse est déjà utilisée par un autre compte.";
+
+    public const string CategoryNameBreaksRules = "Le nom d'une catégorie contient de 1 à 50 caractères, sans caractère invisible.";
+
+    public const string CategoryNameAlreadyUsed = "Tu as déjà une catégorie qui porte ce nom.";
+
+    // Le nombre écrit ici est CategoryRules.MaximumCountPerUser : un test vérifie qu'ils restent égaux.
+    public const string TooManyCategories = "Tu as déjà 100 catégories, le maximum. Supprimes-en une pour en créer une autre.";
+
+    public const string OtherCategoryIsFixed = "La catégorie « Autres » ne peut être ni renommée ni supprimée.";
+
+    // Les montants écrits ici sont ceux de CategoryRules, en euros : 1 centime et 1 000 000 000 centimes.
+    public const string CategoryBudgetBreaksRules = "Le budget mensuel va de 0,01 € à 10 000 000 €.";
+
+    public const string CategoriesChangedMeanwhile = "Tes catégories viennent de changer. Réessaie.";
 }

@@ -86,30 +86,12 @@ public class ConcurrentRequestsTests
         }
     }
 
-    // Lance toutes les requêtes au même signal, chacune dans sa propre portée : son propre accès à la base, comme une requête de l'API.
-    // Les résultats sont rendus dans l'ordre des numéros de requête.
+    // Lance les 20 requêtes au même signal, chacune avec son propre accès à la base (voir SimultaneousRequests).
     private static async Task<List<TResult>> RunSimultaneouslyAsync<TResult>(
         ApiFactoryWithRealDatabase api,
         Func<IServiceProvider, int, Task<TResult>> sendRequest)
     {
-        var startSignal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var requests = new List<Task<TResult>>();
-
-        for (var requestNumber = 0; requestNumber < SimultaneousRequestCount; requestNumber++)
-        {
-            var currentRequestNumber = requestNumber;
-            requests.Add(Task.Run(async () =>
-            {
-                await startSignal.Task;
-                await using var scope = api.Services.CreateAsyncScope();
-                return await sendRequest(scope.ServiceProvider, currentRequestNumber);
-            }));
-        }
-
-        startSignal.SetResult();
-        var results = await Task.WhenAll(requests);
-
-        return new List<TResult>(results);
+        return await SimultaneousRequests.RunAsync(api, SimultaneousRequestCount, sendRequest);
     }
 
     // Enregistre pour de vrai un compte confirmé avec le mot de passe des tests, haché avec le vrai Argon2.

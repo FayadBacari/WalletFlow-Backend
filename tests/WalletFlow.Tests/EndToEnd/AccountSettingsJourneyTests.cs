@@ -1,7 +1,6 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
-using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.EntityFrameworkCore;
 using WalletFlow.Domain.UsersAndSecurity;
 using WalletFlow.Tests.Infrastructure;
@@ -9,6 +8,7 @@ using static WalletFlow.Tests.Api.LoginRequestTestValues;
 using static WalletFlow.Tests.Api.RecoveryRequestTestValues;
 using static WalletFlow.Tests.Api.RegistrationRequestTestValues;
 using static WalletFlow.Tests.Api.TwoFactorRequestTestValues;
+using static WalletFlow.Tests.EndToEnd.RealAccountSteps;
 using static WalletFlow.Tests.EndToEnd.TestAccountCleanup;
 
 namespace WalletFlow.Tests.EndToEnd;
@@ -19,28 +19,6 @@ namespace WalletFlow.Tests.EndToEnd;
 public class AccountSettingsJourneyTests
 {
     private const string ChangedPassword = "Nouveau-Mot-De-Passe-3";
-
-    // Crée un client qui garde les cookies comme un navigateur, en HTTPS.
-    private static HttpClient CreateBrowser(ApiFactoryWithRealDatabase api)
-    {
-        return api.CreateClient(new WebApplicationFactoryClientOptions
-        {
-            BaseAddress = new Uri("https://localhost"),
-            HandleCookies = true
-        });
-    }
-
-    // Inscrit puis confirme un compte avec cette adresse et le mot de passe des tests.
-    private static async Task RegisterThenConfirmAsync(ApiFactoryWithRealDatabase api, HttpClient client, string email)
-    {
-        Assert.Equal(HttpStatusCode.OK, (await client.PostAsJsonAsync(RegistrationEndpoint, new { email = email, password = ValidPassword })).StatusCode);
-
-        var confirmationEmail = api.EmailSender.SentEmails.Single(sentEmail => sentEmail.RecipientAddress == email);
-        var confirmationResponse = await client.PostAsJsonAsync(
-            ConfirmationEndpoint,
-            new { token = ReadConfirmationToken(confirmationEmail.Body), password = ValidPassword });
-        Assert.Equal(HttpStatusCode.OK, confirmationResponse.StatusCode);
-    }
 
     // Lit le profil avec ce client.
     private static async Task<JsonElement> ReadProfileAsync(HttpClient client)

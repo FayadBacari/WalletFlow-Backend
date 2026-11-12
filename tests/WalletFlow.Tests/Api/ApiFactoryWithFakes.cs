@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using WalletFlow.Application.Categories;
 using WalletFlow.Application.Emails;
 using WalletFlow.Application.Security;
 using WalletFlow.Application.TwoFactorAuthentication;
@@ -20,6 +21,7 @@ public class ApiFactoryWithFakes : WebApplicationFactory<Program>
     public FakeSecurityEventRepository SecurityEventRepository { get; } = new FakeSecurityEventRepository();
     public FakeUserSessionRepository SessionRepository { get; } = new FakeUserSessionRepository();
     public FakeTwoFactorAuthenticationRepository TwoFactorRepository { get; } = new FakeTwoFactorAuthenticationRepository();
+    public FakeCategoryRepository CategoryRepository { get; }
     public FakeDatabaseUnitOfWork UnitOfWork { get; }
     public FakeEmailSender EmailSender { get; } = new FakeEmailSender();
     public FakeTimeProvider Clock { get; } = new FakeTimeProvider();
@@ -29,13 +31,16 @@ public class ApiFactoryWithFakes : WebApplicationFactory<Program>
     public string TotpEncryptionKey { get; } = TwoFactorTestTools.CreateEncryptionKey();
 
     // Relie les faux accès à la fausse unité de travail, qui garde leurs changements ensemble.
+    // Les catégories créées à l'inscription sont celles que le faux accès aux catégories lit.
     public ApiFactoryWithFakes()
     {
+        CategoryRepository = new FakeCategoryRepository(AccountRepository.SavedCategories);
         UnitOfWork = new FakeDatabaseUnitOfWork(
             AccountRepository,
             SessionRepository,
             TwoFactorRepository,
-            SecurityEventRepository);
+            SecurityEventRepository,
+            CategoryRepository);
     }
 
     // Remplace les services avant le démarrage de l'API (nom imposé par le framework).
@@ -50,6 +55,7 @@ public class ApiFactoryWithFakes : WebApplicationFactory<Program>
             services.AddSingleton<IUserSessionRepository>(SessionRepository);
             services.AddSingleton<ISecurityEventRepository>(SecurityEventRepository);
             services.AddSingleton<ITwoFactorAuthenticationRepository>(TwoFactorRepository);
+            services.AddSingleton<ICategoryRepository>(CategoryRepository);
             services.AddSingleton<IEmailSender>(EmailSender);
             services.AddSingleton<TimeProvider>(Clock);
             services.AddSingleton<ILoggerProvider>(LoggerProvider);

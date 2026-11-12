@@ -26,5 +26,8 @@ public class CategoryTableConfiguration : IEntityTypeConfiguration<Category>
         builder.HasOne<User>().WithMany()
             .HasForeignKey(nameof(Category.UserId))
             .OnDelete(DeleteBehavior.Cascade);
+
+        // Un renommage, un budget ou une création simultanés sur la même ligne font échouer l'enregistrement (voir IDatabaseUnitOfWork).
+        RowVersionConfiguration.AddRowVersion(builder);
     }
 }

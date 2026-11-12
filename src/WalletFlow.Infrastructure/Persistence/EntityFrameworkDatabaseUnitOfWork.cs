@@ -32,9 +32,10 @@ public class EntityFrameworkDatabaseUnitOfWork : IDatabaseUnitOfWork
         }
         catch (DbUpdateException exception)
         {
-            // Une autre requête vient de donner à un compte l'adresse que ces changements donnent au leur : c'est aussi un conflit.
-            // Tout est oublié, et le passage suivant voit que l'adresse est prise. Toute autre erreur reste une panne.
-            if (!PostgresErrors.IsEmailAlreadyUsed(exception))
+            // Une autre requête vient de prendre l'adresse e-mail, ou le nom de catégorie, que ces changements donnent :
+            // c'est aussi un conflit. Tout est oublié, et le passage suivant voit que l'adresse ou le nom est pris.
+            // Toute autre erreur reste une panne.
+            if (!PostgresErrors.IsEmailAlreadyUsed(exception) && !PostgresErrors.IsCategoryNameAlreadyUsed(exception))
             {
                 throw;
             }

@@ -186,6 +186,8 @@ Les valeurs ci-dessous sont des points de départ, à ajuster selon l'usage rée
 
 Au-delà de la limite, le serveur répond « trop de requêtes » (429).
 
+Un utilisateur a au plus 100 catégories, les 8 par défaut comprises : un script ne peut pas remplir la base en créant des catégories sans fin.
+
 ### Actions forcées (CSRF)
 - Les cookies en `SameSite=Lax`, plus un jeton anti-CSRF sur toutes les requêtes qui modifient des données. Les frameworks le fournissent.
 - Les routes appelées sans session (inscription, confirmation, connexion) n'ont pas besoin de ce jeton : elles n'agissent au nom de personne, et n'acceptent que du JSON, qu'un site piégé ne peut pas envoyer sans autorisation.

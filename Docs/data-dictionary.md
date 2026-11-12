@@ -263,7 +263,7 @@ Une transaction appartient à un seul compte et à une seule catégorie (GR Dép
 **Contraintes**
 
 - `id_categorie` : UUID.
-- `nom_categorie` : 1 à 50 caractères.
+- `nom_categorie` : 1 à 50 caractères, sans caractère invisible. Unique pour un même utilisateur, sans tenir compte des majuscules.
 - `budget_mensuel` : en centimes, supérieur à 0. Alertes à 80 % puis à 100 %.
 - `est_categorie_autres` : vrai uniquement pour « Autres ». Cette catégorie ne peut être ni renommée ni supprimée, puisqu'elle reçoit les transactions des catégories supprimées.
 
@@ -458,6 +458,7 @@ Ces valeurs sont les mêmes pour tous les utilisateurs. Elles relèvent de la co
 | Rappel avant la fin de l'autorisation        | 7 jours                          | GR Comptes     |
 | Mises à jour en arrière-plan                 | 4 par jour au plus               | GR Comptes     |
 | Catégories créées à l'inscription            | 8 (voir §6.1)                    | GR Dépenses    |
+| Catégories par utilisateur                   | 100 au plus                      | SS §6          |
 | Règles de classement communes                | Liste fournie par l'application  | GR Dépenses    |
 | Seuil de dépassement d'une catégorie         | Moyenne sur 3 mois + 20 %        | GR Sacs        |
 | Historique minimal (suggestions par moyenne) | 3 mois                           | GR Sacs        |

@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using WalletFlow.Application.AccountRecovery;
 using WalletFlow.Application.AccountSettings;
+using WalletFlow.Application.Categories;
 using WalletFlow.Application.Emails;
 using WalletFlow.Application.Persistence;
 using WalletFlow.Application.Security;
@@ -33,6 +34,7 @@ public static class InfrastructureServicesRegistration
         services.AddScoped<IUserSessionRepository, UserSessionRepository>();
         services.AddScoped<ISecurityEventRepository, SecurityEventRepository>();
         services.AddScoped<ITwoFactorAuthenticationRepository, TwoFactorAuthenticationRepository>();
+        services.AddScoped<ICategoryRepository, CategoryRepository>();
 
         return services;
     }

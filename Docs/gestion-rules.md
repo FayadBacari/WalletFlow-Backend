@@ -93,6 +93,7 @@
 - L'utilisateur peut comparer le mois en cours avec la moyenne des 3 derniers mois, catégorie par catégorie.
 - L'utilisateur peut filtrer les graphiques par période (mois, trimestre, année, dates choisies) et par compte.
 - L'utilisateur peut créer, renommer et supprimer ses propres catégories.
+- Deux catégories d'un même utilisateur ne peuvent pas porter le même nom, sans tenir compte des majuscules.
 - L'utilisateur peut changer la catégorie d'une transaction.
 - À son arrivée depuis la banque, chaque transaction reçoit automatiquement une catégorie d'après son libellé, grâce à des règles communes fournies par l'application (par exemple « CARREFOUR » → Alimentation). Si aucune catégorie ne correspond, elle est classée dans « Autres ».
 - Quand l'utilisateur change la catégorie d'une transaction, l'application lui propose d'appliquer ce choix aux prochaines transactions qui ont le même libellé.

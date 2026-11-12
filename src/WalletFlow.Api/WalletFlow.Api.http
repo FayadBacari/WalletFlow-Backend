@@ -185,3 +185,47 @@ Content-Type: application/json
 }
 
 ###
+
+# Catégories de l'utilisateur connecté, avec leur budget en centimes, dans l'ordre alphabétique, « Autres » à la fin (GR Dépenses).
+GET {{WalletFlow_Api_SecureAddress}}/api/categories
+
+###
+
+# Création d'une catégorie (1 à 50 caractères, un nom pas encore utilisé, 100 catégories au plus).
+POST {{WalletFlow_Api_SecureAddress}}/api/categories
+Content-Type: application/json
+X-CSRF-TOKEN: colle-ici-le-jeton-anti-csrf
+
+{
+  "name": "Abonnements"
+}
+
+###
+
+# Nouveau nom d'une catégorie : l'identifiant se lit dans la liste. « Autres » ne se renomme pas.
+PUT {{WalletFlow_Api_SecureAddress}}/api/categories/colle-ici-l-identifiant/name
+Content-Type: application/json
+X-CSRF-TOKEN: colle-ici-le-jeton-anti-csrf
+
+{
+  "name": "Streaming"
+}
+
+###
+
+# Budget mensuel en centimes (de 1 à 1 000 000 000), ou null pour l'enlever. Le champ doit être écrit.
+PUT {{WalletFlow_Api_SecureAddress}}/api/categories/colle-ici-l-identifiant/budget
+Content-Type: application/json
+X-CSRF-TOKEN: colle-ici-le-jeton-anti-csrf
+
+{
+  "monthlyBudgetInCents": 3000
+}
+
+###
+
+# Suppression d'une catégorie : ses transactions passent dans « Autres ». « Autres » ne se supprime pas.
+DELETE {{WalletFlow_Api_SecureAddress}}/api/categories/colle-ici-l-identifiant
+X-CSRF-TOKEN: colle-ici-le-jeton-anti-csrf
+
+###

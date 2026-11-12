@@ -1,3 +1,4 @@
+using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Authorization;
@@ -8,6 +9,7 @@ using WalletFlow.Api.Filters;
 using WalletFlow.Api.Middlewares;
 using WalletFlow.Application.AccountRecovery;
 using WalletFlow.Application.AccountSettings;
+using WalletFlow.Application.Categories;
 using WalletFlow.Application.Configuration;
 using WalletFlow.Application.Persistence;
 using WalletFlow.Application.Security;
@@ -99,6 +101,11 @@ builder.Services.AddScoped<PersonalNameChangeService>();
 builder.Services.AddScoped<PasswordChangeService>();
 builder.Services.AddScoped<EmailChangeRequestService>();
 builder.Services.AddScoped<EmailChangeConfirmationService>();
+builder.Services.AddScoped<CategoryListService>();
+builder.Services.AddScoped<CategoryCreationService>();
+builder.Services.AddScoped<CategoryRenameService>();
+builder.Services.AddScoped<CategoryBudgetService>();
+builder.Services.AddScoped<CategoryDeletionService>();
 
 // Tâches de fond : effacent chaque jour les comptes non confirmés dont le lien a expiré (GR Auth) et les sessions expirées,
 // et préparent les e-mails de récupération et de déblocage.
@@ -136,6 +143,9 @@ builder.Services
     .AddJsonOptions(options =>
     {
         options.AllowInputFormatterExceptionMessages = false;
+
+        // Un montant s'écrit comme un nombre JSON, jamais comme un texte (SS §5) : ASP.NET Core accepte « "3000" » par défaut.
+        options.JsonSerializerOptions.NumberHandling = JsonNumberHandling.Strict;
     });
 
 // Décrit l'API au format OpenAPI (publié seulement en développement).

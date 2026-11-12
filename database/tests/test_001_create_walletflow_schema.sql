@@ -157,6 +157,17 @@ BEGIN
              SELECT 'Autres bis', TRUE, identifiant
              FROM donnees_communes_aux_tests_de_contraintes WHERE nom = 'utilisateur'$sql$,
         '23505', 'un utilisateur n''a qu''une seule catégorie « Autres »');
+    PERFORM pg_temp.verifier_que_la_base_refuse_cette_instruction(
+        $sql$INSERT INTO categorie (nom_categorie, id_utilisateur)
+             SELECT 'AUTRES', identifiant
+             FROM donnees_communes_aux_tests_de_contraintes WHERE nom = 'utilisateur'$sql$,
+        '23505', 'deux catégories d''un même utilisateur ne portent pas le même nom, majuscules ignorées');
+    PERFORM pg_temp.verifier_que_la_base_refuse_cette_instruction(
+        $sql$INSERT INTO categorie (nom_categorie, id_utilisateur)
+             SELECT noms.nom_choisi, identifiant
+             FROM (VALUES ('Santé'), ('SANTÉ')) AS noms (nom_choisi)
+             CROSS JOIN donnees_communes_aux_tests_de_contraintes WHERE nom = 'utilisateur'$sql$,
+        '23505', 'une majuscule accentuée compte aussi comme la même lettre');
 
     -- Sacs, mouvements et suggestions (DD §7 et §8)
     PERFORM pg_temp.verifier_que_la_base_refuse_cette_instruction(
@@ -354,6 +365,13 @@ BEGIN
     INSERT INTO categorie (nom_categorie, id_utilisateur)
     VALUES ('Loisirs', identifiant_de_l_utilisateur_des_categories)
     RETURNING id_categorie INTO identifiant_de_la_categorie_loisirs_supprimee;
+
+    -- « Autres » existe aussi pour l'utilisateur des contraintes : deux utilisateurs peuvent porter le même nom.
+    RAISE NOTICE 'OK : deux utilisateurs peuvent avoir une catégorie du même nom';
+
+    -- Une catégorie peut changer les majuscules de son propre nom.
+    UPDATE categorie SET nom_categorie = 'LOISIRS' WHERE id_categorie = identifiant_de_la_categorie_loisirs_supprimee;
+    RAISE NOTICE 'OK : une catégorie peut changer les majuscules de son propre nom';
 
     INSERT INTO connexion_bancaire (id_connexion_externe, nom_banque, date_expiration_autorisation, id_utilisateur)
     VALUES ('connexion-categories', 'Banque de test', now() + interval '180 days', identifiant_de_l_utilisateur_des_categories)
