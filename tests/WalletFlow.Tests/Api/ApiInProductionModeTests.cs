@@ -86,6 +86,8 @@ public class ApiInProductionModeTests
     [InlineData("ConnectionStrings:WalletFlowDatabase", "WalletFlowDatabase")]
     [InlineData("LocalEmailsFolder", "LocalEmailsFolder")]
     [InlineData("PublicWebsiteAddress", "PublicWebsiteAddress")]
+    [InlineData("EnableBanking:ApplicationId", "EnableBanking:ApplicationId")]
+    [InlineData("EnableBanking:PrivateKeyPath", "EnableBanking:PrivateKeyPath")]
     [InlineData("TwoFactorSecretEncryptionKey", "TwoFactorSecretEncryptionKey")]
     public void ApiRefusesToStartWithoutItsRequiredSetting(string emptySettingName, string text)
     {

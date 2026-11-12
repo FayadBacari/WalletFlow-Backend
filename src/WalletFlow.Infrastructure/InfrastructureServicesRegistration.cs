@@ -1,7 +1,9 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using WalletFlow.Application.AccountRecovery;
 using WalletFlow.Application.AccountSettings;
+using WalletFlow.Application.BankConnections;
 using WalletFlow.Application.Categories;
 using WalletFlow.Application.Emails;
 using WalletFlow.Application.Persistence;
@@ -9,6 +11,7 @@ using WalletFlow.Application.Security;
 using WalletFlow.Application.TwoFactorAuthentication;
 using WalletFlow.Application.UserAccounts;
 using WalletFlow.Application.UserSessions;
+using WalletFlow.Infrastructure.BankData;
 using WalletFlow.Infrastructure.Emails;
 using WalletFlow.Infrastructure.Persistence;
 using WalletFlow.Infrastructure.Persistence.Repositories;
@@ -35,6 +38,7 @@ public static class InfrastructureServicesRegistration
         services.AddScoped<ISecurityEventRepository, SecurityEventRepository>();
         services.AddScoped<ITwoFactorAuthenticationRepository, TwoFactorAuthenticationRepository>();
         services.AddScoped<ICategoryRepository, CategoryRepository>();
+        services.AddScoped<IBankConnectionRepository, BankConnectionRepository>();
 
         return services;
     }
@@ -92,6 +96,49 @@ public static class InfrastructureServicesRegistration
         string folderPath)
     {
         services.AddSingleton<IEmailSender>(new LocalFolderEmailSender(folderPath));
+
+        return services;
+    }
+
+    // Branche le prestataire bancaire Enable Banking, avec l'identifiant de l'application WalletFlow et sa clé privée (SS §7).
+    // La clé est lue tout de suite : une clé illisible fait refuser le démarrage de l'API, au lieu d'échouer plus tard.
+    public static IServiceCollection AddEnableBanking(
+        this IServiceCollection services,
+        string applicationId,
+        string privateKeyPem)
+    {
+        var tokenSigner = new EnableBankingTokenSigner(applicationId, privateKeyPem, TimeProvider.System);
+        var httpClient = new HttpClient(new SocketsHttpHandler { PooledConnectionLifetime = TimeSpan.FromMinutes(5) })
+        {
+            BaseAddress = EnableBankingClient.ApiAddress,
+            Timeout = TimeSpan.FromSeconds(30)
+        };
+
+        services.AddSingleton(tokenSigner);
+        services.AddSingleton<IBankDataProvider>(serviceProvider => new EnableBankingClient(
+            httpClient,
+            tokenSigner,
+            serviceProvider.GetRequiredService<TimeProvider>(),
+            serviceProvider.GetRequiredService<ILogger<EnableBankingClient>>()));
+
+        return services;
+    }
+
+    // En développement, tant qu'Enable Banking n'est pas configuré : les routes des banques répondent 503.
+    public static IServiceCollection AddBankProviderNotConfigured(this IServiceCollection services)
+    {
+        services.AddSingleton<IBankDataProvider, BankProviderNotConfigured>();
+
+        return services;
+    }
+
+    // Ajoute la mémoire des autorisations bancaires commencées, la limite des mises à jour par utilisateur,
+    // et l'horaire des mises à jour en arrière-plan.
+    public static IServiceCollection AddBankConnectionTools(this IServiceCollection services)
+    {
+        services.AddSingleton<IBankAuthorizationStore, InMemoryBankAuthorizationStore>();
+        services.AddSingleton<IBankUpdateLimiter, InMemoryBankUpdateLimiter>();
+        services.AddSingleton<IBankUpdateSchedule, InMemoryBankUpdateSchedule>();
 
         return services;
     }

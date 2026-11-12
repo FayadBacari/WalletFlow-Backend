@@ -24,6 +24,38 @@ public static class PostgresErrors
         return IsUniqueViolation(exception, CategoryNameUniqueIndex);
     }
 
+    // Renvoie vrai si PostgreSQL a arrêté cette écriture pour débloquer deux transactions qui s'attendaient l'une l'autre.
+    // Rien de l'écriture arrêtée n'est gardé : elle peut être rejouée (documentation de PostgreSQL, « Deadlocks »).
+    // L'erreur de PostgreSQL arrive enveloppée, parfois deux fois : Npgsql range l'interblocage parmi les erreurs passagères,
+    // et EF Core le donne alors dans une InvalidOperationException, autour de la DbUpdateException. Toute la chaîne est lue.
+    public static bool IsDeadlock(Exception exception)
+    {
+        Exception? current = exception;
+
+        while (current != null)
+        {
+            if (current is PostgresException postgresException)
+            {
+                return postgresException.SqlState == PostgresErrorCodes.DeadlockDetected;
+            }
+
+            current = current.InnerException;
+        }
+
+        return false;
+    }
+
+    // Nom donné par PostgreSQL à la clé étrangère qui relie un compte bancaire à sa connexion.
+    public const string BankAccountConnectionForeignKey = "compte_bancaire_id_connexion_fkey";
+
+    // Renvoie vrai si un compte bancaire allait être ajouté à une connexion qu'une autre requête vient de supprimer.
+    public static bool IsBankConnectionGone(DbUpdateException exception)
+    {
+        return exception.InnerException is PostgresException postgresException
+            && postgresException.SqlState == PostgresErrorCodes.ForeignKeyViolation
+            && postgresException.ConstraintName == BankAccountConnectionForeignKey;
+    }
+
     // Renvoie vrai si la base a refusé l'écriture à cause de cette contrainte d'unicité.
     private static bool IsUniqueViolation(DbUpdateException exception, string constraintName)
     {

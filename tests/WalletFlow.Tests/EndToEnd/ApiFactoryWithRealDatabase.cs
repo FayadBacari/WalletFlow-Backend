@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
+using WalletFlow.Application.BankConnections;
 using WalletFlow.Application.Emails;
 using WalletFlow.Tests.Api;
 using WalletFlow.Tests.Fakes;
@@ -16,6 +17,9 @@ public class ApiFactoryWithRealDatabase : WebApplicationFactory<Program>
 {
     public FakeEmailSender EmailSender { get; } = new FakeEmailSender();
 
+    // Le prestataire bancaire est remplacé aussi : les tests n'appellent jamais une vraie banque.
+    public FakeBankDataProvider BankProvider { get; } = new FakeBankDataProvider();
+
     // Branche l'API sur la base de test avant son démarrage (nom imposé par le framework).
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
@@ -25,6 +29,7 @@ public class ApiFactoryWithRealDatabase : WebApplicationFactory<Program>
         builder.ConfigureTestServices(services =>
         {
             services.AddSingleton<IEmailSender>(EmailSender);
+            services.AddSingleton<IBankDataProvider>(BankProvider);
         });
     }
 }

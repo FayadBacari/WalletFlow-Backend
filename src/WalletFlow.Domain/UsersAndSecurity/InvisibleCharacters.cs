@@ -22,6 +22,23 @@ public static class InvisibleCharacters
         return false;
     }
 
+    // Retire ces caractères d'un texte reçu d'ailleurs, par exemple d'une banque, au lieu de le refuser.
+    // Un morceau de caractère mal formé disparaît aussi : le texte rendu est toujours bien formé.
+    public static string Remove(string text)
+    {
+        var visibleText = new StringBuilder();
+
+        foreach (var character in text.EnumerateRunes())
+        {
+            if (!IsInvisible(character))
+            {
+                visibleText.Append(character.ToString());
+            }
+        }
+
+        return visibleText.ToString();
+    }
+
     // Un morceau de caractère mal formé est lu par .NET comme le caractère de remplacement U+FFFD : il est refusé lui aussi.
     private static bool IsInvisible(Rune character)
     {

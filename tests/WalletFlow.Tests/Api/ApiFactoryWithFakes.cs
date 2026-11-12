@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using WalletFlow.Application.BankConnections;
 using WalletFlow.Application.Categories;
 using WalletFlow.Application.Emails;
 using WalletFlow.Application.Security;
@@ -22,6 +23,8 @@ public class ApiFactoryWithFakes : WebApplicationFactory<Program>
     public FakeUserSessionRepository SessionRepository { get; } = new FakeUserSessionRepository();
     public FakeTwoFactorAuthenticationRepository TwoFactorRepository { get; } = new FakeTwoFactorAuthenticationRepository();
     public FakeCategoryRepository CategoryRepository { get; }
+    public FakeBankConnectionRepository BankRepository { get; } = new FakeBankConnectionRepository();
+    public FakeBankDataProvider BankProvider { get; } = new FakeBankDataProvider();
     public FakeDatabaseUnitOfWork UnitOfWork { get; }
     public FakeEmailSender EmailSender { get; } = new FakeEmailSender();
     public FakeTimeProvider Clock { get; } = new FakeTimeProvider();
@@ -40,7 +43,8 @@ public class ApiFactoryWithFakes : WebApplicationFactory<Program>
             SessionRepository,
             TwoFactorRepository,
             SecurityEventRepository,
-            CategoryRepository);
+            CategoryRepository,
+            BankRepository);
     }
 
     // Remplace les services avant le démarrage de l'API (nom imposé par le framework).
@@ -56,6 +60,8 @@ public class ApiFactoryWithFakes : WebApplicationFactory<Program>
             services.AddSingleton<ISecurityEventRepository>(SecurityEventRepository);
             services.AddSingleton<ITwoFactorAuthenticationRepository>(TwoFactorRepository);
             services.AddSingleton<ICategoryRepository>(CategoryRepository);
+            services.AddSingleton<IBankConnectionRepository>(BankRepository);
+            services.AddSingleton<IBankDataProvider>(BankProvider);
             services.AddSingleton<IEmailSender>(EmailSender);
             services.AddSingleton<TimeProvider>(Clock);
             services.AddSingleton<ILoggerProvider>(LoggerProvider);

@@ -229,3 +229,54 @@ DELETE {{WalletFlow_Api_SecureAddress}}/api/categories/colle-ici-l-identifiant
 X-CSRF-TOKEN: colle-ici-le-jeton-anti-csrf
 
 ###
+
+# Banques que l'utilisateur peut connecter (GR Comptes). Il faut une application Enable Banking configurée.
+GET {{WalletFlow_Api_SecureAddress}}/api/banks
+
+###
+
+# Début de la connexion d'une banque : la réponse donne l'adresse de sa page, où l'utilisateur s'identifie.
+POST {{WalletFlow_Api_SecureAddress}}/api/bank-connections
+Content-Type: application/json
+X-CSRF-TOKEN: colle-ici-le-jeton-anti-csrf
+
+{
+  "bankName": "Mock ASPSP"
+}
+
+###
+
+# Retour de la banque : le code et le state se lisent dans l'adresse de la page /bank-callback où la banque a renvoyé l'utilisateur.
+POST {{WalletFlow_Api_SecureAddress}}/api/bank-connections/finish
+Content-Type: application/json
+X-CSRF-TOKEN: colle-ici-le-jeton-anti-csrf
+
+{
+  "code": "colle-ici-le-code",
+  "state": "colle-ici-le-state"
+}
+
+###
+
+# Banques connectées, comptes, soldes et date de chaque solde.
+GET {{WalletFlow_Api_SecureAddress}}/api/bank-connections
+
+###
+
+# Mise à jour des soldes, à l'ouverture de l'application : une fois par minute au plus.
+POST {{WalletFlow_Api_SecureAddress}}/api/bank-connections/refresh
+X-CSRF-TOKEN: colle-ici-le-jeton-anti-csrf
+
+###
+
+# Renouvellement de l'autorisation d'une connexion : la réponse donne l'adresse de la banque.
+POST {{WalletFlow_Api_SecureAddress}}/api/bank-connections/colle-ici-l-identifiant/renew
+X-CSRF-TOKEN: colle-ici-le-jeton-anti-csrf
+
+###
+
+# Déconnexion d'une banque : l'autorisation est révoquée, puis la banque, ses comptes et leurs transactions sont supprimés.
+DELETE {{WalletFlow_Api_SecureAddress}}/api/bank-connections/colle-ici-l-identifiant
+X-CSRF-TOKEN: colle-ici-le-jeton-anti-csrf
+
+###

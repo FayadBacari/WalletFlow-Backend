@@ -1,7 +1,9 @@
+using System.Security.Cryptography;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
+using WalletFlow.Api.BackgroundTasks;
 using WalletFlow.Api.Filters;
 
 namespace WalletFlow.Tests.Api;
@@ -13,6 +15,11 @@ public static class TestApiSettings
 {
     public const string EnvironmentName = "Testing";
     public const string WebsiteAddress = "https://walletflow.test";
+    public const string BankApplicationId = "application-enable-banking-des-tests";
+
+    // Une clé RSA jetable pour la configuration d'Enable Banking : écrite une fois par lancement des tests, effacée à la fin.
+    // Les tests remplacent le prestataire : aucune requête n'est jamais signée avec elle.
+    private static readonly Lazy<string> ThrowawayBankKeyPath = new Lazy<string>(WriteThrowawayBankKey);
 
     // Donne à l'API tous ses réglages obligatoires. La base indiquée ici n'est jamais contactée : une fabrique la remplace si besoin.
     public static void Apply(IWebHostBuilder builder, string totpEncryptionKey)
@@ -21,6 +28,8 @@ public static class TestApiSettings
         builder.UseSetting("ConnectionStrings:WalletFlowDatabase", "Host=localhost;Database=base_jamais_contactee");
         builder.UseSetting("TwoFactorSecretEncryptionKey", totpEncryptionKey);
         builder.UseSetting("PublicWebsiteAddress", WebsiteAddress);
+        builder.UseSetting("EnableBanking:ApplicationId", BankApplicationId);
+        builder.UseSetting("EnableBanking:PrivateKeyPath", ThrowawayBankKeyPath.Value);
 
         // Le dossier n'est jamais utilisé : les tests remplacent l'envoi des e-mails.
         builder.UseSetting("LocalEmailsFolder", "dossier-jamais-utilise");
@@ -31,6 +40,25 @@ public static class TestApiSettings
         builder.ConfigureTestServices(services =>
         {
             services.AddDataProtection().UseEphemeralDataProtectionProvider();
+
+            // La mise à jour des soldes en arrière-plan ne tourne pas pendant les tests : sur la base de test,
+            // elle toucherait les connexions de la base locale. Ses tests la créent eux-mêmes.
+            var bankBackgroundTask = services.FirstOrDefault(service => service.ImplementationType == typeof(BankBalancesBackgroundService));
+            if (bankBackgroundTask != null)
+            {
+                services.Remove(bankBackgroundTask);
+            }
         });
+    }
+
+    // Écrit la clé jetable dans le dossier temporaire, et la fait effacer quand les tests se terminent.
+    private static string WriteThrowawayBankKey()
+    {
+        using var key = RSA.Create(2048);
+        var path = Path.Combine(Path.GetTempPath(), "walletflow-tests-cle-jetable-" + Guid.NewGuid().ToString("N") + ".pem");
+        File.WriteAllText(path, key.ExportPkcs8PrivateKeyPem());
+        AppDomain.CurrentDomain.ProcessExit += (sender, arguments) => File.Delete(path);
+
+        return path;
     }
 }

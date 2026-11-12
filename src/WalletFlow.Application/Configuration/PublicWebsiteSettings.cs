@@ -22,6 +22,12 @@ public class PublicWebsiteSettings
         PublicWebsiteAddress = websiteAddress.TrimEnd('/');
     }
 
+    // Donne l'adresse fixe d'une page du site, par exemple celle où la banque renvoie l'utilisateur (SS §7).
+    public string BuildPageAddress(string pagePath)
+    {
+        return PublicWebsiteAddress + pagePath;
+    }
+
     // Construit un lien vers une page du site, qui demande une action avant de l'accomplir (SS §2).
     // Le jeton est placé après le # : il n'est jamais envoyé au serveur quand la page s'ouvre,
     // et n'apparaît donc pas dans ses journaux (SS §7).

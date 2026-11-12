@@ -10,4 +10,7 @@ public static class RequestSizeConfiguration
     // Le plus long nom de catégorie permis tient dans cette taille, même si chacun de ses 50 caractères
     // est un emoji écrit en \uXXXX\uXXXX dans le JSON (12 octets chacun, 600 en tout).
     public const long MaximumCategoryRequestBytes = 1024;
+
+    // Le code et le state renvoyés par la banque, et le nom d'une banque, tiennent largement dans cette taille.
+    public const long MaximumBankRequestBytes = 4096;
 }

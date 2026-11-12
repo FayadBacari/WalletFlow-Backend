@@ -204,7 +204,7 @@ Un événement n'est pas toujours rattaché à un utilisateur : une connexion é
 - `id_connexion_externe` : fourni par le prestataire, unique. Sert à retrouver la connexion à chaque mise à jour.
 - `nom_banque` : fourni par le prestataire, 1 à 100 caractères.
 - `statut_connexion` : `active`, `en_erreur` ou `expiree`, `active` par défaut. Quand la banque ne répond pas, la connexion passe `en_erreur` et l'application affiche le dernier solde connu.
-- `date_expiration_autorisation` : 180 jours après l'autorisation donnée à la banque. L'utilisateur est prévenu 7 jours avant.
+- `date_expiration_autorisation` : au plus 180 jours après l'autorisation donnée à la banque, moins si la banque n'accepte pas 180 jours. L'utilisateur est prévenu 7 jours avant.
 
 Une connexion regroupe les comptes d'une même banque. La déconnecter supprime ses comptes et leurs transactions, et révoque l'autorisation (GR Comptes).
 
@@ -454,7 +454,7 @@ Ces valeurs sont les mêmes pour tous les utilisateurs. Elles relèvent de la co
 | Validité des liens de confirmation           | 24 heures (inscription, e-mail)  | SS §2          |
 | Validité du lien de déblocage                | 1 heure                          | SS §2          |
 | Nombre de codes de secours                   | 10                               | SS §2          |
-| Durée d'une autorisation bancaire            | 180 jours                        | GR Comptes     |
+| Durée d'une autorisation bancaire            | 180 jours au plus                | GR Comptes     |
 | Rappel avant la fin de l'autorisation        | 7 jours                          | GR Comptes     |
 | Mises à jour en arrière-plan                 | 4 par jour au plus               | GR Comptes     |
 | Catégories créées à l'inscription            | 8 (voir §6.1)                    | GR Dépenses    |

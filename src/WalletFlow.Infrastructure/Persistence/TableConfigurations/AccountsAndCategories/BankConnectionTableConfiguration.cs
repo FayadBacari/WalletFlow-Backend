@@ -29,5 +29,8 @@ public class BankConnectionTableConfiguration : IEntityTypeConfiguration<BankCon
         builder.HasOne<User>().WithMany()
             .HasForeignKey(nameof(BankConnection.UserId))
             .OnDelete(DeleteBehavior.Cascade);
+
+        // Une mise à jour, un renouvellement ou une suppression simultanés font échouer l'enregistrement (voir IDatabaseUnitOfWork).
+        RowVersionConfiguration.AddRowVersion(builder);
     }
 }

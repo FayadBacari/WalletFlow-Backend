@@ -9,6 +9,7 @@ using WalletFlow.Api.Filters;
 using WalletFlow.Api.Middlewares;
 using WalletFlow.Application.AccountRecovery;
 using WalletFlow.Application.AccountSettings;
+using WalletFlow.Application.BankConnections;
 using WalletFlow.Application.Categories;
 using WalletFlow.Application.Configuration;
 using WalletFlow.Application.Persistence;
@@ -75,6 +76,32 @@ builder.Services.AddLocalFolderEmails(
 builder.Services.AddSingleton(
     new PublicWebsiteSettings(builder.Configuration["PublicWebsiteAddress"]));
 
+// Le prestataire bancaire Enable Banking : l'identifiant de l'application et le chemin de sa clé privée viennent des secrets
+// (user-secrets en développement, variables d'environnement en production), jamais du code ni de Git (SS §7).
+// En production, l'API refuse de démarrer sans eux. En développement, les routes des banques répondent 503 en attendant.
+var bankApplicationId = builder.Configuration["EnableBanking:ApplicationId"];
+var bankPrivateKeyPath = builder.Configuration["EnableBanking:PrivateKeyPath"];
+var isBankProviderConfigured = !string.IsNullOrWhiteSpace(bankApplicationId) && !string.IsNullOrWhiteSpace(bankPrivateKeyPath);
+if (isBankProviderConfigured)
+{
+    if (!File.Exists(bankPrivateKeyPath))
+    {
+        throw new InvalidOperationException("La clé privée d'Enable Banking est introuvable au chemin donné par « EnableBanking:PrivateKeyPath ».");
+    }
+
+    builder.Services.AddEnableBanking(bankApplicationId!, File.ReadAllText(bankPrivateKeyPath!));
+}
+else if (builder.Environment.IsDevelopment())
+{
+    builder.Services.AddBankProviderNotConfigured();
+}
+else
+{
+    throw new InvalidOperationException(
+        "Les réglages « EnableBanking:ApplicationId » et « EnableBanking:PrivateKeyPath » sont absents : la connexion bancaire n'est pas configurée.");
+}
+builder.Services.AddBankConnectionTools();
+
 // Outils communs de la couche Application : enregistrement avec réessai, et journal de sécurité.
 builder.Services.AddScoped<DatabaseChangesSavingService>();
 builder.Services.AddScoped<SecurityJournalService>();
@@ -106,12 +133,20 @@ builder.Services.AddScoped<CategoryCreationService>();
 builder.Services.AddScoped<CategoryRenameService>();
 builder.Services.AddScoped<CategoryBudgetService>();
 builder.Services.AddScoped<CategoryDeletionService>();
+builder.Services.AddScoped<BankListService>();
+builder.Services.AddScoped<BankAuthorizationStartService>();
+builder.Services.AddScoped<BankConnectionFinishService>();
+builder.Services.AddScoped<BankConnectionListService>();
+builder.Services.AddScoped<BankBalanceUpdateService>();
+builder.Services.AddScoped<BankBackgroundUpdateService>();
+builder.Services.AddScoped<BankDisconnectionService>();
 
 // Tâches de fond : effacent chaque jour les comptes non confirmés dont le lien a expiré (GR Auth) et les sessions expirées,
-// et préparent les e-mails de récupération et de déblocage.
+// préparent les e-mails de récupération et de déblocage, et mettent à jour les soldes jusqu'à 4 fois par jour (GR Comptes).
 builder.Services.AddHostedService<UnconfirmedAccountsCleanupBackgroundService>();
 builder.Services.AddHostedService<ExpiredUserSessionsCleanupBackgroundService>();
 builder.Services.AddHostedService<BackgroundEmailRequestsBackgroundService>();
+builder.Services.AddHostedService<BankBalancesBackgroundService>();
 
 // Limites de débit des points d'entrée sensibles (SS §6).
 builder.Services.AddWalletFlowRateLimiting();
@@ -165,6 +200,13 @@ builder.Services.AddHsts(options =>
 });
 
 var app = builder.Build();
+
+// En développement, sans application Enable Banking configurée, le journal technique le dit dès le démarrage.
+if (!isBankProviderConfigured)
+{
+    app.Logger.LogWarning(
+        "Enable Banking n'est pas configuré : les routes des banques répondent 503. Ajoute « EnableBanking:ApplicationId » et « EnableBanking:PrivateKeyPath » avec dotnet user-secrets.");
+}
 
 if (app.Environment.IsDevelopment())
 {

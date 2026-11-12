@@ -107,7 +107,7 @@ public class DatabaseModelMatchesSqlScriptTests
 
         concurrencyColumns.Sort();
         Assert.Equal(
-            new List<string> { "categorie.xmin xid", "code_secours.xmin xid", "jeton.xmin xid", "utilisateur.xmin xid" },
+            new List<string> { "categorie.xmin xid", "code_secours.xmin xid", "compte_bancaire.xmin xid", "connexion_bancaire.xmin xid", "jeton.xmin xid", "utilisateur.xmin xid" },
             concurrencyColumns);
     }
 }

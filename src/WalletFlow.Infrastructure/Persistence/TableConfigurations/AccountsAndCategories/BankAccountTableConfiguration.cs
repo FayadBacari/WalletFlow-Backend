@@ -27,5 +27,8 @@ public class BankAccountTableConfiguration : IEntityTypeConfiguration<BankAccoun
         builder.HasOne<BankConnection>().WithMany()
             .HasForeignKey(nameof(BankAccount.BankConnectionId))
             .OnDelete(DeleteBehavior.Cascade);
+
+        // Deux mises à jour simultanées du même solde : la seconde relit le compte avant d'écrire (voir IDatabaseUnitOfWork).
+        RowVersionConfiguration.AddRowVersion(builder);
     }
 }

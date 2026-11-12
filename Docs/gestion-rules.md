@@ -48,9 +48,11 @@
 - L'utilisateur connecte sa banque à WalletFlow par l'intermédiaire d'un prestataire agréé. La connexion est en lecture seule : WalletFlow ne peut faire ni virement ni paiement.
 - L'identification se fait sur la page de la banque : WalletFlow ne voit jamais les identifiants bancaires.
 - Les comptes, les soldes et les transactions viennent de la banque. Dans WalletFlow, l'utilisateur peut seulement changer la catégorie d'une transaction ou la marquer comme transfert.
+- Seuls les comptes en euros sont ajoutés à WalletFlow.
+- Le solde affiché est le solde comptable donné par la banque, ou le plus proche si elle ne le donne pas.
 - Le solde est mis à jour à chaque ouverture de l'application, et jusqu'à 4 fois par jour en arrière-plan. L'application affiche la date et l'heure de la dernière mise à jour.
 - Si la banque ne répond pas, l'application affiche le dernier solde connu, avec sa date.
-- L'autorisation donnée à la banque est à renouveler tous les 180 jours. L'application prévient l'utilisateur 7 jours avant.
+- L'autorisation donnée à la banque est à renouveler au plus tard tous les 180 jours, plus tôt si la banque n'accepte pas une durée aussi longue. L'application prévient l'utilisateur 7 jours avant.
 - L'utilisateur peut déconnecter une banque : les comptes et les transactions de cette banque sont supprimés de WalletFlow, et l'autorisation est révoquée. L'application prévient l'utilisateur et lui demande de confirmer.
 - Les transferts entre deux comptes de l'utilisateur ne sont comptés ni comme des dépenses, ni comme des revenus.
 - L'utilisateur peut marquer une transaction comme transfert entre deux de ses comptes.

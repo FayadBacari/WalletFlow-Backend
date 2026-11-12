@@ -65,4 +65,18 @@ public static class ErrorMessages
     public const string CategoryBudgetBreaksRules = "Le budget mensuel va de 0,01 € à 10 000 000 €.";
 
     public const string CategoriesChangedMeanwhile = "Tes catégories viennent de changer. Réessaie.";
+
+    public const string BankNotOffered = "Cette banque n'est pas proposée.";
+
+    public const string BankServiceUnavailable = "Le service de connexion bancaire ne répond pas. Réessaie plus tard.";
+
+    // Le même message pour un lien inconnu, expiré, déjà utilisé, ou commencé par un autre compte (SS §7).
+    public const string BankLinkNoLongerValid = "Cette connexion bancaire n'est plus valable. Recommence depuis WalletFlow.";
+
+    public const string BankRefusedAuthorization = "La banque n'a pas donné son autorisation. Recommence depuis WalletFlow.";
+
+    public const string NoBankAccountAdded =
+        "Aucun compte n'a pu être ajouté : WalletFlow garde seulement les comptes en euros, et chacun une seule fois.";
+
+    public const string BankConnectionsChangedMeanwhile = "Tes connexions bancaires viennent de changer. Réessaie.";
 }
