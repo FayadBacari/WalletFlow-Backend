@@ -49,5 +49,28 @@ internal sealed record BalanceResource(AmountData? BalanceAmount, string? Balanc
 // Un montant : sa devise (code ISO 4217) et sa valeur écrite en texte, avec un point pour les décimales.
 internal sealed record AmountData(string? Currency, string? Amount);
 
+// Réponse de GET /accounts/{id}/transactions : une page d'opérations, et la clé de la page suivante, null à la dernière.
+internal sealed record TransactionsResponse(List<TransactionResource>? Transactions, string? ContinuationKey);
+
+// Une opération. Les dates sont lues comme du texte : une date illisible ne fait pas refuser toute la page.
+// Les comptes de l'autre partie (creditor_account, debtor_account) ne sont jamais lus (DD §13).
+internal sealed record TransactionResource(
+    string? EntryReference,
+    AmountData? TransactionAmount,
+    PartyData? Creditor,
+    PartyData? Debtor,
+    BankTransactionCodeData? BankTransactionCode,
+    string? CreditDebitIndicator,
+    string? Status,
+    string? BookingDate,
+    string? ValueDate,
+    List<string?>? RemittanceInformation);
+
+// L'autre partie d'une opération : seul son nom est lu.
+internal sealed record PartyData(string? Name);
+
+// Le type d'une opération : seule sa description est lue.
+internal sealed record BankTransactionCodeData(string? Description);
+
 // Réponse d'erreur : son message et son code d'erreur, comme « EXPIRED_SESSION ».
 internal sealed record ErrorResponse(string? Message, string? Error);

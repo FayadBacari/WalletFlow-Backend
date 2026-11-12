@@ -32,20 +32,34 @@ public class PostgresErrorsTests
         Assert.False(PostgresErrors.IsDeadlock(new InvalidOperationException()));
     }
 
-    // Seule la clé qui relie un compte bancaire à sa connexion compte : une autre clé étrangère reste une panne.
+    // Une clé étrangère vers une ligne qu'une autre requête peut supprimer au même instant est un conflit, quelle que soit
+    // la forme de l'erreur : une clé différée est vérifiée à la validation, et PostgreSQL l'envoie alors seule.
     [Fact]
-    public void OnlyTheBankAccountConnectionKeyMeansTheConnectionIsGone()
+    public void OnlyTheKeysOfRowsDeletedMeanwhileAreConflicts()
     {
-        Assert.True(PostgresErrors.IsBankConnectionGone(CreateSaveError(PostgresErrorCodes.ForeignKeyViolation, PostgresErrors.BankAccountConnectionForeignKey)));
-        Assert.False(PostgresErrors.IsBankConnectionGone(CreateSaveError(PostgresErrorCodes.ForeignKeyViolation, "transaction_id_categorie_fkey")));
-        Assert.False(PostgresErrors.IsBankConnectionGone(CreateSaveError(PostgresErrorCodes.UniqueViolation, PostgresErrors.BankAccountConnectionForeignKey)));
+        var categoryGoneAtCommit = new PostgresException("refus de test", "ERROR", "ERROR", PostgresErrorCodes.ForeignKeyViolation,
+            constraintName: PostgresErrors.TransactionCategoryForeignKey);
+
+        Assert.True(PostgresErrors.IsConflict(CreateSaveError(PostgresErrorCodes.ForeignKeyViolation, PostgresErrors.BankAccountConnectionForeignKey)));
+        Assert.True(PostgresErrors.IsConflict(CreateSaveError(PostgresErrorCodes.ForeignKeyViolation, PostgresErrors.TransactionAccountForeignKey)));
+        Assert.True(PostgresErrors.IsConflict(CreateSaveError(PostgresErrorCodes.ForeignKeyViolation, PostgresErrors.RuleCategoryForeignKey)));
+        Assert.True(PostgresErrors.IsConflict(categoryGoneAtCommit));
+        Assert.False(PostgresErrors.IsConflict(CreateSaveError(PostgresErrorCodes.ForeignKeyViolation, "suggestion_id_categorie_fkey")));
+        Assert.False(PostgresErrors.IsConflict(CreateSaveError(PostgresErrorCodes.UniqueViolation, PostgresErrors.BankAccountConnectionForeignKey)));
     }
 
+    // Les unicités qu'une autre requête peut prendre au même instant sont des conflits ; toute autre erreur reste une panne.
     [Fact]
-    public void UniqueViolationsAreRecognizedByTheirConstraint()
+    public void OnlyTheUniquenessTakenMeanwhileIsAConflict()
     {
         Assert.True(PostgresErrors.IsEmailAlreadyUsed(CreateSaveError(PostgresErrorCodes.UniqueViolation, PostgresErrors.EmailUniqueConstraint)));
-        Assert.True(PostgresErrors.IsCategoryNameAlreadyUsed(CreateSaveError(PostgresErrorCodes.UniqueViolation, PostgresErrors.CategoryNameUniqueIndex)));
-        Assert.False(PostgresErrors.IsCategoryNameAlreadyUsed(CreateSaveError(PostgresErrorCodes.UniqueViolation, PostgresErrors.EmailUniqueConstraint)));
+        Assert.False(PostgresErrors.IsEmailAlreadyUsed(CreateSaveError(PostgresErrorCodes.UniqueViolation, PostgresErrors.CategoryNameUniqueIndex)));
+        Assert.True(PostgresErrors.IsConflict(CreateSaveError(PostgresErrorCodes.UniqueViolation, PostgresErrors.EmailUniqueConstraint)));
+        Assert.True(PostgresErrors.IsConflict(CreateSaveError(PostgresErrorCodes.UniqueViolation, PostgresErrors.CategoryNameUniqueIndex)));
+        Assert.True(PostgresErrors.IsConflict(CreateSaveError(PostgresErrorCodes.UniqueViolation, PostgresErrors.TransactionExternalIdUniqueConstraint)));
+        Assert.False(PostgresErrors.IsConflict(CreateSaveError(PostgresErrorCodes.UniqueViolation, "ux_categorie_autres")));
+        Assert.False(PostgresErrors.IsConflict(CreateSaveError(PostgresErrorCodes.CheckViolation, "ck_transaction_montant")));
+        Assert.False(PostgresErrors.IsConflict(new InvalidOperationException()));
+        Assert.True(PostgresErrors.IsConflict(new InvalidOperationException("Erreur passagère.", CreateSaveError(PostgresErrorCodes.DeadlockDetected))));
     }
 }

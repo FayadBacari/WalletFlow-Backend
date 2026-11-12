@@ -27,6 +27,15 @@ public class EnableBankingClient : IBankDataProvider
     // Longueur la plus grande du navigateur transmis à la banque.
     public const int MaximumHeaderLength = 512;
 
+    // Le plus grand nombre de pages d'opérations lues pour un compte, bien au-delà d'un an d'opérations. Au-delà, la lecture
+    // s'arrête comme une panne : un prestataire qui donnerait des pages sans fin ne bloque jamais une mise à jour.
+    public const int MaximumTransactionPages = 200;
+
+    // Les statuts d'opération et les sens de l'argent d'Enable Banking (codes ISO 20022).
+    public const string BookedStatus = "BOOK";
+    public const string CreditIndicator = "CRDT";
+    public const string DebitIndicator = "DBIT";
+
     // Les erreurs d'Enable Banking qui disent que la session ne sert plus : il faut une nouvelle autorisation.
     private static readonly List<string> SessionEndedErrors = new List<string>
     {
@@ -181,6 +190,111 @@ public class EnableBankingClient : IBankDataProvider
         }
 
         return balances;
+    }
+
+    // Donne les opérations d'un compte depuis ce jour, compris (UTC). La stratégie « longest » d'Enable Banking lit
+    // la plus longue période que la banque permet à partir de ce jour, au lieu de refuser une période trop ancienne.
+    // Chaque page suivante est demandée avec les mêmes paramètres et la clé reçue, jusqu'à ce qu'aucune clé ne vienne.
+    public async Task<List<ProvidedTransaction>> ReadTransactionsAsync(string accountUid, DateOnly startDate, UserPresence? presence)
+    {
+        var firstPagePath = "accounts/" + Uri.EscapeDataString(accountUid)
+            + "/transactions?date_from=" + startDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)
+            + "&strategy=longest";
+        var transactions = new List<ProvidedTransaction>();
+        string? continuationKey = null;
+
+        for (var pageNumber = 1; pageNumber <= MaximumTransactionPages; pageNumber++)
+        {
+            var path = firstPagePath;
+
+            if (continuationKey != null)
+            {
+                path = path + "&continuation_key=" + Uri.EscapeDataString(continuationKey);
+            }
+
+            var response = await SendAsync<TransactionsResponse>(HttpMethod.Get, path, null, presence, "accounts/{id}/transactions");
+
+            foreach (var transaction in response.Transactions ?? new List<TransactionResource>())
+            {
+                transactions.Add(ReadTransaction(transaction));
+            }
+
+            if (string.IsNullOrEmpty(response.ContinuationKey))
+            {
+                return transactions;
+            }
+
+            continuationKey = response.ContinuationKey;
+        }
+
+        throw Unavailable("accounts/{id}/transactions", "Enable Banking a donné trop de pages d'opérations.");
+    }
+
+    // Traduit une opération d'Enable Banking. Le sens vient de l'indicateur crédit ou débit, jamais du signe du montant :
+    // un montant sans sens connu est illisible. La date est la date comptable, ou à défaut la date de valeur.
+    private static ProvidedTransaction ReadTransaction(TransactionResource transaction)
+    {
+        var amountInCents = ReadCents(transaction.TransactionAmount?.Amount);
+        long? signedAmountInCents = null;
+
+        if (amountInCents is long amount && transaction.CreditDebitIndicator == CreditIndicator)
+        {
+            signedAmountInCents = Math.Abs(amount);
+        }
+
+        if (amountInCents is long debitAmount && transaction.CreditDebitIndicator == DebitIndicator)
+        {
+            signedAmountInCents = -Math.Abs(debitAmount);
+        }
+
+        return new ProvidedTransaction(
+            transaction.EntryReference,
+            transaction.Status == BookedStatus,
+            ReadDate(transaction.BookingDate) ?? ReadDate(transaction.ValueDate),
+            signedAmountInCents,
+            transaction.TransactionAmount?.Currency ?? string.Empty,
+            ChooseLabel(transaction));
+    }
+
+    // Le libellé : le texte que la banque joint à l'opération, sinon le nom de l'autre partie, sinon le type d'opération.
+    private static string ChooseLabel(TransactionResource transaction)
+    {
+        var lines = new List<string>();
+
+        foreach (var line in transaction.RemittanceInformation ?? new List<string?>())
+        {
+            if (!string.IsNullOrWhiteSpace(line))
+            {
+                lines.Add(line);
+            }
+        }
+
+        if (lines.Count > 0)
+        {
+            return string.Join(" ", lines);
+        }
+
+        var otherPartyName = transaction.CreditDebitIndicator == CreditIndicator
+            ? transaction.Debtor?.Name
+            : transaction.Creditor?.Name;
+
+        if (!string.IsNullOrWhiteSpace(otherPartyName))
+        {
+            return otherPartyName;
+        }
+
+        return transaction.BankTransactionCode?.Description ?? string.Empty;
+    }
+
+    // Lit une date écrite comme « 2026-11-12 ». Renvoie null si elle est absente ou illisible.
+    private static DateOnly? ReadDate(string? date)
+    {
+        if (DateOnly.TryParseExact(date, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var readDate))
+        {
+            return readDate;
+        }
+
+        return null;
     }
 
     // Révoque la session. Une session déjà finie, ou inconnue, compte comme révoquée. Le corps de la réponse n'est pas lu.

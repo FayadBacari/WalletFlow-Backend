@@ -1,5 +1,6 @@
 using WalletFlow.Application.Persistence;
 using WalletFlow.Application.Security;
+using WalletFlow.Application.Transactions;
 using WalletFlow.Domain.AccountsAndCategories;
 using WalletFlow.Domain.UsersAndSecurity;
 
@@ -7,23 +8,26 @@ namespace WalletFlow.Application.BankConnections;
 
 // Cas d'utilisation : l'utilisateur revient de sa banque, et WalletFlow termine la connexion ou son renouvellement (GR Comptes).
 // Le state doit être celui que WalletFlow a donné à cet utilisateur (SS §7). Seuls les comptes en euros sont gardés.
+// Les opérations des comptes gardés sont lues aussitôt, l'utilisateur étant là.
 public class BankConnectionFinishService
 {
     private readonly IBankDataProvider bankProvider;
     private readonly IBankConnectionRepository connectionRepository;
     private readonly IBankAuthorizationStore authorizationStore;
     private readonly ISecureTokenGenerator tokenGenerator;
+    private readonly BankTransactionArrival transactionArrival;
     private readonly DatabaseChangesSavingService savingService;
     private readonly SecurityJournalService securityJournal;
     private readonly TimeProvider clock;
 
     // Reçoit le prestataire, l'accès aux connexions, la mémoire des autorisations commencées, le créateur de jetons,
-    // l'enregistrement avec réessai, le journal de sécurité et l'horloge.
+    // l'arrivée des opérations, l'enregistrement avec réessai, le journal de sécurité et l'horloge.
     public BankConnectionFinishService(
         IBankDataProvider bankProvider,
         IBankConnectionRepository connectionRepository,
         IBankAuthorizationStore authorizationStore,
         ISecureTokenGenerator tokenGenerator,
+        BankTransactionArrival transactionArrival,
         DatabaseChangesSavingService savingService,
         SecurityJournalService securityJournal,
         TimeProvider clock)
@@ -32,6 +36,7 @@ public class BankConnectionFinishService
         this.connectionRepository = connectionRepository;
         this.authorizationStore = authorizationStore;
         this.tokenGenerator = tokenGenerator;
+        this.transactionArrival = transactionArrival;
         this.savingService = savingService;
         this.securityJournal = securityJournal;
         this.clock = clock;
@@ -71,13 +76,93 @@ public class BankConnectionFinishService
 
         var result = await KeepSessionAsync(userId, authorization, session, presence);
 
-        // Une session qui n'a rien donné est révoquée tout de suite : WalletFlow ne garde aucun accès inutile.
-        if (result is not BankConnectionFinishResult.Connected && result is not BankConnectionFinishResult.Renewed)
+        if (result is BankConnectionFinishResult.Connected connected)
         {
-            await RevokeQuietlyAsync(session.SessionId);
+            await ReceiveFirstTransactionsAsync(userId, connected.ConnectionId, session, presence);
+            return result;
         }
 
+        if (result is BankConnectionFinishResult.Renewed renewed)
+        {
+            await ReceiveFirstTransactionsAsync(userId, renewed.ConnectionId, session, presence);
+            return result;
+        }
+
+        // Une session qui n'a rien donné est révoquée tout de suite : WalletFlow ne garde aucun accès inutile.
+        await RevokeQuietlyAsync(session.SessionId);
         return result;
+    }
+
+    // Lit les opérations de chaque compte gardé, l'utilisateur étant là, juste après l'autorisation : c'est alors que la banque
+    // donne le plus d'historique. Si elle ne répond pas, la connexion reste faite : les opérations arriveront à la mise à jour
+    // suivante, qui repart de la dernière opération gardée.
+    private async Task ReceiveFirstTransactionsAsync(Guid userId, Guid connectionId, ProvidedSession session, UserPresence presence)
+    {
+        var today = DateOnly.FromDateTime(clock.GetUtcNow().UtcDateTime);
+        var storedAccounts = await connectionRepository.FindAccountsAsync(new List<Guid> { connectionId });
+        var transactionsByAccount = new Dictionary<Guid, List<ReceivedTransaction>>();
+
+        foreach (var storedAccount in storedAccounts)
+        {
+            var sessionAccount = session.Accounts.FirstOrDefault(account => account.StableId == storedAccount.ExternalAccountId);
+
+            if (sessionAccount == null)
+            {
+                continue;
+            }
+
+            var startDate = await transactionArrival.ChooseReadingStartAsync(storedAccount.Id, today);
+
+            try
+            {
+                var providedTransactions = await bankProvider.ReadTransactionsAsync(sessionAccount.Uid, startDate, presence);
+                transactionsByAccount[storedAccount.Id] = TransactionReception.Receive(providedTransactions);
+            }
+            catch (BankProviderException)
+            {
+            }
+        }
+
+        if (transactionsByAccount.Count == 0)
+        {
+            return;
+        }
+
+        await savingService.SaveWithRetriesAsync(
+            () => PrepareFirstTransactionsAsync(userId, connectionId, transactionsByAccount),
+            0);
+    }
+
+    // Un passage : vérifie que la connexion est toujours là, puis prépare les opérations nouvelles de chacun de ses comptes.
+    private async Task<PreparedChanges<int>> PrepareFirstTransactionsAsync(
+        Guid userId,
+        Guid connectionId,
+        Dictionary<Guid, List<ReceivedTransaction>> transactionsByAccount)
+    {
+        var connection = await connectionRepository.FindConnectionAsync(userId, connectionId);
+
+        if (connection == null)
+        {
+            return PreparedChanges<int>.NothingToSave(0);
+        }
+
+        var accounts = await connectionRepository.FindAccountsAsync(new List<Guid> { connectionId });
+        var preparedCount = 0;
+
+        foreach (var account in accounts)
+        {
+            if (transactionsByAccount.TryGetValue(account.Id, out var receivedTransactions))
+            {
+                preparedCount = preparedCount + await transactionArrival.PrepareNewTransactionsAsync(userId, account.Id, receivedTransactions);
+            }
+        }
+
+        if (preparedCount == 0)
+        {
+            return PreparedChanges<int>.NothingToSave(0);
+        }
+
+        return PreparedChanges<int>.SaveThenReturn(preparedCount);
     }
 
     // Lit les comptes de la nouvelle session, puis enregistre la connexion ou son renouvellement.

@@ -44,6 +44,12 @@ public class BankProviderNotConfigured : IBankDataProvider
     }
 
     // Échoue : aucun prestataire n'est configuré.
+    public Task<List<ProvidedTransaction>> ReadTransactionsAsync(string accountUid, DateOnly startDate, UserPresence? presence)
+    {
+        throw NotConfigured();
+    }
+
+    // Échoue : aucun prestataire n'est configuré.
     public Task RevokeSessionAsync(string sessionId)
     {
         throw NotConfigured();

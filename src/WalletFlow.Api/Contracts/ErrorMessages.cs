@@ -79,4 +79,19 @@ public static class ErrorMessages
         "Aucun compte n'a pu être ajouté : WalletFlow garde seulement les comptes en euros, et chacun une seule fois.";
 
     public const string BankConnectionsChangedMeanwhile = "Tes connexions bancaires viennent de changer. Réessaie.";
+
+    // Le nombre écrit ici est TransactionRules.MaximumLabelLength : un test vérifie qu'ils restent égaux.
+    public const string TransactionSearchTextTooLong = "Le texte cherché contient au plus 255 caractères.";
+
+    // Les montants écrits ici sont ceux de TransactionRules, en euros : 1 centime et 1 000 000 000 centimes.
+    public const string TransactionSearchAmountBreaksRules = "Le montant cherché va de 0,01 € à 10 000 000 €.";
+
+    public const string TransactionSearchDatesReversed = "La date de fin ne peut pas être avant la date de début.";
+
+    // Le nombre écrit ici est TransactionSearchService.MaximumPage : un test vérifie qu'ils restent égaux.
+    public const string TransactionSearchPageBreaksRules = "Le numéro de page va de 1 à 10 000.";
+
+    public const string TransactionLabelWithoutLetter = "Ce libellé ne contient aucune lettre : aucune règle ne peut le reconnaître.";
+
+    public const string TransactionsChangedMeanwhile = "Tes opérations viennent de changer. Réessaie.";
 }

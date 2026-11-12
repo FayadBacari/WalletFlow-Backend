@@ -24,10 +24,14 @@ public class FakeBankDataProvider : IBankDataProvider
     public Dictionary<string, List<ProvidedBalance>> BalancesByAccountUid { get; } = new Dictionary<string, List<ProvidedBalance>>();
     public HashSet<string> EndedSessions { get; } = new HashSet<string>();
 
+    // Les opérations de chaque compte, par identifiant stable : les mêmes d'une session à l'autre, comme chez une vraie banque.
+    public Dictionary<string, List<ProvidedTransaction>> TransactionsByStableId { get; } = new Dictionary<string, List<ProvidedTransaction>>();
+
     // Ce que les tests vérifient : les autorisations demandées, les sessions révoquées, et la présence transmise à chaque lecture.
     public List<BankAuthorizationRequest> AuthorizationRequests { get; } = new List<BankAuthorizationRequest>();
     public List<string> RevokedSessions { get; } = new List<string>();
     public List<UserPresence?> BalanceReadPresences { get; } = new List<UserPresence?>();
+    public List<TransactionReading> TransactionReadings { get; } = new List<TransactionReading>();
     public int UsedCodeCount { get; private set; } = 0;
 
     // Simule une panne de tout le prestataire.
@@ -38,6 +42,9 @@ public class FakeBankDataProvider : IBankDataProvider
 
     // Simule une révocation que le prestataire ne confirme pas.
     public bool RevocationFails { get; set; } = false;
+
+    // Simule une lecture d'opérations refusée pour cette raison. Les soldes, eux, restent lisibles.
+    public BankProviderFailure? TransactionFailure { get; set; } = null;
 
     // La fin d'autorisation des prochaines sessions. Sans réglage : 180 jours après l'heure réelle, moins la marge d'horloge.
     public DateTime? SessionValidUntil { get; set; } = null;
@@ -73,6 +80,30 @@ public class FakeBankDataProvider : IBankDataProvider
             AccountsBySession[sessionId] = sessionAccounts;
 
             return session;
+        }
+    }
+
+    // Ajoute à ce compte une opération comptabilisée en euros, et la renvoie.
+    public ProvidedTransaction AddTransaction(string stableId, DateOnly date, long amountInCents, string label, string? reference = null)
+    {
+        var transaction = new ProvidedTransaction(reference, true, date, amountInCents, "EUR", label);
+        AddProvidedTransaction(stableId, transaction);
+
+        return transaction;
+    }
+
+    // Ajoute à ce compte une opération telle quelle, même invalide : un test y vérifie qu'elle est écartée.
+    public void AddProvidedTransaction(string stableId, ProvidedTransaction transaction)
+    {
+        lock (providerLock)
+        {
+            if (!TransactionsByStableId.TryGetValue(stableId, out var transactions))
+            {
+                transactions = new List<ProvidedTransaction>();
+                TransactionsByStableId[stableId] = transactions;
+            }
+
+            transactions.Add(transaction);
         }
     }
 
@@ -163,6 +194,34 @@ public class FakeBankDataProvider : IBankDataProvider
         }
     }
 
+    // Donne les opérations du compte à partir de ce jour, comme le date_from du vrai prestataire, et note la lecture.
+    // Le compte d'une session finie ou révoquée n'est plus lisible.
+    public Task<List<ProvidedTransaction>> ReadTransactionsAsync(string accountUid, DateOnly startDate, UserPresence? presence)
+    {
+        lock (providerLock)
+        {
+            ThrowIfDown();
+            var sessionId = AccountsBySession.Keys.FirstOrDefault(session => AccountsBySession[session].Any(account => account.Uid == accountUid));
+
+            if (sessionId == null || EndedSessions.Contains(sessionId) || RevokedSessions.Contains(sessionId))
+            {
+                throw new BankProviderException(BankProviderFailure.SessionEnded, "Session finie.");
+            }
+
+            var stableId = AccountsBySession[sessionId].First(account => account.Uid == accountUid).StableId;
+            TransactionReadings.Add(new TransactionReading(stableId, startDate, presence));
+
+            if (TransactionFailure is BankProviderFailure failure)
+            {
+                throw new BankProviderException(failure, "Lecture des opérations refusée par le test.");
+            }
+
+            var transactions = TransactionsByStableId.GetValueOrDefault(stableId) ?? new List<ProvidedTransaction>();
+
+            return Task.FromResult(transactions.Where(transaction => transaction.Date == null || transaction.Date >= startDate).ToList());
+        }
+    }
+
     // Note la session révoquée, ou échoue si le test le demande.
     public Task RevokeSessionAsync(string sessionId)
     {
@@ -190,3 +249,6 @@ public class FakeBankDataProvider : IBankDataProvider
 
 // Un compte d'une fausse session : son identifiant stable, son nom, sa devise et son solde comptable.
 public record TestBankAccount(string StableId, string? Name, string Currency, long BalanceInCents);
+
+// Une lecture d'opérations faite chez le faux prestataire : le compte, le premier jour demandé, et la présence transmise.
+public record TransactionReading(string StableId, DateOnly StartDate, UserPresence? Presence);

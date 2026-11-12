@@ -7,6 +7,7 @@ using WalletFlow.Application.BankConnections;
 using WalletFlow.Application.Categories;
 using WalletFlow.Application.Emails;
 using WalletFlow.Application.Security;
+using WalletFlow.Application.Transactions;
 using WalletFlow.Application.TwoFactorAuthentication;
 using WalletFlow.Application.UserAccounts;
 using WalletFlow.Application.UserSessions;
@@ -24,6 +25,7 @@ public class ApiFactoryWithFakes : WebApplicationFactory<Program>
     public FakeTwoFactorAuthenticationRepository TwoFactorRepository { get; } = new FakeTwoFactorAuthenticationRepository();
     public FakeCategoryRepository CategoryRepository { get; }
     public FakeBankConnectionRepository BankRepository { get; } = new FakeBankConnectionRepository();
+    public FakeTransactionRepository TransactionRepository { get; }
     public FakeBankDataProvider BankProvider { get; } = new FakeBankDataProvider();
     public FakeDatabaseUnitOfWork UnitOfWork { get; }
     public FakeEmailSender EmailSender { get; } = new FakeEmailSender();
@@ -38,13 +40,15 @@ public class ApiFactoryWithFakes : WebApplicationFactory<Program>
     public ApiFactoryWithFakes()
     {
         CategoryRepository = new FakeCategoryRepository(AccountRepository.SavedCategories);
+        TransactionRepository = new FakeTransactionRepository(BankRepository, CategoryRepository);
         UnitOfWork = new FakeDatabaseUnitOfWork(
             AccountRepository,
             SessionRepository,
             TwoFactorRepository,
             SecurityEventRepository,
             CategoryRepository,
-            BankRepository);
+            BankRepository,
+            TransactionRepository);
     }
 
     // Remplace les services avant le démarrage de l'API (nom imposé par le framework).
@@ -61,6 +65,7 @@ public class ApiFactoryWithFakes : WebApplicationFactory<Program>
             services.AddSingleton<ITwoFactorAuthenticationRepository>(TwoFactorRepository);
             services.AddSingleton<ICategoryRepository>(CategoryRepository);
             services.AddSingleton<IBankConnectionRepository>(BankRepository);
+            services.AddSingleton<ITransactionRepository>(TransactionRepository);
             services.AddSingleton<IBankDataProvider>(BankProvider);
             services.AddSingleton<IEmailSender>(EmailSender);
             services.AddSingleton<TimeProvider>(Clock);

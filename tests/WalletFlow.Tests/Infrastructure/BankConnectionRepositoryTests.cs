@@ -3,6 +3,7 @@ using Microsoft.EntityFrameworkCore;
 using Npgsql;
 using WalletFlow.Application.BankConnections;
 using WalletFlow.Application.Configuration;
+using WalletFlow.Application.Transactions;
 using WalletFlow.Domain.AccountsAndCategories;
 using WalletFlow.Domain.UsersAndSecurity;
 using WalletFlow.Infrastructure.BankData;
@@ -11,6 +12,7 @@ using WalletFlow.Infrastructure.Persistence.Repositories;
 using WalletFlow.Infrastructure.Security;
 using WalletFlow.Tests.EndToEnd;
 using WalletFlow.Tests.Fakes;
+using static WalletFlow.Tests.Infrastructure.BankTestRows;
 using static WalletFlow.Tests.Infrastructure.LocalTestDatabase;
 
 namespace WalletFlow.Tests.Infrastructure;
@@ -20,49 +22,8 @@ namespace WalletFlow.Tests.Infrastructure;
 // enregistre pour de vrai, car une autre transaction doit voir ses lignes : il efface son compte à la fin.
 public class BankConnectionRepositoryTests
 {
-    private static readonly DateTime Now = new DateTime(2026, 11, 12, 10, 0, 0, DateTimeKind.Utc);
+    private static readonly DateTime Now = BankTestRows.Now;
     private static readonly TimeSpan MaximumWait = TimeSpan.FromSeconds(30);
-
-    // Enregistre un compte confirmé avec ses catégories par défaut, puis oublie les objets gardés en mémoire.
-    private static async Task<User> SaveAccountAsync(WalletFlowDatabaseContext databaseContext, string email)
-    {
-        var account = await SaveConfirmedAccountAsync(databaseContext, email);
-        databaseContext.Categories.AddRange(DefaultCategories.CreateForUser(account.Id));
-        await databaseContext.SaveChangesAsync();
-        databaseContext.ChangeTracker.Clear();
-
-        return account;
-    }
-
-    // Enregistre une connexion de ce compte, avec un compte bancaire de cet identifiant stable, puis oublie les objets.
-    private static async Task<(BankConnection Connection, BankAccount Account)> SaveConnectionAsync(
-        WalletFlowDatabaseContext databaseContext,
-        Guid userId,
-        string stableId,
-        BankConnectionStatus status = BankConnectionStatus.Active)
-    {
-        var connection = new BankConnection
-        {
-            ExternalConnectionId = "session-" + Guid.NewGuid(),
-            BankName = "Banque de test",
-            Status = status,
-            AuthorizationExpiresAt = Now.AddDays(100),
-            UserId = userId
-        };
-        var account = new BankAccount
-        {
-            ExternalAccountId = stableId,
-            Name = "Compte courant",
-            BalanceInCents = 10_000,
-            BalanceUpdatedAt = Now,
-            BankConnectionId = connection.Id
-        };
-        databaseContext.AddRange(connection, account);
-        await databaseContext.SaveChangesAsync();
-        databaseContext.ChangeTracker.Clear();
-
-        return (connection, account);
-    }
 
     // SS §4 : chaque recherche d'un utilisateur filtre sur l'utilisateur de la session.
     [Fact]
@@ -356,17 +317,18 @@ public class BankConnectionRepositoryTests
         var tokens = new RandomSecureTokenGenerator();
         var journal = CreateSecurityJournal(databaseContext, clock);
         var presence = new UserPresence(IPAddress.Parse("203.0.113.7"), "Navigateur de test");
+        var arrival = new BankTransactionArrival(new TransactionRepository(databaseContext), new CategoryRepository(databaseContext));
 
         await new BankAuthorizationStartService(provider, repository, store, tokens, new PublicWebsiteSettings("https://walletflow.test"), clock)
             .StartNewAsync(user.Id, FakeBankDataProvider.BankName);
         provider.AddSession("code-1", new TestBankAccount("stable-1", "Compte courant", "EUR", 10_000));
-        var finished = await new BankConnectionFinishService(provider, repository, store, tokens, CreateSavingService(databaseContext), journal, clock)
+        var finished = await new BankConnectionFinishService(provider, repository, store, tokens, arrival, CreateSavingService(databaseContext), journal, clock)
             .FinishAsync(user.Id, "code-1", provider.AuthorizationRequests.Single().State, presence);
         var connectionId = Assert.IsType<BankConnectionFinishResult.Connected>(finished).ConnectionId;
 
         provider.ChangeBalance("stable-1", 42_000);
         clock.Advance(TimeSpan.FromHours(1));
-        await new BankBalanceUpdateService(provider, repository, new InMemoryBankUpdateLimiter(clock), CreateSavingService(databaseContext), clock)
+        await new BankBalanceUpdateService(provider, repository, new InMemoryBankUpdateLimiter(clock), arrival, CreateSavingService(databaseContext), clock)
             .UpdateForUserAsync(user.Id, presence);
         var updatedAccount = await databaseContext.BankAccounts.AsNoTracking().SingleAsync(row => row.BankConnectionId == connectionId);
 

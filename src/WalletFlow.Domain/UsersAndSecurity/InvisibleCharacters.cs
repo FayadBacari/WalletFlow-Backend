@@ -39,8 +39,9 @@ public static class InvisibleCharacters
         return visibleText.ToString();
     }
 
-    // Un morceau de caractère mal formé est lu par .NET comme le caractère de remplacement U+FFFD : il est refusé lui aussi.
-    private static bool IsInvisible(Rune character)
+    // Renvoie vrai si ce caractère ne se voit pas. Un morceau de caractère mal formé est lu par .NET
+    // comme le caractère de remplacement U+FFFD : il compte lui aussi.
+    public static bool IsInvisible(Rune character)
     {
         var category = Rune.GetUnicodeCategory(character);
 

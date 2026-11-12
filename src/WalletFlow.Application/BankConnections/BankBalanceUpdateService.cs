@@ -1,29 +1,34 @@
 using WalletFlow.Application.Persistence;
+using WalletFlow.Application.Transactions;
 using WalletFlow.Domain.AccountsAndCategories;
 
 namespace WalletFlow.Application.BankConnections;
 
-// Cas d'utilisation : les soldes sont mis à jour à chaque ouverture de l'application, et jusqu'à 4 fois par jour
-// en arrière-plan (GR Comptes). Si la banque ne répond pas, le dernier solde reste affiché avec sa date.
+// Cas d'utilisation : les soldes et les opérations sont mis à jour à chaque ouverture de l'application, et jusqu'à 4 fois
+// par jour en arrière-plan (GR Comptes). Si la banque ne répond pas, le dernier solde reste affiché avec sa date.
 public class BankBalanceUpdateService
 {
     private readonly IBankDataProvider bankProvider;
     private readonly IBankConnectionRepository connectionRepository;
     private readonly IBankUpdateLimiter updateLimiter;
+    private readonly BankTransactionArrival transactionArrival;
     private readonly DatabaseChangesSavingService savingService;
     private readonly TimeProvider clock;
 
-    // Reçoit le prestataire, l'accès aux connexions, la limite par utilisateur, l'enregistrement avec réessai et l'horloge.
+    // Reçoit le prestataire, l'accès aux connexions, la limite par utilisateur, l'arrivée des opérations,
+    // l'enregistrement avec réessai et l'horloge.
     public BankBalanceUpdateService(
         IBankDataProvider bankProvider,
         IBankConnectionRepository connectionRepository,
         IBankUpdateLimiter updateLimiter,
+        BankTransactionArrival transactionArrival,
         DatabaseChangesSavingService savingService,
         TimeProvider clock)
     {
         this.bankProvider = bankProvider;
         this.connectionRepository = connectionRepository;
         this.updateLimiter = updateLimiter;
+        this.transactionArrival = transactionArrival;
         this.savingService = savingService;
         this.clock = clock;
     }
@@ -46,7 +51,7 @@ public class BankBalanceUpdateService
         return new BankUpdateResult.Updated();
     }
 
-    // Met à jour une connexion : lit sa session et ses soldes chez le prestataire, puis enregistre le résultat.
+    // Met à jour une connexion : lit sa session, ses soldes et ses opérations chez le prestataire, puis enregistre le résultat.
     // Sans l'utilisateur (presence null), la lecture compte dans les 4 lectures par jour de la banque.
     public async Task UpdateConnectionAsync(Guid connectionId, UserPresence? presence)
     {
@@ -60,8 +65,8 @@ public class BankBalanceUpdateService
         var now = clock.GetUtcNow().UtcDateTime;
         var readSessionId = connection.ExternalConnectionId;
         var reading = connection.HasAuthorizationEnded(now)
-            ? new BankReading(BankReadingOutcome.SessionEnded, new Dictionary<Guid, int>())
-            : await ReadBalancesAsync(connection, presence);
+            ? new BankReading(BankReadingOutcome.SessionEnded, new Dictionary<Guid, int>(), new Dictionary<Guid, List<ReceivedTransaction>>())
+            : await ReadBankAsync(connection, presence, DateOnly.FromDateTime(now));
 
         if (reading.Outcome == BankReadingOutcome.TryLater)
         {
@@ -73,11 +78,12 @@ public class BankBalanceUpdateService
             false);
     }
 
-    // Lit chez le prestataire le solde de chaque compte gardé, retrouvé dans la session par son identifiant stable.
-    private async Task<BankReading> ReadBalancesAsync(BankConnection connection, UserPresence? presence)
+    // Lit chez le prestataire le solde et les opérations de chaque compte gardé, retrouvé dans la session par son identifiant stable.
+    private async Task<BankReading> ReadBankAsync(BankConnection connection, UserPresence? presence, DateOnly today)
     {
         var storedAccounts = await connectionRepository.FindAccountsAsync(new List<Guid> { connection.Id });
         var balances = new Dictionary<Guid, int>();
+        var transactions = new Dictionary<Guid, List<ReceivedTransaction>>();
 
         try
         {
@@ -98,21 +104,45 @@ public class BankBalanceUpdateService
                 {
                     balances[storedAccount.Id] = balance.Value;
                 }
+
+                var receivedTransactions = await ReadTransactionsAsync(storedAccount.Id, sessionAccount.Uid, presence, today);
+
+                if (receivedTransactions != null)
+                {
+                    transactions[storedAccount.Id] = receivedTransactions;
+                }
             }
 
-            return new BankReading(BankReadingOutcome.Read, balances);
+            return new BankReading(BankReadingOutcome.Read, balances, transactions);
         }
         catch (BankProviderException exception) when (exception.Failure == BankProviderFailure.SessionEnded)
         {
-            return new BankReading(BankReadingOutcome.SessionEnded, balances);
+            return new BankReading(BankReadingOutcome.SessionEnded, balances, transactions);
         }
         catch (BankProviderException exception) when (exception.Failure == BankProviderFailure.RateLimited)
         {
-            return new BankReading(BankReadingOutcome.TryLater, balances);
+            return new BankReading(BankReadingOutcome.TryLater, balances, transactions);
         }
         catch (BankProviderException)
         {
-            return new BankReading(BankReadingOutcome.BankFailed, balances);
+            return new BankReading(BankReadingOutcome.BankFailed, balances, transactions);
+        }
+    }
+
+    // Lit les opérations du compte depuis le jour choisi. Si la banque refuse ou ne répond pas pour les opérations,
+    // le solde déjà lu est quand même enregistré : les opérations arriveront à la mise à jour suivante, qui repart
+    // de la dernière opération gardée. Une session finie, elle, fait expirer toute la connexion.
+    private async Task<List<ReceivedTransaction>?> ReadTransactionsAsync(Guid accountId, string accountUid, UserPresence? presence, DateOnly today)
+    {
+        var startDate = await transactionArrival.ChooseReadingStartAsync(accountId, today);
+
+        try
+        {
+            return TransactionReception.Receive(await bankProvider.ReadTransactionsAsync(accountUid, startDate, presence));
+        }
+        catch (BankProviderException exception) when (exception.Failure != BankProviderFailure.SessionEnded)
+        {
+            return null;
         }
     }
 
@@ -149,19 +179,27 @@ public class BankBalanceUpdateService
             {
                 account.UpdateBalance(balanceInCents, now);
             }
+
+            if (reading.Transactions.TryGetValue(account.Id, out var receivedTransactions))
+            {
+                await transactionArrival.PrepareNewTransactionsAsync(connection.UserId, account.Id, receivedTransactions);
+            }
         }
 
         connection.RecordSuccessfulUpdate();
         return PreparedChanges<bool>.SaveThenReturn(true);
     }
 
-    // Ce que la lecture chez le prestataire a donné, et les soldes lus, par compte.
-    private sealed record BankReading(BankReadingOutcome Outcome, Dictionary<Guid, int> Balances);
+    // Ce que la lecture chez le prestataire a donné : les soldes lus et les opérations reçues, par compte.
+    private sealed record BankReading(
+        BankReadingOutcome Outcome,
+        Dictionary<Guid, int> Balances,
+        Dictionary<Guid, List<ReceivedTransaction>> Transactions);
 
     // Les issues d'une lecture chez le prestataire.
     private enum BankReadingOutcome
     {
-        Read,          // les soldes sont lus
+        Read,          // les soldes et les opérations sont lus
         SessionEnded,  // l'autorisation est finie ou retirée : la connexion expire
         BankFailed,    // la banque ou le prestataire ne répond pas : la connexion passe en erreur
         TryLater       // la banque refuse pour l'instant : rien ne change, le prochain passage réessaiera

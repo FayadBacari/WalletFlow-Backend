@@ -11,6 +11,7 @@ using WalletFlow.Application.AccountRecovery;
 using WalletFlow.Application.AccountSettings;
 using WalletFlow.Application.BankConnections;
 using WalletFlow.Application.Categories;
+using WalletFlow.Application.Transactions;
 using WalletFlow.Application.Configuration;
 using WalletFlow.Application.Persistence;
 using WalletFlow.Application.Security;
@@ -140,6 +141,11 @@ builder.Services.AddScoped<BankConnectionListService>();
 builder.Services.AddScoped<BankBalanceUpdateService>();
 builder.Services.AddScoped<BankBackgroundUpdateService>();
 builder.Services.AddScoped<BankDisconnectionService>();
+builder.Services.AddScoped<BankBalanceTotalService>();
+builder.Services.AddScoped<BankTransactionArrival>();
+builder.Services.AddScoped<TransactionSearchService>();
+builder.Services.AddScoped<TransactionCategoryChangeService>();
+builder.Services.AddScoped<TransactionTransferService>();
 
 // Tâches de fond : effacent chaque jour les comptes non confirmés dont le lien a expiré (GR Auth) et les sessions expirées,
 // préparent les e-mails de récupération et de déblocage, et mettent à jour les soldes jusqu'à 4 fois par jour (GR Comptes).
@@ -170,6 +176,10 @@ builder.Services
         // une route publique doit le dire avec [AllowAnonymous] et [IgnoreAntiforgeryToken] (SS §4 et §6).
         options.Filters.Add(new AuthorizeFilter());
         options.Filters.Add(new AutoValidateAntiforgeryTokenAttribute());
+
+        // Une valeur illisible dans l'adresse, comme « amountInCents=abc », reçoit un message en français
+        // qui ne recopie jamais ce que le visiteur a écrit (SS §10).
+        ApiErrorConfiguration.TranslateBindingMessages(options.ModelBindingMessageProvider);
     })
     .ConfigureApiBehaviorOptions(options =>
     {

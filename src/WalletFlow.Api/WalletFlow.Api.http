@@ -280,3 +280,36 @@ DELETE {{WalletFlow_Api_SecureAddress}}/api/bank-connections/colle-ici-l-identif
 X-CSRF-TOKEN: colle-ici-le-jeton-anti-csrf
 
 ###
+
+# Solde total, tous comptes confondus, avec la date du plus ancien des soldes additionnés.
+GET {{WalletFlow_Api_SecureAddress}}/api/balance
+
+###
+
+# Recherche d'opérations : chaque critère est facultatif. Le montant est en centimes et cherché sans son signe.
+GET {{WalletFlow_Api_SecureAddress}}/api/transactions?text=carrefour&amountInCents=1250&from=2026-01-01&to=2026-12-31&page=1
+
+###
+
+# Changement de catégorie d'une opération, et, si demandé, des prochaines opérations qui ont le même libellé.
+PUT {{WalletFlow_Api_SecureAddress}}/api/transactions/colle-ici-l-identifiant/category
+Content-Type: application/json
+X-CSRF-TOKEN: colle-ici-le-jeton-anti-csrf
+
+{
+  "categoryId": "colle-ici-l-identifiant-de-la-categorie",
+  "applyToFutureTransactions": true
+}
+
+###
+
+# Marque d'une opération comme transfert entre deux comptes de l'utilisateur, ou retrait de cette marque.
+PUT {{WalletFlow_Api_SecureAddress}}/api/transactions/colle-ici-l-identifiant/transfer
+Content-Type: application/json
+X-CSRF-TOKEN: colle-ici-le-jeton-anti-csrf
+
+{
+  "isInternalTransfer": true
+}
+
+###

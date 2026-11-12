@@ -19,6 +19,10 @@ public interface IBankDataProvider
     // Donne les soldes d'un compte. Quand l'utilisateur est là, la lecture ne compte pas dans les 4 lectures par jour de la banque.
     Task<List<ProvidedBalance>> ReadBalancesAsync(string accountUid, UserPresence? presence);
 
+    // Donne les opérations d'un compte depuis ce jour, compris, aussi loin que la banque le permet. Toutes les pages sont lues.
+    // Quand l'utilisateur est là, la lecture ne compte pas dans les 4 lectures par jour de la banque.
+    Task<List<ProvidedTransaction>> ReadTransactionsAsync(string accountUid, DateOnly startDate, UserPresence? presence);
+
     // Révoque la session chez le prestataire. Une session déjà finie, ou inconnue, compte comme révoquée.
     Task RevokeSessionAsync(string sessionId);
 }

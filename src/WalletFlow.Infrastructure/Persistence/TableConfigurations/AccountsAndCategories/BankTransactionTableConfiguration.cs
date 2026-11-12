@@ -34,5 +34,8 @@ public class BankTransactionTableConfiguration : IEntityTypeConfiguration<BankTr
         builder.HasOne<Category>().WithMany()
             .HasForeignKey(nameof(BankTransaction.CategoryId))
             .OnDelete(DeleteBehavior.NoAction);
+
+        // Deux changements simultanés de la même opération : le second relit l'opération avant d'écrire (voir IDatabaseUnitOfWork).
+        RowVersionConfiguration.AddRowVersion(builder);
     }
 }

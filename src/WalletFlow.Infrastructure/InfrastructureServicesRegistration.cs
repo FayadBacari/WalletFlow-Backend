@@ -8,6 +8,7 @@ using WalletFlow.Application.Categories;
 using WalletFlow.Application.Emails;
 using WalletFlow.Application.Persistence;
 using WalletFlow.Application.Security;
+using WalletFlow.Application.Transactions;
 using WalletFlow.Application.TwoFactorAuthentication;
 using WalletFlow.Application.UserAccounts;
 using WalletFlow.Application.UserSessions;
@@ -39,6 +40,7 @@ public static class InfrastructureServicesRegistration
         services.AddScoped<ITwoFactorAuthenticationRepository, TwoFactorAuthenticationRepository>();
         services.AddScoped<ICategoryRepository, CategoryRepository>();
         services.AddScoped<IBankConnectionRepository, BankConnectionRepository>();
+        services.AddScoped<ITransactionRepository, TransactionRepository>();
 
         return services;
     }

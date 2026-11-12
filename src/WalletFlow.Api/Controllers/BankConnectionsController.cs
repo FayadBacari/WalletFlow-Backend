@@ -8,7 +8,7 @@ using WalletFlow.Domain.AccountsAndCategories;
 namespace WalletFlow.Api.Controllers;
 
 // Connexions bancaires de l'utilisateur connecté, en lecture seule (GR Comptes, SS §7) : la liste des banques, la connexion
-// et son renouvellement, les comptes et leurs soldes, leur mise à jour, et la déconnexion.
+// et son renouvellement, les comptes et leurs soldes, le solde total, leur mise à jour, et la déconnexion.
 // Ces routes n'ont aucun attribut de sécurité : toute route demande par défaut une session et le jeton anti-CSRF (voir Program.cs).
 // La connexion d'un autre utilisateur répond 404, comme une adresse qui n'existe pas (SS §4).
 [ApiController]
@@ -23,6 +23,7 @@ public class BankConnectionsController : ControllerBase
     private readonly BankConnectionListService connectionListService;
     private readonly BankBalanceUpdateService balanceUpdateService;
     private readonly BankDisconnectionService disconnectionService;
+    private readonly BankBalanceTotalService balanceTotalService;
 
     // Reçoit les cas d'utilisation des connexions bancaires.
     public BankConnectionsController(
@@ -31,7 +32,8 @@ public class BankConnectionsController : ControllerBase
         BankConnectionFinishService finishService,
         BankConnectionListService connectionListService,
         BankBalanceUpdateService balanceUpdateService,
-        BankDisconnectionService disconnectionService)
+        BankDisconnectionService disconnectionService,
+        BankBalanceTotalService balanceTotalService)
     {
         this.bankListService = bankListService;
         this.authorizationStartService = authorizationStartService;
@@ -39,6 +41,7 @@ public class BankConnectionsController : ControllerBase
         this.connectionListService = connectionListService;
         this.balanceUpdateService = balanceUpdateService;
         this.disconnectionService = disconnectionService;
+        this.balanceTotalService = balanceTotalService;
     }
 
     // GET api/banks : les banques que l'utilisateur peut connecter, dans l'ordre alphabétique.
@@ -146,6 +149,17 @@ public class BankConnectionsController : ControllerBase
         }
 
         return Ok(await CreateConnectionResponsesAsync());
+    }
+
+    // GET api/balance : le solde total, tous comptes confondus (GR Comptes), avec la date du plus ancien des soldes additionnés.
+    // Chaque compte compte avec son dernier solde connu, même quand sa banque ne répond pas. Données financières : jamais gardées.
+    [HttpGet("balance")]
+    [ResponseCache(NoStore = true, Location = ResponseCacheLocation.None)]
+    public async Task<IActionResult> ReadBalanceTotal()
+    {
+        var total = await balanceTotalService.ReadAsync(SessionClaims.ReadUserId(User));
+
+        return Ok(new BalanceTotalResponse(total.TotalInCents, total.OldestBalanceUpdatedAt, total.AccountCount));
     }
 
     // DELETE api/bank-connections/{id} : révoque l'autorisation, puis supprime la banque, ses comptes et leurs transactions.

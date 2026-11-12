@@ -30,26 +30,11 @@ public class EntityFrameworkDatabaseUnitOfWork : IDatabaseUnitOfWork
             databaseContext.ChangeTracker.Clear();
             return false;
         }
-        catch (DbUpdateException exception)
+        catch (Exception exception) when (PostgresErrors.IsConflict(exception))
         {
-            // Une autre requête vient de prendre l'adresse e-mail, ou le nom de catégorie, que ces changements donnent,
-            // ou de supprimer la connexion bancaire à laquelle ils ajoutent un compte : c'est aussi un conflit.
+            // Une autre requête vient d'écrire au même instant (voir PostgresErrors.IsConflict) : c'est aussi un conflit.
+            // L'erreur arrive sous plusieurs formes selon le moment où PostgreSQL la voit : elle est cherchée dans toute la chaîne.
             // Tout est oublié, et le passage suivant relit tout. Toute autre erreur reste une panne.
-            if (!PostgresErrors.IsEmailAlreadyUsed(exception)
-                && !PostgresErrors.IsCategoryNameAlreadyUsed(exception)
-                && !PostgresErrors.IsBankConnectionGone(exception))
-            {
-                throw;
-            }
-
-            databaseContext.ChangeTracker.Clear();
-            return false;
-        }
-        catch (InvalidOperationException exception) when (PostgresErrors.IsDeadlock(exception))
-        {
-            // PostgreSQL a arrêté cette écriture pour débloquer un interblocage : c'est aussi un conflit, et rien n'est écrit.
-            // Npgsql range l'interblocage parmi les erreurs passagères : EF Core le donne dans cette exception,
-            // autour de la DbUpdateException (voir PostgresErrors.IsDeadlock).
             databaseContext.ChangeTracker.Clear();
             return false;
         }

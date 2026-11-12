@@ -13,4 +13,7 @@ public static class RequestSizeConfiguration
 
     // Le code et le state renvoyés par la banque, et le nom d'une banque, tiennent largement dans cette taille.
     public const long MaximumBankRequestBytes = 4096;
+
+    // Un identifiant de catégorie et deux valeurs vrai ou faux tiennent largement dans cette taille.
+    public const long MaximumTransactionRequestBytes = 1024;
 }

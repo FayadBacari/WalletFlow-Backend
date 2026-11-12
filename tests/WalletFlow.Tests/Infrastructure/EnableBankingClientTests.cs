@@ -314,6 +314,131 @@ public sealed class EnableBankingClientTests : IDisposable
         Assert.Equal(BankProviderFailure.Unavailable, await CatchFailureAsync(() => client.ReadBalancesAsync("uid-1", null)));
     }
 
+    // Prépare les pages d'opérations du faux serveur : chaque requête reçoit la page suivante, puis la dernière à nouveau.
+    private void AnswerPages(params string[] pages)
+    {
+        var pageNumber = 0;
+
+        server.Respond = request =>
+        {
+            var json = pages[Math.Min(pageNumber, pages.Length - 1)];
+            pageNumber = pageNumber + 1;
+
+            return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(json, Encoding.UTF8, "application/json") };
+        };
+    }
+
+    // Les opérations sont demandées depuis le jour choisi, avec la stratégie « longest », puis page après page avec la clé reçue,
+    // en gardant les mêmes paramètres, jusqu'à ce qu'aucune clé ne vienne. Une page vide avec une clé n'arrête pas la lecture.
+    [Fact]
+    public async Task OperationsAreReadPageAfterPageWithTheSameParameters()
+    {
+        AnswerPages(
+            """{ "transactions": [ { "status": "BOOK", "credit_debit_indicator": "DBIT", "transaction_amount": { "currency": "EUR", "amount": "12.50" }, "booking_date": "2026-11-02", "remittance_information": [ "CB CARREFOUR" ] } ], "continuation_key": "cle/1+2" }""",
+            """{ "transactions": [], "continuation_key": "cle-2" }""",
+            """{ "transactions": [ { "status": "BOOK", "credit_debit_indicator": "CRDT", "transaction_amount": { "currency": "EUR", "amount": "100.00" }, "booking_date": "2026-11-03", "remittance_information": [ "VIR SALAIRE" ] } ], "continuation_key": null }""");
+
+        var transactions = await client.ReadTransactionsAsync("../aspsps", new DateOnly(2025, 11, 12), null);
+
+        Assert.Equal(new List<string>
+        {
+            "/accounts/..%2Faspsps/transactions?date_from=2025-11-12&strategy=longest",
+            "/accounts/..%2Faspsps/transactions?date_from=2025-11-12&strategy=longest&continuation_key=cle%2F1%2B2",
+            "/accounts/..%2Faspsps/transactions?date_from=2025-11-12&strategy=longest&continuation_key=cle-2"
+        }, server.Requests.Select(request => request.PathAndQuery).ToList());
+        Assert.All(server.Requests, request => Assert.Equal(HttpMethod.Get, request.Method));
+        Assert.Equal(new List<long?> { -1250, 10_000 }, transactions.Select(transaction => transaction.AmountInCents).ToList());
+    }
+
+    // Chaque opération est lue sans rien croire : comptabilisée ou non, le sens par l'indicateur et jamais par le signe,
+    // la date comptable ou à défaut la date de valeur, la devise et la référence de la banque.
+    [Fact]
+    public async Task OperationFieldsAreReadSafely()
+    {
+        Answer(HttpStatusCode.OK, """
+            { "transactions": [
+                { "entry_reference": "REF-1", "status": "BOOK", "credit_debit_indicator": "DBIT", "transaction_amount": { "currency": "EUR", "amount": "-12.34" }, "booking_date": "2026-11-02", "value_date": "2026-11-01" },
+                { "status": "PDNG", "credit_debit_indicator": "CRDT", "transaction_amount": { "currency": "USD", "amount": "5" }, "value_date": "2026-11-03" },
+                { "status": "BOOK", "credit_debit_indicator": "AUTRE", "transaction_amount": { "currency": "EUR", "amount": "1.00" }, "booking_date": "pas une date" },
+                { "status": "BOOK", "credit_debit_indicator": "DBIT", "transaction_amount": { "currency": "EUR", "amount": "1.005" } },
+                { "status": "BOOK", "credit_debit_indicator": "CRDT", "transaction_amount": { "currency": "EUR", "amount": "-3.00" }, "booking_date": "2026-11-04" }
+            ] }
+            """);
+
+        var transactions = await client.ReadTransactionsAsync("uid-1", new DateOnly(2026, 1, 1), null);
+
+        Assert.Equal(new ProvidedTransaction("REF-1", true, new DateOnly(2026, 11, 2), -1234, "EUR", string.Empty), transactions[0]);
+        Assert.Equal(new ProvidedTransaction(null, false, new DateOnly(2026, 11, 3), 500, "USD", string.Empty), transactions[1]);
+        Assert.Null(transactions[2].AmountInCents);
+        Assert.Null(transactions[2].Date);
+        Assert.Null(transactions[3].AmountInCents);
+        Assert.Equal(300, transactions[4].AmountInCents);
+    }
+
+    // Le libellé : les lignes de texte de la banque, sinon le nom de l'autre partie, sinon le type d'opération.
+    // Les comptes de l'autre partie ne sont jamais lus (DD §13).
+    [Fact]
+    public async Task LabelComesFromTheTextThenTheOtherPartyThenTheType()
+    {
+        Answer(HttpStatusCode.OK, """
+            { "transactions": [
+                { "status": "BOOK", "credit_debit_indicator": "DBIT", "remittance_information": [ "CB CARREFOUR", " ", null, "PARIS 12" ], "creditor": { "name": "CARREFOUR SAS" } },
+                { "status": "BOOK", "credit_debit_indicator": "DBIT", "remittance_information": [], "creditor": { "name": "EDF" }, "debtor": { "name": "MOI" }, "creditor_account": { "iban": "FR00COMPTEDETEST" } },
+                { "status": "BOOK", "credit_debit_indicator": "CRDT", "creditor": { "name": "MOI" }, "debtor": { "name": "EMPLOYEUR SAS" } },
+                { "status": "BOOK", "credit_debit_indicator": "DBIT", "bank_transaction_code": { "description": "Frais bancaires" } }
+            ] }
+            """);
+
+        var transactions = await client.ReadTransactionsAsync("uid-1", new DateOnly(2026, 1, 1), null);
+
+        Assert.Equal(
+            new List<string> { "CB CARREFOUR PARIS 12", "EDF", "EMPLOYEUR SAS", "Frais bancaires" },
+            transactions.Select(transaction => transaction.Label).ToList());
+        Assert.DoesNotContain(transactions, transaction => transaction.Label.Contains("FR00"));
+    }
+
+    // DSP2 : l'adresse IP et le navigateur partent avec chaque page quand l'utilisateur est là, jamais sinon.
+    [Fact]
+    public async Task UserHeadersGoWithEveryPageOnlyWhenTheUserIsThere()
+    {
+        AnswerPages("""{ "transactions": [], "continuation_key": "cle-1" }""", """{ "transactions": [] }""");
+        await client.ReadTransactionsAsync("uid-1", new DateOnly(2026, 1, 1), new UserPresence(IPAddress.Parse("203.0.113.7"), "Navigateur"));
+
+        Assert.Equal(2, server.Requests.Count);
+        Assert.All(server.Requests, request => Assert.Equal("203.0.113.7", request.Headers["Psu-Ip-Address"]));
+
+        server.Requests.Clear();
+        AnswerPages("""{ "transactions": [] }""");
+        await client.ReadTransactionsAsync("uid-1", new DateOnly(2026, 1, 1), null);
+
+        Assert.False(server.Requests.Single().Headers.ContainsKey("Psu-Ip-Address"));
+    }
+
+    // Un prestataire qui donnerait des pages sans fin ne bloque jamais une mise à jour : la lecture s'arrête comme une panne.
+    [Fact]
+    public async Task EndlessPagesStopAsUnavailability()
+    {
+        Answer(HttpStatusCode.OK, """{ "transactions": [], "continuation_key": "encore" }""");
+
+        var failure = await CatchFailureAsync(() => client.ReadTransactionsAsync("uid-1", new DateOnly(2026, 1, 1), null));
+
+        Assert.Equal(BankProviderFailure.Unavailable, failure);
+        Assert.Equal(EnableBankingClient.MaximumTransactionPages, server.Requests.Count);
+    }
+
+    // Les erreurs d'une lecture d'opérations ont leur raison, comme celles des soldes.
+    [Theory]
+    [InlineData(HttpStatusCode.TooManyRequests, """{ "error": "ASPSP_RATE_LIMIT_EXCEEDED" }""", BankProviderFailure.RateLimited)]
+    [InlineData(HttpStatusCode.Unauthorized, """{ "error": "EXPIRED_SESSION" }""", BankProviderFailure.SessionEnded)]
+    [InlineData(HttpStatusCode.BadRequest, """{ "error": "WRONG_TRANSACTIONS_PERIOD" }""", BankProviderFailure.Unavailable)]
+    [InlineData(HttpStatusCode.OK, """{ "transactions": [ { "remittance_information": "pas une liste" } ] }""", BankProviderFailure.Unavailable)]
+    public async Task OperationReadingFailuresHaveTheirReason(HttpStatusCode statusCode, string json, BankProviderFailure expectedFailure)
+    {
+        Answer(statusCode, json);
+
+        Assert.Equal(expectedFailure, await CatchFailureAsync(() => client.ReadTransactionsAsync("uid-1", new DateOnly(2026, 1, 1), null)));
+    }
+
     // Un faux serveur HTTP : chaque requête reçoit la réponse préparée par le test, et est gardée pour être vérifiée.
     private sealed class FakeHttpHandler : HttpMessageHandler
     {

@@ -49,6 +49,9 @@
 - L'identification se fait sur la page de la banque : WalletFlow ne voit jamais les identifiants bancaires.
 - Les comptes, les soldes et les transactions viennent de la banque. Dans WalletFlow, l'utilisateur peut seulement changer la catégorie d'une transaction ou la marquer comme transfert.
 - Seuls les comptes en euros sont ajoutés à WalletFlow.
+- Seules les transactions comptabilisées par la banque sont ajoutées : une transaction en attente apparaît une fois comptabilisée.
+- À la connexion d'une banque, l'application récupère jusqu'à un an de transactions.
+- La date d'une transaction est sa date comptable, celle du relevé.
 - Le solde affiché est le solde comptable donné par la banque, ou le plus proche si elle ne le donne pas.
 - Le solde est mis à jour à chaque ouverture de l'application, et jusqu'à 4 fois par jour en arrière-plan. L'application affiche la date et l'heure de la dernière mise à jour.
 - Si la banque ne répond pas, l'application affiche le dernier solde connu, avec sa date.
@@ -56,8 +59,11 @@
 - L'utilisateur peut déconnecter une banque : les comptes et les transactions de cette banque sont supprimés de WalletFlow, et l'autorisation est révoquée. L'application prévient l'utilisateur et lui demande de confirmer.
 - Les transferts entre deux comptes de l'utilisateur ne sont comptés ni comme des dépenses, ni comme des revenus.
 - L'utilisateur peut marquer une transaction comme transfert entre deux de ses comptes.
+- L'utilisateur peut retirer la marque de transfert. Marquer une transaction ne marque pas celle de l'autre compte.
 - L'utilisateur peut consulter son solde total, tous comptes confondus.
+- Le solde total additionne le dernier solde connu de chaque compte, même si sa banque ne répond pas, avec la date du plus ancien.
 - L'utilisateur peut rechercher une transaction par libellé, montant ou date.
+- La recherche par montant ne tient pas compte du signe : 12,50 € trouve une dépense comme un revenu.
 
 
 ## Sacs et Épargne
@@ -98,7 +104,10 @@
 - Deux catégories d'un même utilisateur ne peuvent pas porter le même nom, sans tenir compte des majuscules.
 - L'utilisateur peut changer la catégorie d'une transaction.
 - À son arrivée depuis la banque, chaque transaction reçoit automatiquement une catégorie d'après son libellé, grâce à des règles communes fournies par l'application (par exemple « CARREFOUR » → Alimentation). Si aucune catégorie ne correspond, elle est classée dans « Autres ».
+- Une règle commune reconnaît un mot entier du libellé, sans tenir compte des majuscules ni des accents. Si plusieurs règles le reconnaissent, la plus longue l'emporte.
 - Quand l'utilisateur change la catégorie d'une transaction, l'application lui propose d'appliquer ce choix aux prochaines transactions qui ont le même libellé.
+- Deux libellés sont les mêmes s'ils ne diffèrent que par les chiffres, la ponctuation, les majuscules, les accents ou les espaces : « CB CARREFOUR 12/11 » et « CB CARREFOUR 03/12 » ont le même libellé.
+- Un nouveau choix pour le même libellé remplace la règle précédente de l'utilisateur.
 - Une règle créée par l'utilisateur l'emporte sur une règle commune.
 - L'utilisateur peut fixer un budget mensuel par catégorie.
 - Chaque transaction appartient à une seule catégorie.

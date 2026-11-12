@@ -213,7 +213,7 @@ Une connexion regroupe les comptes d'une même banque. La déconnecter supprime 
 | Code              | Désignation                     | Type | Taille | Oblig. | Source            |
 |-------------------|---------------------------------|------|--------|--------|-------------------|
 | id_compte         | Identifiant du compte bancaire  | AN   | 36     | Oui    | SS §4             |
-| id_compte_externe | Identifiant chez le prestataire | AN   | 100    | Oui    | GR Comptes        |
+| id_compte_externe | Identifiant tiré du prestataire | AN   | 100    | Oui    | GR Comptes        |
 | nom_compte        | Nom du compte                   | AN   | 50     | Oui    | GR Comptes, SS §5 |
 | solde_compte      | Solde donné par la banque       | N    | 10     | Oui    | GR Comptes        |
 | date_solde        | Date de la dernière mise à jour | DH   | —      | Oui    | GR Comptes        |
@@ -221,7 +221,7 @@ Une connexion regroupe les comptes d'une même banque. La déconnecter supprime 
 **Contraintes**
 
 - `id_compte` : UUID.
-- `id_compte_externe` : fourni par le prestataire, unique pour une même connexion. Sert à retrouver le compte à chaque mise à jour.
+- `id_compte_externe` : empreinte de l'identifiant stable donné par le prestataire, la même d'une autorisation à l'autre, unique pour une même connexion. Sert à retrouver le compte à chaque mise à jour.
 - `nom_compte` : fourni par la banque, 1 à 50 caractères, tronqué au-delà. Exemple : « Compte courant ».
 - `solde_compte` : en centimes, peut être négatif. Remplacé à chaque mise à jour.
 - `date_solde` : date et heure de la dernière mise à jour réussie, affichées avec le solde.
@@ -231,8 +231,8 @@ Une connexion regroupe les comptes d'une même banque. La déconnecter supprime 
 | Code                   | Désignation                     | Type | Taille | Oblig. | Source            |
 |------------------------|---------------------------------|------|--------|--------|-------------------|
 | id_transaction         | Identifiant de la transaction   | AN   | 36     | Oui    | SS §4             |
-| id_transaction_externe | Identifiant chez le prestataire | AN   | 100    | Oui    | GR Comptes        |
-| date_transaction       | Date de l'opération             | D    | —      | Oui    | GR Comptes, SS §5 |
+| id_transaction_externe | Identifiant tiré du prestataire | AN   | 100    | Oui    | GR Comptes        |
+| date_transaction       | Date comptable de l'opération   | D    | —      | Oui    | GR Comptes, SS §5 |
 | libelle_transaction    | Libellé de l'opération          | AN   | 255    | Oui    | GR Comptes, SS §5 |
 | montant_transaction    | Montant de l'opération          | N    | 10     | Oui    | GR Comptes, SS §5 |
 | est_transfert_interne  | Transfert entre ses comptes     | B    | —      | Oui    | GR Comptes        |
@@ -240,8 +240,8 @@ Une connexion regroupe les comptes d'une même banque. La déconnecter supprime 
 **Contraintes**
 
 - `id_transaction` : UUID.
-- `id_transaction_externe` : fourni par le prestataire, unique pour un même compte. Une opération déjà reçue n'est jamais importée deux fois.
-- `date_transaction` : fournie par la banque, à partir du 01/01/2000.
+- `id_transaction_externe` : tiré de ce que donne le prestataire : l'empreinte de la référence de la banque, de la date et du montant, et du libellé quand la banque ne donne pas de référence, suivie d'un rang pour les transactions identiques du même jour, unique pour un même compte. Une opération déjà reçue n'est jamais importée deux fois.
+- `date_transaction` : date comptable fournie par la banque, à partir du 01/01/2000.
 - `libelle_transaction` : fourni par la banque, 1 à 255 caractères. Toujours affiché comme du texte.
 - `montant_transaction` : fourni par la banque, en centimes, non nul. Négatif pour une dépense, positif pour un revenu. Au plus 1 000 000 000 en valeur absolue.
 - `est_transfert_interne` : faux par défaut. C'est l'utilisateur qui marque une transaction comme transfert entre deux de ses comptes. Si vrai, la transaction n'est comptée ni en dépense ni en revenu.
@@ -279,11 +279,11 @@ Une transaction appartient à un seul compte et à une seule catégorie (GR Dép
 **Contraintes**
 
 - `id_regle_classement` : UUID.
-- `libelle_regle` : la règle s'applique aux transactions dont le libellé est strictement identique.
+- `libelle_regle` : la règle s'applique aux transactions qui ont le même libellé, sans tenir compte des chiffres, de la ponctuation, des majuscules, des accents ni des espaces en trop. Le libellé est enregistré sous cette forme : « CB CARREFOUR » pour « CB Carrefour 12/11 ».
 
 Une règle de l'utilisateur associe un libellé à l'une de ses catégories. Elle est créée quand il accepte d'appliquer un changement de catégorie aux prochaines transactions qui ont le même libellé.
 
-Les règles communes, comme « CARREFOUR » → Alimentation, font partie de la configuration de l'application (§12) : elles ne sont pas stockées pour chaque utilisateur. Une règle commune désigne une catégorie par son nom ; si l'utilisateur l'a renommée ou supprimée, la transaction va dans « Autres ». Quand une règle de l'utilisateur et une règle commune visent le même libellé, celle de l'utilisateur l'emporte.
+Les règles communes, comme « CARREFOUR » → Alimentation, font partie de la configuration de l'application (§12) : elles ne sont pas stockées pour chaque utilisateur. Une règle commune désigne une catégorie par son nom ; si l'utilisateur l'a renommée ou supprimée, la transaction va dans « Autres ». Elle reconnaît un mot entier du libellé, sans tenir compte des majuscules ni des accents ; la plus longue l'emporte. Le nom de la catégorie est comparé sans tenir compte des majuscules. Quand une règle de l'utilisateur et une règle commune visent le même libellé, celle de l'utilisateur l'emporte.
 
 
 ## 7. Sacs

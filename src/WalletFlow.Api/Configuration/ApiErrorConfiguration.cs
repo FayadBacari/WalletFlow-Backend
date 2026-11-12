@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Infrastructure;
 using Microsoft.AspNetCore.Mvc.ModelBinding;
+using Microsoft.AspNetCore.Mvc.ModelBinding.Metadata;
 
 namespace WalletFlow.Api.Configuration;
 
@@ -11,6 +12,24 @@ public static class ApiErrorConfiguration
     public const string RefusedRequestTitle = "La requête n'est pas valide.";
     public const string GeneralErrorsKey = "Request";
     public const string UnreadableRequestMessage = "La requête n'est pas lisible.";
+    public const string InvalidValueMessage = "Cette valeur n'est pas valide.";
+
+    // Remplace les messages d'ASP.NET Core pour une valeur illisible, comme un nombre écrit en lettres dans l'adresse.
+    // Ceux d'origine sont en anglais, et recopient la valeur envoyée par le visiteur : chacun devient le même message en français.
+    public static void TranslateBindingMessages(DefaultModelBindingMessageProvider messages)
+    {
+        messages.SetAttemptedValueIsInvalidAccessor((value, field) => InvalidValueMessage);
+        messages.SetMissingBindRequiredValueAccessor(field => InvalidValueMessage);
+        messages.SetMissingKeyOrValueAccessor(() => InvalidValueMessage);
+        messages.SetMissingRequestBodyRequiredValueAccessor(() => InvalidValueMessage);
+        messages.SetValueMustNotBeNullAccessor(value => InvalidValueMessage);
+        messages.SetUnknownValueIsInvalidAccessor(field => InvalidValueMessage);
+        messages.SetValueIsInvalidAccessor(value => InvalidValueMessage);
+        messages.SetValueMustBeANumberAccessor(field => InvalidValueMessage);
+        messages.SetNonPropertyAttemptedValueIsInvalidAccessor(value => InvalidValueMessage);
+        messages.SetNonPropertyUnknownValueIsInvalidAccessor(() => InvalidValueMessage);
+        messages.SetNonPropertyValueMustBeANumberAccessor(() => InvalidValueMessage);
+    }
 
     // Met en français le titre des erreurs produites par ASP.NET Core.
     public static void TranslateTitle(ProblemDetailsContext context)

@@ -3,6 +3,7 @@ using WalletFlow.Application.BankConnections;
 using WalletFlow.Application.Configuration;
 using WalletFlow.Application.Persistence;
 using WalletFlow.Application.Security;
+using WalletFlow.Application.Transactions;
 using WalletFlow.Domain.AccountsAndCategories;
 using WalletFlow.Infrastructure.BankData;
 using WalletFlow.Infrastructure.Security;
@@ -20,6 +21,8 @@ public class BankServices
     public FakeTimeProvider Clock { get; } = new FakeTimeProvider();
     public FakeBankDataProvider Provider { get; } = new FakeBankDataProvider();
     public FakeBankConnectionRepository Repository { get; } = new FakeBankConnectionRepository();
+    public FakeCategoryRepository Categories { get; } = new FakeCategoryRepository();
+    public FakeTransactionRepository Transactions { get; }
     public FakeSecurityEventRepository Journal { get; } = new FakeSecurityEventRepository();
     public FakeDatabaseUnitOfWork UnitOfWork { get; }
     public InMemoryBankAuthorizationStore AuthorizationStore { get; }
@@ -28,10 +31,12 @@ public class BankServices
     public RandomSecureTokenGenerator TokenGenerator { get; } = new RandomSecureTokenGenerator();
     public UserPresence Presence { get; } = new UserPresence(IPAddress.Parse("203.0.113.7"), "Navigateur de test");
 
-    // Relie la fausse base et le faux journal à la fausse unité de travail.
+    // Relie la fausse base et le faux journal à la fausse unité de travail. L'utilisateur des tests a ses 8 catégories par défaut.
     public BankServices()
     {
-        UnitOfWork = new FakeDatabaseUnitOfWork(Repository, Journal);
+        Transactions = new FakeTransactionRepository(Repository, Categories);
+        UnitOfWork = new FakeDatabaseUnitOfWork(Repository, Journal, Categories, Transactions);
+        Categories.SavedCategories.AddRange(DefaultCategories.CreateForUser(UserId));
         AuthorizationStore = new InMemoryBankAuthorizationStore(Clock);
         UpdateLimiter = new InMemoryBankUpdateLimiter(Clock);
         UpdateSchedule = new InMemoryBankUpdateSchedule(Clock);
@@ -50,14 +55,56 @@ public class BankServices
     // Crée le service qui termine une autorisation.
     public BankConnectionFinishService CreateFinish()
     {
-        return new BankConnectionFinishService(Provider, Repository, AuthorizationStore, TokenGenerator, CreateSavingService(), CreateJournal(), Clock);
+        return new BankConnectionFinishService(Provider, Repository, AuthorizationStore, TokenGenerator, CreateArrival(), CreateSavingService(), CreateJournal(), Clock);
     }
 
     // Crée le service qui met à jour les soldes.
     public BankBalanceUpdateService CreateUpdate()
     {
-        return new BankBalanceUpdateService(Provider, Repository, UpdateLimiter, CreateSavingService(), Clock);
+        return new BankBalanceUpdateService(Provider, Repository, UpdateLimiter, CreateArrival(), CreateSavingService(), Clock);
     }
+
+    // Crée le service qui change la catégorie d'une opération.
+    public TransactionCategoryChangeService CreateCategoryChange()
+    {
+        return new TransactionCategoryChangeService(Transactions, Categories, CreateSavingService());
+    }
+
+    // Crée le service qui marque une opération comme transfert.
+    public TransactionTransferService CreateTransfer()
+    {
+        return new TransactionTransferService(Transactions, CreateSavingService());
+    }
+
+    // Crée le service qui cherche les opérations.
+    public TransactionSearchService CreateSearch()
+    {
+        return new TransactionSearchService(Transactions);
+    }
+
+    // Crée le service du solde total.
+    public BankBalanceTotalService CreateBalanceTotal()
+    {
+        return new BankBalanceTotalService(Repository);
+    }
+
+    // Donne la catégorie de l'utilisateur des tests qui porte ce nom.
+    public Category CategoryNamed(string name)
+    {
+        return Categories.SavedCategories.Single(category => category.UserId == UserId && category.Name == name);
+    }
+
+    // Donne les opérations gardées pour ce compte, les plus anciennes d'abord.
+    public List<BankTransaction> TransactionsOf(BankAccount account)
+    {
+        return Transactions.SavedTransactions
+            .Where(transaction => transaction.BankAccountId == account.Id)
+            .OrderBy(transaction => transaction.TransactionDate)
+            .ToList();
+    }
+
+    // Le jour de l'horloge des tests.
+    public DateOnly Today => DateOnly.FromDateTime(Now);
 
     // Crée le service de la mise à jour en arrière-plan.
     public BankBackgroundUpdateService CreateBackgroundUpdate()
@@ -103,6 +150,12 @@ public class BankServices
     public List<BankAccount> AccountsOf(BankConnection connection)
     {
         return Repository.SavedAccounts.Where(account => account.BankConnectionId == connection.Id).ToList();
+    }
+
+    // Crée l'arrivée des opérations, sur les fausses opérations et les fausses catégories.
+    private BankTransactionArrival CreateArrival()
+    {
+        return new BankTransactionArrival(Transactions, Categories);
     }
 
     // Crée l'enregistrement avec réessai, sur la fausse unité de travail.
