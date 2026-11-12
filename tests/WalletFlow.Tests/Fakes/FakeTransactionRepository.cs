@@ -146,6 +146,46 @@ public class FakeTransactionRepository : ITransactionRepository, ITransactionalF
         }
     }
 
+    // Additionne les opérations de l'utilisateur par catégorie et par mois, sans les transferts, comme la vraie base.
+    public Task<List<CategoryMonthTotal>> SumByCategoryAndMonthAsync(Guid userId, DateOnly from, DateOnly to, Guid? accountId)
+    {
+        lock (pendingChangesLock)
+        {
+            var totals = SavedTransactions
+                .Where(transaction =>
+                    IsUserAccount(userId, transaction.BankAccountId)
+                    && !transaction.IsInternalTransfer
+                    && transaction.TransactionDate >= from
+                    && transaction.TransactionDate <= to
+                    && (accountId == null || transaction.BankAccountId == accountId))
+                .GroupBy(transaction => (transaction.CategoryId, transaction.TransactionDate.Year, transaction.TransactionDate.Month))
+                .Select(group => new CategoryMonthTotal(
+                    group.Key.CategoryId,
+                    group.Key.Year,
+                    group.Key.Month,
+                    group.Sum(transaction => (long)transaction.AmountInCents)))
+                .ToList();
+
+            return Task.FromResult(totals);
+        }
+    }
+
+    // Donne la date de la plus ancienne opération de l'utilisateur, ou de ce compte seul.
+    public Task<DateOnly?> FindEarliestDateAsync(Guid userId, Guid? accountId)
+    {
+        lock (pendingChangesLock)
+        {
+            var dates = SavedTransactions
+                .Where(transaction =>
+                    IsUserAccount(userId, transaction.BankAccountId)
+                    && (accountId == null || transaction.BankAccountId == accountId))
+                .Select(transaction => (DateOnly?)transaction.TransactionDate)
+                .ToList();
+
+            return Task.FromResult(dates.Min());
+        }
+    }
+
     // Garde l'opération de côté : elle ne sera gardée qu'avec les autres changements.
     public void PrepareTransaction(BankTransaction transaction)
     {

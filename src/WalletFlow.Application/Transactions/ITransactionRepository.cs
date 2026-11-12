@@ -29,6 +29,13 @@ public interface ITransactionRepository
     // Cherche parmi les opérations de l'utilisateur, les plus récentes d'abord, et donne la page demandée. Rien n'est suivi.
     Task<TransactionPage> SearchAsync(Guid userId, TransactionSearch search);
 
+    // Additionne les opérations de l'utilisateur datées entre ces deux jours compris, par catégorie et par mois.
+    // Les transferts ne comptent pas (GR Comptes). Avec un compte, seules ses opérations comptent. Rien n'est suivi.
+    Task<List<CategoryMonthTotal>> SumByCategoryAndMonthAsync(Guid userId, DateOnly from, DateOnly to, Guid? accountId);
+
+    // Donne la date de la plus ancienne opération de l'utilisateur, ou de ce compte seul, ou null s'il n'en a aucune.
+    Task<DateOnly?> FindEarliestDateAsync(Guid userId, Guid? accountId);
+
     // Garde de côté une nouvelle opération : elle ne sera enregistrée qu'avec les autres changements.
     void PrepareTransaction(BankTransaction transaction);
 

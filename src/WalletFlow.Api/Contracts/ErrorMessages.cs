@@ -86,7 +86,8 @@ public static class ErrorMessages
     // Les montants écrits ici sont ceux de TransactionRules, en euros : 1 centime et 1 000 000 000 centimes.
     public const string TransactionSearchAmountBreaksRules = "Le montant cherché va de 0,01 € à 10 000 000 €.";
 
-    public const string TransactionSearchDatesReversed = "La date de fin ne peut pas être avant la date de début.";
+    // Le même message pour la recherche des opérations et pour la période d'un graphique.
+    public const string DatesReversed = "La date de fin ne peut pas être avant la date de début.";
 
     // Le nombre écrit ici est TransactionSearchService.MaximumPage : un test vérifie qu'ils restent égaux.
     public const string TransactionSearchPageBreaksRules = "Le numéro de page va de 1 à 10 000.";
@@ -94,4 +95,9 @@ public static class ErrorMessages
     public const string TransactionLabelWithoutLetter = "Ce libellé ne contient aucune lettre : aucune règle ne peut le reconnaître.";
 
     public const string TransactionsChangedMeanwhile = "Tes opérations viennent de changer. Réessaie.";
+
+    public const string ChartPeriodRequired = "Choisis une date de début et une date de fin.";
+
+    // La durée écrite ici est ChartRules.MaximumPeriodMonths, en années : un test vérifie qu'elles restent égales.
+    public const string ChartPeriodTooLong = "Une période couvre au plus 10 ans.";
 }

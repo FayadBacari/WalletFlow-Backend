@@ -11,13 +11,15 @@ using WalletFlow.Application.AccountRecovery;
 using WalletFlow.Application.AccountSettings;
 using WalletFlow.Application.BankConnections;
 using WalletFlow.Application.Categories;
-using WalletFlow.Application.Transactions;
+using WalletFlow.Application.Charts;
 using WalletFlow.Application.Configuration;
 using WalletFlow.Application.Persistence;
 using WalletFlow.Application.Security;
+using WalletFlow.Application.Transactions;
 using WalletFlow.Application.TwoFactorAuthentication;
 using WalletFlow.Application.UserAccounts;
 using WalletFlow.Application.UserSessions;
+using WalletFlow.Domain.AccountsAndCategories;
 using WalletFlow.Infrastructure;
 
 // Prépare l'application web de l'API WalletFlow.
@@ -146,6 +148,9 @@ builder.Services.AddScoped<BankTransactionArrival>();
 builder.Services.AddScoped<TransactionSearchService>();
 builder.Services.AddScoped<TransactionCategoryChangeService>();
 builder.Services.AddScoped<TransactionTransferService>();
+builder.Services.AddScoped<CategoryExpenseChartService>();
+builder.Services.AddScoped<MonthlyTotalsChartService>();
+builder.Services.AddScoped<MonthComparisonService>();
 
 // Tâches de fond : effacent chaque jour les comptes non confirmés dont le lien a expiré (GR Auth) et les sessions expirées,
 // préparent les e-mails de récupération et de déblocage, et mettent à jour les soldes jusqu'à 4 fois par jour (GR Comptes).
@@ -210,6 +215,10 @@ builder.Services.AddHsts(options =>
 });
 
 var app = builder.Build();
+
+// Les graphiques comptent le mois en cours à l'heure de Paris (voir ChartRules) : sans ce fuseau sur la machine, par exemple
+// dans une image sans tzdata, l'API refuse de démarrer, au lieu de répondre 500 à chaque comparaison.
+TimeZoneInfo.FindSystemTimeZoneById(ChartRules.UsersTimeZoneId);
 
 // En développement, sans application Enable Banking configurée, le journal technique le dit dès le démarrage.
 if (!isBankProviderConfigured)

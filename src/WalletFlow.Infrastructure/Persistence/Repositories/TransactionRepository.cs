@@ -130,6 +130,54 @@ public class TransactionRepository : ITransactionRepository
         return new TransactionPage(items, totalCount);
     }
 
+    // Additionne en SQL, par catégorie et par mois, les opérations des comptes de l'utilisateur entre ces deux jours compris,
+    // sans les transferts. Les montants sont additionnés en bigint : beaucoup d'opérations ne débordent jamais.
+    public async Task<List<CategoryMonthTotal>> SumByCategoryAndMonthAsync(Guid userId, DateOnly from, DateOnly to, Guid? accountId)
+    {
+        var query = databaseContext.BankTransactions
+            .AsNoTracking()
+            .Where(transaction =>
+                UserAccountIds(userId).Contains(transaction.BankAccountId)
+                && !transaction.IsInternalTransfer
+                && transaction.TransactionDate >= from
+                && transaction.TransactionDate <= to);
+
+        if (accountId is Guid onlyAccountId)
+        {
+            query = query.Where(transaction => transaction.BankAccountId == onlyAccountId);
+        }
+
+        return await query
+            .GroupBy(transaction => new
+            {
+                transaction.CategoryId,
+                transaction.TransactionDate.Year,
+                transaction.TransactionDate.Month
+            })
+            .Select(group => new CategoryMonthTotal(
+                group.Key.CategoryId,
+                group.Key.Year,
+                group.Key.Month,
+                group.Sum(transaction => (long)transaction.AmountInCents)))
+            .ToListAsync();
+    }
+
+    // Donne la date de la plus ancienne opération des comptes de l'utilisateur, ou de ce compte seul. Un transfert compte aussi :
+    // il dit que l'historique remonte jusque-là.
+    public async Task<DateOnly?> FindEarliestDateAsync(Guid userId, Guid? accountId)
+    {
+        var query = databaseContext.BankTransactions
+            .AsNoTracking()
+            .Where(transaction => UserAccountIds(userId).Contains(transaction.BankAccountId));
+
+        if (accountId is Guid onlyAccountId)
+        {
+            query = query.Where(transaction => transaction.BankAccountId == onlyAccountId);
+        }
+
+        return await query.MinAsync(transaction => (DateOnly?)transaction.TransactionDate);
+    }
+
     // Garde de côté la nouvelle opération : elle ne sera écrite qu'avec les autres changements.
     public void PrepareTransaction(BankTransaction transaction)
     {

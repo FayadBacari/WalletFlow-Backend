@@ -98,8 +98,13 @@
 
 - L'utilisateur peut voir la répartition de ses dépenses par catégorie (graphique en anneau ou en camembert).
 - L'utilisateur peut voir l'évolution de ses dépenses et de ses revenus mois par mois (graphique en barres ou en courbe).
+- Dans les graphiques, chaque catégorie compte pour son total net : un remboursement réduit ses dépenses. Une catégorie dont le total est négatif compte comme une dépense, positif comme un revenu.
 - L'utilisateur peut comparer le mois en cours avec la moyenne des 3 derniers mois, catégorie par catégorie.
+- La moyenne des 3 derniers mois porte sur les 3 mois complets avant le mois en cours. Elle n'apparaît qu'avec 3 mois complets d'historique.
+- Le mois en cours est comparé tel qu'il est, au jour où l'utilisateur le regarde.
+- Le mois en cours commence à minuit, heure de Paris.
 - L'utilisateur peut filtrer les graphiques par période (mois, trimestre, année, dates choisies) et par compte.
+- Le filtre par compte montre tous les comptes ou un seul.
 - L'utilisateur peut créer, renommer et supprimer ses propres catégories.
 - Deux catégories d'un même utilisateur ne peuvent pas porter le même nom, sans tenir compte des majuscules.
 - L'utilisateur peut changer la catégorie d'une transaction.

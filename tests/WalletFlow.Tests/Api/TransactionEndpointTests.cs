@@ -3,6 +3,7 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using WalletFlow.Api.Configuration;
 using WalletFlow.Api.Contracts;
+using WalletFlow.Application.Transactions;
 using WalletFlow.Domain.AccountsAndCategories;
 using WalletFlow.Domain.UsersAndSecurity;
 using WalletFlow.Tests.Fakes;
@@ -214,7 +215,7 @@ public class TransactionEndpointTests
         var text = await user.Client.GetAsync(TransactionsEndpoint + "?text=" + new string('a', 256));
 
         Assert.Equal(ErrorMessages.TransactionSearchAmountBreaksRules, await ReadFieldErrorAsync(amount, "AmountInCents"));
-        Assert.Equal(ErrorMessages.TransactionSearchDatesReversed, await ReadFieldErrorAsync(dates, "To"));
+        Assert.Equal(ErrorMessages.DatesReversed, await ReadFieldErrorAsync(dates, "To"));
         Assert.Equal(ErrorMessages.TransactionSearchPageBreaksRules, await ReadFieldErrorAsync(page, "Page"));
         Assert.Equal(ErrorMessages.TransactionSearchTextTooLong, await ReadFieldErrorAsync(text, "Text"));
     }
@@ -340,5 +341,16 @@ public class TransactionEndpointTests
         Assert.Equal(2 * 152_034L, total.GetProperty("totalInCents").GetInt64());
         Assert.Equal(2, total.GetProperty("accountCount").GetInt32());
         Assert.NotEqual(JsonValueKind.Null, total.GetProperty("oldestBalanceUpdatedAt").ValueKind);
+    }
+
+    // Les messages écrivent les limites en toutes lettres : ils doivent rester égaux aux règles.
+    [Fact]
+    public void MessagesGiveTheRealLimits()
+    {
+        Assert.Contains(TransactionRules.MaximumLabelLength + " caractères", ErrorMessages.TransactionSearchTextTooLong);
+        Assert.Equal(10_000, TransactionSearchService.MaximumPage);
+        Assert.Contains("1 à 10 000", ErrorMessages.TransactionSearchPageBreaksRules);
+        Assert.Equal(1_000_000_000, TransactionRules.MaximumAmountInCents);
+        Assert.Contains("10 000 000 €", ErrorMessages.TransactionSearchAmountBreaksRules);
     }
 }

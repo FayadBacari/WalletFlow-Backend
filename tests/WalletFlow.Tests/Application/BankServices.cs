@@ -1,5 +1,6 @@
 using System.Net;
 using WalletFlow.Application.BankConnections;
+using WalletFlow.Application.Charts;
 using WalletFlow.Application.Configuration;
 using WalletFlow.Application.Persistence;
 using WalletFlow.Application.Security;
@@ -86,6 +87,42 @@ public class BankServices
     public BankBalanceTotalService CreateBalanceTotal()
     {
         return new BankBalanceTotalService(Repository);
+    }
+
+    // Crée le service de la répartition des dépenses par catégorie.
+    public CategoryExpenseChartService CreateCategoryExpenseChart()
+    {
+        return new CategoryExpenseChartService(Transactions, Categories);
+    }
+
+    // Crée le service des totaux mois par mois.
+    public MonthlyTotalsChartService CreateMonthlyTotalsChart()
+    {
+        return new MonthlyTotalsChartService(Transactions);
+    }
+
+    // Crée le service de la comparaison du mois en cours.
+    public MonthComparisonService CreateMonthComparison()
+    {
+        return new MonthComparisonService(Transactions, Categories, Clock);
+    }
+
+    // Garde directement une opération de ce compte, dans la catégorie de ce nom : un test de graphique choisit ses chiffres.
+    public BankTransaction SaveTransaction(BankAccount account, string categoryName, DateOnly date, int amountInCents, bool isInternalTransfer = false)
+    {
+        var transaction = new BankTransaction
+        {
+            ExternalTransactionId = "test-" + Guid.NewGuid().ToString("N"),
+            TransactionDate = date,
+            Label = "OPERATION DE TEST",
+            AmountInCents = amountInCents,
+            IsInternalTransfer = isInternalTransfer,
+            BankAccountId = account.Id,
+            CategoryId = CategoryNamed(categoryName).Id
+        };
+        Transactions.SavedTransactions.Add(transaction);
+
+        return transaction;
     }
 
     // Donne la catégorie de l'utilisateur des tests qui porte ce nom.

@@ -435,7 +435,9 @@ Ces données ne sont **pas stockées** : elles sont recalculées à chaque affic
 
 **Précisions**
 
-- `moyenne_categorie_3_mois` : sert aussi à comparer le mois en cours avec les 3 derniers mois, catégorie par catégorie (GR Dépenses).
+- `depenses_categorie_mois` : total net de la catégorie sur le mois, quand il est négatif : un remboursement réduit la dépense. Un total positif est un revenu.
+- `moyenne_categorie_3_mois` : porte sur les 3 mois complets avant le mois en cours, divisés par 3, et n'existe qu'avec 3 mois complets d'historique. Sert aussi à comparer le mois en cours avec les 3 derniers mois, catégorie par catégorie (GR Dépenses).
+- `taux_budget` : arrondi vers le bas : 80 % n'est atteint qu'une fois 80 % vraiment dépensés.
 - `etat_compte` : vaut `non_confirme`, `actif`, `bloque` ou `en_suppression`, d'après email_confirme, date_fin_blocage et date_demande_suppression.
 
 
@@ -465,6 +467,7 @@ Ces valeurs sont les mêmes pour tous les utilisateurs. Elles relèvent de la co
 | Seuil d'épargne mensuelle                    | 20 % des revenus                 | GR Sacs        |
 | Réapparition d'une suggestion ignorée        | Après 30 jours                   | GR Sacs        |
 | Seuils d'alerte de budget                    | 80 % et 100 %                    | GR Dépenses    |
+| Durée d'une période de graphique             | 10 ans au plus                   | SS §6          |
 | Délai avant effacement d'un compte           | 30 jours                         | GR Suppression |
 | Effacement d'un compte non confirmé          | À l'expiration de son lien       | GR Auth        |
 | Conservation des sauvegardes                 | 30 jours                         | SS §7          |

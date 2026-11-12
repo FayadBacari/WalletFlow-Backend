@@ -313,3 +313,18 @@ X-CSRF-TOKEN: colle-ici-le-jeton-anti-csrf
 }
 
 ###
+
+# Répartition des dépenses par catégorie entre deux dates comprises, pour tous les comptes ou un seul (accountId).
+GET {{WalletFlow_Api_SecureAddress}}/api/charts/categories?from=2026-11-01&to=2026-11-30
+
+###
+
+# Revenus, dépenses et épargne de chaque mois de la période.
+GET {{WalletFlow_Api_SecureAddress}}/api/charts/months?from=2026-01-01&to=2026-12-31
+
+###
+
+# Le mois en cours face à la moyenne des 3 mois complets d'avant, catégorie par catégorie, avec les budgets.
+GET {{WalletFlow_Api_SecureAddress}}/api/charts/comparison
+
+###

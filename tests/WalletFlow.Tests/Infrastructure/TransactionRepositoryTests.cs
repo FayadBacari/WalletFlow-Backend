@@ -198,6 +198,91 @@ public class TransactionRepositoryTests
         Assert.Null(await repository.FindRuleAsync(stranger.Id, "CB CARREFOUR"));
     }
 
+    // GR Dépenses et GR Comptes : la base additionne par catégorie et par mois civil, sans les transferts, pour les seuls
+    // comptes de l'utilisateur, ou un seul. Les montants sont additionnés en bigint : deux milliards de centimes ne débordent pas.
+    [Fact]
+    public async Task SumsAreMadeByCategoryAndMonthWithoutTransfers()
+    {
+        await using var databaseContext = CreateDatabaseContext();
+        await using var transaction = await databaseContext.Database.BeginTransactionAsync();
+        var owner = await SaveAccountAsync(databaseContext, "test-graphiques-a@exemple.test");
+        var stranger = await SaveAccountAsync(databaseContext, "test-graphiques-b@exemple.test");
+        var (_, current) = await SaveConnectionAsync(databaseContext, owner.Id, "stable-1");
+        var (_, savings) = await SaveConnectionAsync(databaseContext, owner.Id, "stable-2");
+        var (_, strangerAccount) = await SaveConnectionAsync(databaseContext, stranger.Id, "stable-3");
+        var food = await FindCategoryAsync(databaseContext, owner.Id, "Alimentation");
+        var income = await FindCategoryAsync(databaseContext, owner.Id, "Revenus");
+        var others = await FindCategoryAsync(databaseContext, owner.Id, "Autres");
+        var strangerFood = await FindCategoryAsync(databaseContext, stranger.Id, "Alimentation");
+        var transfer = CreateTransaction(current.Id, others.Id, "e6", "VIR VERS LIVRET", -50_000, new DateOnly(2026, 11, 10));
+        transfer.MarkAsInternalTransfer(true);
+        await SaveTransactionsAsync(databaseContext,
+            CreateTransaction(current.Id, food.Id, "e1", "CB CARREFOUR", -1000, new DateOnly(2026, 10, 31)),
+            CreateTransaction(current.Id, food.Id, "e2", "CB CARREFOUR", -2000, new DateOnly(2026, 11, 1)),
+            CreateTransaction(current.Id, food.Id, "e3", "REMBOURSEMENT CARREFOUR", 1500, new DateOnly(2026, 11, 30)),
+            CreateTransaction(current.Id, income.Id, "e4", "VIR SALAIRE", 250_000, new DateOnly(2026, 11, 15)),
+            CreateTransaction(savings.Id, food.Id, "e5", "CB CARREFOUR", -4000, new DateOnly(2026, 11, 5)),
+            transfer,
+            CreateTransaction(current.Id, income.Id, "e7", "VIR PRIME", 1_000_000_000, new DateOnly(2026, 12, 1)),
+            CreateTransaction(current.Id, income.Id, "e8", "VIR PRIME", 1_000_000_000, new DateOnly(2026, 12, 2)),
+            CreateTransaction(strangerAccount.Id, strangerFood.Id, "e9", "CB CARREFOUR", -7777, new DateOnly(2026, 11, 5)));
+        var repository = new TransactionRepository(databaseContext);
+
+        var all = await repository.SumByCategoryAndMonthAsync(owner.Id, new DateOnly(2026, 10, 1), new DateOnly(2026, 12, 31), null);
+        var currentOnly = await repository.SumByCategoryAndMonthAsync(owner.Id, new DateOnly(2026, 10, 1), new DateOnly(2026, 12, 31), current.Id);
+        var november = await repository.SumByCategoryAndMonthAsync(owner.Id, new DateOnly(2026, 11, 1), new DateOnly(2026, 11, 30), null);
+
+        Assert.Equal(
+            new List<CategoryMonthTotal>
+            {
+                new CategoryMonthTotal(food.Id, 2026, 10, -1000),
+                new CategoryMonthTotal(food.Id, 2026, 11, -4500),
+                new CategoryMonthTotal(income.Id, 2026, 11, 250_000),
+                new CategoryMonthTotal(income.Id, 2026, 12, 2_000_000_000)
+            },
+            all.OrderBy(total => total.Month).ThenBy(total => total.NetInCents).ToList());
+        Assert.Contains(new CategoryMonthTotal(food.Id, 2026, 11, -500), currentOnly);
+        Assert.DoesNotContain(currentOnly, total => total.Month == 11 && total.NetInCents == -4500);
+
+        // Les deux dates sont comprises : le 1er et le 30 novembre comptent, le 31 octobre et le 1er décembre non.
+        Assert.Equal(
+            new List<CategoryMonthTotal>
+            {
+                new CategoryMonthTotal(food.Id, 2026, 11, -4500),
+                new CategoryMonthTotal(income.Id, 2026, 11, 250_000)
+            },
+            november.OrderBy(total => total.NetInCents).ToList());
+        Assert.Empty(await repository.SumByCategoryAndMonthAsync(stranger.Id, new DateOnly(2026, 10, 1), new DateOnly(2026, 12, 31), current.Id));
+    }
+
+    // La plus ancienne opération dit jusqu'où remonte l'historique : un transfert compte aussi, mais jamais le compte d'un autre.
+    [Fact]
+    public async Task EarliestDateCountsTransfersButOnlyTheUserAccounts()
+    {
+        await using var databaseContext = CreateDatabaseContext();
+        await using var transaction = await databaseContext.Database.BeginTransactionAsync();
+        var owner = await SaveAccountAsync(databaseContext, "test-historique-a@exemple.test");
+        var stranger = await SaveAccountAsync(databaseContext, "test-historique-b@exemple.test");
+        var (_, current) = await SaveConnectionAsync(databaseContext, owner.Id, "stable-1");
+        var (_, savings) = await SaveConnectionAsync(databaseContext, owner.Id, "stable-2");
+        var (_, strangerAccount) = await SaveConnectionAsync(databaseContext, stranger.Id, "stable-3");
+        var others = await FindCategoryAsync(databaseContext, owner.Id, "Autres");
+        var strangerOthers = await FindCategoryAsync(databaseContext, stranger.Id, "Autres");
+        var transfer = CreateTransaction(current.Id, others.Id, "e1", "VIR VERS LIVRET", -50_000, new DateOnly(2026, 9, 1));
+        transfer.MarkAsInternalTransfer(true);
+        await SaveTransactionsAsync(databaseContext,
+            transfer,
+            CreateTransaction(current.Id, others.Id, "e2", "CB CAFE", -250, new DateOnly(2026, 10, 1)),
+            CreateTransaction(savings.Id, others.Id, "e3", "INTERETS", 100, new DateOnly(2026, 11, 1)),
+            CreateTransaction(strangerAccount.Id, strangerOthers.Id, "e4", "CB CAFE", -250, new DateOnly(2026, 1, 1)));
+        var repository = new TransactionRepository(databaseContext);
+
+        Assert.Equal(new DateOnly(2026, 9, 1), await repository.FindEarliestDateAsync(owner.Id, null));
+        Assert.Equal(new DateOnly(2026, 11, 1), await repository.FindEarliestDateAsync(owner.Id, savings.Id));
+        Assert.Null(await repository.FindEarliestDateAsync(stranger.Id, current.Id));
+        Assert.Equal(new DateOnly(2026, 1, 1), await repository.FindEarliestDateAsync(stranger.Id, null));
+    }
+
     // Deux mises à jour ajoutent la même opération au même instant : la contrainte ux_transaction_externe refuse la seconde,
     // et l'unité de travail y voit un conflit, pas une panne. Une seule opération reste.
     [Fact]

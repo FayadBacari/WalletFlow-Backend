@@ -64,7 +64,7 @@ public class TransactionsController : ControllerBase
 
         if (result is TransactionSearchResult.DatesReversed)
         {
-            return AnswerFieldRefused(nameof(TransactionSearchRequest.To), ErrorMessages.TransactionSearchDatesReversed);
+            return AnswerFieldRefused(nameof(TransactionSearchRequest.To), ErrorMessages.DatesReversed);
         }
 
         return AnswerFieldRefused(nameof(TransactionSearchRequest.Page), ErrorMessages.TransactionSearchPageBreaksRules);
