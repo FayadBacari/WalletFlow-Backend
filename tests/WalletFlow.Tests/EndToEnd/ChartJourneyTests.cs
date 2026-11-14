@@ -38,7 +38,7 @@ public class ChartJourneyTests
         using var api = new ApiFactoryWithRealDatabase();
         var email = CreateUniqueEmail("parcours-graphiques");
         var browser = CreateBrowser(api);
-        var today = ChartRules.FindUsersToday(DateTimeOffset.UtcNow);
+        var today = UsersCalendar.FindToday(DateTimeOffset.UtcNow);
         var monthStart = new DateOnly(today.Year, today.Month, 1);
 
         try

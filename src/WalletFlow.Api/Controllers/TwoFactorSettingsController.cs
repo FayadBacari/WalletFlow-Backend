@@ -85,12 +85,12 @@ public class TwoFactorSettingsController : ControllerBase
             request.Code,
             HttpContext.Connection.RemoteIpAddress);
 
-        if (result == TwoFactorDeactivationResult.TwoFactorDeactivated)
+        if (result is TwoFactorDeactivationResult.TwoFactorDeactivated)
         {
             return Ok(new MessageResponse(DeactivatedMessage));
         }
 
-        if (result == TwoFactorDeactivationResult.TwoFactorNotEnabled)
+        if (result is TwoFactorDeactivationResult.TwoFactorNotEnabled)
         {
             return Problem(statusCode: StatusCodes.Status409Conflict, title: ErrorMessages.TwoFactorNotEnabled);
         }

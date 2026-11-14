@@ -34,7 +34,7 @@ public class EmailChangeRequestServiceTests
 
         var result = await RequestAsync(account.Id, TwoFactorServicesWithFakeTools.AccountPassword, "  Nouvelle@Exemple.TEST ");
 
-        Assert.Equal(EmailChangeRequestResult.RequestAccepted, result);
+        Assert.IsType<EmailChangeRequestResult.RequestAccepted>(result);
         Assert.Equal(TwoFactorServicesWithFakeTools.AccountEmail, account.Email);
         var request = Assert.IsType<BackgroundEmailRequest.EmailChange>(Assert.Single(tools.EmailQueue.AddedRequests));
         Assert.Equal(account.Id, request.AccountId);
@@ -53,8 +53,8 @@ public class EmailChangeRequestServiceTests
         var freeAddressResult = await RequestAsync(account.Id, TwoFactorServicesWithFakeTools.AccountPassword, NewEmail);
         var takenAddressResult = await RequestAsync(account.Id, TwoFactorServicesWithFakeTools.AccountPassword, "deja-prise@exemple.test");
 
-        Assert.Equal(EmailChangeRequestResult.RequestAccepted, freeAddressResult);
-        Assert.Equal(EmailChangeRequestResult.RequestAccepted, takenAddressResult);
+        Assert.IsType<EmailChangeRequestResult.RequestAccepted>(freeAddressResult);
+        Assert.IsType<EmailChangeRequestResult.RequestAccepted>(takenAddressResult);
         Assert.Equal(2, tools.EmailQueue.AddedRequests.Count);
     }
 
@@ -68,7 +68,7 @@ public class EmailChangeRequestServiceTests
 
         var result = await RequestAsync(account.Id, TwoFactorServicesWithFakeTools.AccountPassword, newEmail);
 
-        Assert.Equal(EmailChangeRequestResult.InvalidEmailAddress, result);
+        Assert.IsType<EmailChangeRequestResult.InvalidEmailAddress>(result);
         Assert.Equal(0, tools.PasswordHasher.VerifiedPasswordCount);
         Assert.Empty(tools.EmailQueue.AddedRequests);
         Assert.Empty(requestLimiter.CountedAddresses);
@@ -82,7 +82,7 @@ public class EmailChangeRequestServiceTests
 
         var result = await RequestAsync(account.Id, TwoFactorServicesWithFakeTools.AccountPassword, " UTILISATEUR@exemple.test");
 
-        Assert.Equal(EmailChangeRequestResult.SameEmailAddress, result);
+        Assert.IsType<EmailChangeRequestResult.SameEmailAddress>(result);
         Assert.Empty(tools.EmailQueue.AddedRequests);
     }
 
@@ -93,7 +93,7 @@ public class EmailChangeRequestServiceTests
 
         var result = await RequestAsync(account.Id, TwoFactorServicesWithFakeTools.WrongPassword);
 
-        Assert.Equal(EmailChangeRequestResult.WrongPassword, result);
+        Assert.IsType<EmailChangeRequestResult.WrongPassword>(result);
         Assert.Empty(tools.EmailQueue.AddedRequests);
         Assert.Empty(requestLimiter.CountedAddresses);
         Assert.Equal(1, tools.CountSecurityEvents(SecurityEventType.EmailChange, SecurityEventResult.Failure));
@@ -109,8 +109,8 @@ public class EmailChangeRequestServiceTests
         var wrongPasswordResult = await RequestAsync(account.Id, TwoFactorServicesWithFakeTools.WrongPassword);
         var rightPasswordResult = await RequestAsync(account.Id, TwoFactorServicesWithFakeTools.AccountPassword);
 
-        Assert.Equal(EmailChangeRequestResult.WrongPassword, wrongPasswordResult);
-        Assert.Equal(EmailChangeRequestResult.TooManyRequests, rightPasswordResult);
+        Assert.IsType<EmailChangeRequestResult.WrongPassword>(wrongPasswordResult);
+        Assert.IsType<EmailChangeRequestResult.TooManyRequests>(rightPasswordResult);
         Assert.Single(requestLimiter.CountedAddresses);
         Assert.Empty(tools.EmailQueue.AddedRequests);
     }
@@ -125,9 +125,9 @@ public class EmailChangeRequestServiceTests
         var wrongCodeResult = await RequestAsync(accountId, TwoFactorServicesWithFakeTools.AccountPassword, code: tools.FindWrongCode(activatedAccount.Secret));
         var rightCodeResult = await RequestAsync(accountId, TwoFactorServicesWithFakeTools.AccountPassword, code: tools.CalculateCurrentCode(activatedAccount.Secret));
 
-        Assert.Equal(EmailChangeRequestResult.WrongPasswordOrCode, withoutCodeResult);
-        Assert.Equal(EmailChangeRequestResult.WrongPasswordOrCode, wrongCodeResult);
-        Assert.Equal(EmailChangeRequestResult.RequestAccepted, rightCodeResult);
+        Assert.IsType<EmailChangeRequestResult.WrongPasswordOrCode>(withoutCodeResult);
+        Assert.IsType<EmailChangeRequestResult.WrongPasswordOrCode>(wrongCodeResult);
+        Assert.IsType<EmailChangeRequestResult.RequestAccepted>(rightCodeResult);
         Assert.Single(tools.EmailQueue.AddedRequests);
     }
 
@@ -142,7 +142,7 @@ public class EmailChangeRequestServiceTests
             TwoFactorServicesWithFakeTools.WrongPassword,
             code: tools.CalculateCurrentCode(activatedAccount.Secret));
 
-        Assert.Equal(EmailChangeRequestResult.WrongPasswordOrCode, result);
+        Assert.IsType<EmailChangeRequestResult.WrongPasswordOrCode>(result);
     }
 
     // Le code de secours est marqué utilisé dès la demande : il ne peut pas servir deux fois.
@@ -155,8 +155,8 @@ public class EmailChangeRequestServiceTests
         var firstResult = await RequestAsync(activatedAccount.UserAccount.Id, TwoFactorServicesWithFakeTools.AccountPassword, code: backupCode);
         var secondResult = await RequestAsync(activatedAccount.UserAccount.Id, TwoFactorServicesWithFakeTools.AccountPassword, code: backupCode);
 
-        Assert.Equal(EmailChangeRequestResult.RequestAccepted, firstResult);
-        Assert.Equal(EmailChangeRequestResult.WrongPasswordOrCode, secondResult);
+        Assert.IsType<EmailChangeRequestResult.RequestAccepted>(firstResult);
+        Assert.IsType<EmailChangeRequestResult.WrongPasswordOrCode>(secondResult);
         Assert.Single(tools.TwoFactorRepository.SavedBackupCodes, savedCode => savedCode.UsedAt != null);
         Assert.Single(tools.EmailQueue.AddedRequests);
     }

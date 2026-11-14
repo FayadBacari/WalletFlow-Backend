@@ -3,6 +3,7 @@ using WalletFlow.Api.Authentication;
 using WalletFlow.Api.Configuration;
 using WalletFlow.Api.Contracts;
 using WalletFlow.Application.BankConnections;
+using WalletFlow.Application.Security;
 using WalletFlow.Domain.AccountsAndCategories;
 
 namespace WalletFlow.Api.Controllers;
@@ -24,6 +25,7 @@ public class BankConnectionsController : ControllerBase
     private readonly BankBalanceUpdateService balanceUpdateService;
     private readonly BankDisconnectionService disconnectionService;
     private readonly BankBalanceTotalService balanceTotalService;
+    private readonly ForeignAccessJournalService foreignAccessJournal;
 
     // Reçoit les cas d'utilisation des connexions bancaires.
     public BankConnectionsController(
@@ -33,7 +35,8 @@ public class BankConnectionsController : ControllerBase
         BankConnectionListService connectionListService,
         BankBalanceUpdateService balanceUpdateService,
         BankDisconnectionService disconnectionService,
-        BankBalanceTotalService balanceTotalService)
+        BankBalanceTotalService balanceTotalService,
+        ForeignAccessJournalService foreignAccessJournal)
     {
         this.bankListService = bankListService;
         this.authorizationStartService = authorizationStartService;
@@ -42,6 +45,7 @@ public class BankConnectionsController : ControllerBase
         this.balanceUpdateService = balanceUpdateService;
         this.disconnectionService = disconnectionService;
         this.balanceTotalService = balanceTotalService;
+        this.foreignAccessJournal = foreignAccessJournal;
     }
 
     // GET api/banks : les banques que l'utilisateur peut connecter, dans l'ordre alphabétique.
@@ -74,6 +78,11 @@ public class BankConnectionsController : ControllerBase
     public async Task<IActionResult> StartRenewal(Guid connectionId)
     {
         var result = await authorizationStartService.StartRenewalAsync(SessionClaims.ReadUserId(User), connectionId);
+
+        if (result is BankAuthorizationStartResult.NotFound)
+        {
+            await RecordForeignAccessAsync(OwnedResource.BankConnection, connectionId);
+        }
 
         return AnswerAuthorizationStart(result);
     }
@@ -180,6 +189,7 @@ public class BankConnectionsController : ControllerBase
 
         if (result is BankDisconnectionResult.NotFound)
         {
+            await RecordForeignAccessAsync(OwnedResource.BankConnection, connectionId);
             return Problem(statusCode: StatusCodes.Status404NotFound);
         }
 
@@ -210,6 +220,16 @@ public class BankConnectionsController : ControllerBase
         }
 
         return AnswerServiceUnavailable();
+    }
+
+    // Note au journal si la ressource visée est à un autre utilisateur (SS §11). La réponse reste la même dans tous les cas.
+    private async Task RecordForeignAccessAsync(OwnedResource resource, Guid? resourceId)
+    {
+        await foreignAccessJournal.RecordIfForeignAsync(
+            SessionClaims.ReadUserId(User),
+            HttpContext.Connection.RemoteIpAddress,
+            resource,
+            resourceId);
     }
 
     // Donne le message d'un champ refusé.

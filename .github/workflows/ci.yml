@@ -1,7 +1,7 @@
 # Intégration continue de l'API WalletFlow (SS §10). À chaque envoi sur GitHub :
 # - la base est créée dans un PostgreSQL 18 neuf avec le script du MPD, puis vérifiée par ses tests SQL ;
 # - un paquet qui a une faille connue arrête la vérification ;
-# - le projet est compilé avec les versions verrouillées des paquets, puis tous les tests sont lancés ;
+# - le projet est compilé avec les versions verrouillées des paquets, sans aucun avertissement, puis tous les tests sont lancés ;
 # - gitleaks cherche dans tout l'historique un secret écrit par erreur.
 name: Intégration continue
 
@@ -10,6 +10,8 @@ on:
   pull_request:
 
 # Le jeton de GitHub ne sert qu'à lire le code : ces vérifications n'écrivent rien dans le dépôt.
+# Chaque action est désignée par l'empreinte de sa version, pas par une étiquette qu'on peut déplacer (SS §10).
+# Dependabot propose leurs mises à jour chaque semaine.
 permissions:
   contents: read
 
@@ -43,10 +45,10 @@ jobs:
 
     steps:
       - name: Récupérer le code
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Installer .NET 10
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
         with:
           dotnet-version: 10.0.x
 
@@ -69,8 +71,8 @@ jobs:
             exit 1
           fi
 
-      - name: Compiler
-        run: dotnet build --no-restore
+      - name: Compiler sans aucun avertissement
+        run: dotnet build --no-restore -warnaserror
 
       - name: Lancer tous les tests
         run: dotnet test --no-build
@@ -82,13 +84,13 @@ jobs:
 
     steps:
       - name: Récupérer tout l'historique
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
 
       # La version est fixée : c'est celle qui a vérifié le dépôt, avec les exceptions de .gitleaks.toml.
       - name: Lancer gitleaks
-        uses: gitleaks/gitleaks-action@v2
+        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2.3.9
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITLEAKS_VERSION: 8.30.1

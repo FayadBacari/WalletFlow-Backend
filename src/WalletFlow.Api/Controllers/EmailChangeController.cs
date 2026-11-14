@@ -41,12 +41,12 @@ public class EmailChangeController : ControllerBase
             IpAddress = HttpContext.Connection.RemoteIpAddress
         });
 
-        if (result == EmailChangeRequestResult.RequestAccepted)
+        if (result is EmailChangeRequestResult.RequestAccepted)
         {
             return Ok(new MessageResponse(RequestAcceptedMessage));
         }
 
-        if (result == EmailChangeRequestResult.TooManyRequests)
+        if (result is EmailChangeRequestResult.TooManyRequests)
         {
             return StatusCode(StatusCodes.Status429TooManyRequests);
         }
@@ -58,15 +58,15 @@ public class EmailChangeController : ControllerBase
     // reçoivent le même message, qui ne dit pas lequel est faux.
     private ActionResult AnswerRefusal(EmailChangeRequestResult result)
     {
-        if (result == EmailChangeRequestResult.InvalidEmailAddress)
+        if (result is EmailChangeRequestResult.InvalidEmailAddress)
         {
             ModelState.AddModelError(nameof(ChangeEmailRequest.NewEmail), ErrorMessages.InvalidEmailAddress);
         }
-        else if (result == EmailChangeRequestResult.SameEmailAddress)
+        else if (result is EmailChangeRequestResult.SameEmailAddress)
         {
             ModelState.AddModelError(nameof(ChangeEmailRequest.NewEmail), ErrorMessages.SameEmailAddress);
         }
-        else if (result == EmailChangeRequestResult.WrongPassword)
+        else if (result is EmailChangeRequestResult.WrongPassword)
         {
             ModelState.AddModelError(nameof(ChangeEmailRequest.Password), ErrorMessages.WrongCurrentPassword);
         }

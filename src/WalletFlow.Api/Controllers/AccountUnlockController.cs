@@ -35,7 +35,7 @@ public class AccountUnlockController : ControllerBase
             request.Token,
             HttpContext.Connection.RemoteIpAddress);
 
-        if (result == AccountUnlockResult.AccountUnlocked)
+        if (result is AccountUnlockResult.AccountUnlocked)
         {
             return Ok(new MessageResponse(UnlockedMessage));
         }

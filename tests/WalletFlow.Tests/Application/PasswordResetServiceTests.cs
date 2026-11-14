@@ -85,7 +85,7 @@ public class PasswordResetServiceTests
     // Vérifie que le lien a été refusé, et que rien n'a changé.
     private void AssertLinkRefusedAndNothingChanged(PasswordResetResult result, User account)
     {
-        Assert.Equal(PasswordResetResult.LinkNoLongerValid, result);
+        Assert.IsType<PasswordResetResult.LinkNoLongerValid>(result);
         Assert.Equal(OldHash, account.PasswordHash);
         Assert.Empty(securityEventRepository.SavedSecurityEvents);
     }
@@ -99,7 +99,7 @@ public class PasswordResetServiceTests
 
         var result = await ResetPasswordAsync();
 
-        Assert.Equal(PasswordResetResult.PasswordChanged, result);
+        Assert.IsType<PasswordResetResult.PasswordChanged>(result);
         Assert.Equal(FakePasswordHasher.HashPrefix + NewPassword, account.PasswordHash);
         Assert.Equal(clock.GetUtcNow().UtcDateTime, accountRepository.SavedEmailTokens[0].UsedAt);
     }
@@ -170,7 +170,7 @@ public class PasswordResetServiceTests
 
         var result = await ResetPasswordAsync();
 
-        Assert.Equal(PasswordResetResult.PasswordChanged, result);
+        Assert.IsType<PasswordResetResult.PasswordChanged>(result);
     }
 
     // --- Règles du mot de passe
@@ -185,14 +185,14 @@ public class PasswordResetServiceTests
 
         var result = await ResetPasswordAsync(newPassword);
 
-        Assert.Equal(PasswordResetResult.PasswordBreaksRules, result);
+        Assert.IsType<PasswordResetResult.PasswordBreaksRules>(result);
         Assert.Equal(OldHash, account.PasswordHash);
         Assert.Null(accountRepository.SavedEmailTokens[0].UsedAt);
         Assert.Single(sessionRepository.SavedSessions);
         Assert.Equal(0, passwordHasher.HashedPasswordCount);
 
         var laterResult = await ResetPasswordAsync();
-        Assert.Equal(PasswordResetResult.PasswordChanged, laterResult);
+        Assert.IsType<PasswordResetResult.PasswordChanged>(laterResult);
     }
 
     // SS §2 : le mot de passe est normalisé avant les règles et le hachage.
@@ -213,7 +213,7 @@ public class PasswordResetServiceTests
 
         var result = await ResetPasswordAsync("Abcdefgh-1e\u0301");
 
-        Assert.Equal(PasswordResetResult.PasswordBreaksRules, result);
+        Assert.IsType<PasswordResetResult.PasswordBreaksRules>(result);
     }
 
     [Theory]
@@ -225,7 +225,7 @@ public class PasswordResetServiceTests
 
         var result = await ResetPasswordAsync(NewPassword + (char)forbiddenCharacter);
 
-        Assert.Equal(PasswordResetResult.PasswordBreaksRules, result);
+        Assert.IsType<PasswordResetResult.PasswordBreaksRules>(result);
     }
 
     // --- Liens refusés
@@ -260,7 +260,7 @@ public class PasswordResetServiceTests
 
         var result = await ResetPasswordAsync();
 
-        Assert.Equal(PasswordResetResult.PasswordChanged, result);
+        Assert.IsType<PasswordResetResult.PasswordChanged>(result);
     }
 
     [Fact]
@@ -272,7 +272,7 @@ public class PasswordResetServiceTests
 
         var result = await ResetPasswordAsync("Encore-Un-Mot-De-Passe-3");
 
-        Assert.Equal(PasswordResetResult.LinkNoLongerValid, result);
+        Assert.IsType<PasswordResetResult.LinkNoLongerValid>(result);
         Assert.Equal(securityEvents, securityEventRepository.SavedSecurityEvents.Count);
     }
 
@@ -322,7 +322,7 @@ public class PasswordResetServiceTests
 
         var result = await ResetPasswordAsync();
 
-        Assert.Equal(PasswordResetResult.PasswordChanged, result);
+        Assert.IsType<PasswordResetResult.PasswordChanged>(result);
         Assert.Equal(FakePasswordHasher.HashPrefix + NewPassword, account.PasswordHash);
         Assert.Single(securityEventRepository.SavedSecurityEvents);
         Assert.Equal(1, passwordHasher.HashedPasswordCount);

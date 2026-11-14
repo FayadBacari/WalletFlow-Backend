@@ -388,13 +388,29 @@ CREATE TRIGGER tg_parametrer_controle
     BEFORE INSERT OR UPDATE ON parametrer
     FOR EACH ROW EXECUTE FUNCTION fn_parametrer_controle();
 
+-- SS §11 : le journal de sécurité est conservé un an. L'application ne peut pas effacer le journal elle-même
+-- (section 8) : cette fonction, qu'elle appelle chaque jour, efface seulement les événements de plus d'un an,
+-- et renvoie leur nombre. SECURITY DEFINER : la fonction a les droits du propriétaire du script.
+CREATE FUNCTION fn_effacer_vieux_evenements() RETURNS integer LANGUAGE plpgsql
+    SECURITY DEFINER SET search_path = public AS $$
+DECLARE
+    nb_effaces integer;
+BEGIN
+    DELETE FROM evenement_securite
+    WHERE date_evenement < now() - interval '1 year';
+
+    GET DIAGNOSTICS nb_effaces = ROW_COUNT;
+    RETURN nb_effaces;
+END;
+$$;
+
 -- 8. Utilisateur de base de données de l'application (SS §7)
 -- Il lit et écrit les données, mais ne peut ni supprimer de table ni modifier
 -- les types d'alerte. Son mot de passe se définit à part, jamais dans ce script.
 -- Il ne peut ni choisir ni changer le rôle d'un utilisateur : le rôle administrateur
 -- ne s'attribue que depuis le serveur, avec un compte administrateur de PostgreSQL (SS §8 et §14).
 -- Il ne peut qu'ajouter des événements au journal de sécurité, jamais les modifier
--- ni les effacer (SS §11).
+-- ni les effacer (SS §11). Seule la fonction fn_effacer_vieux_evenements efface ceux de plus d'un an.
 
 CREATE ROLE walletflow_app LOGIN;
 GRANT USAGE ON SCHEMA public TO walletflow_app;
@@ -412,6 +428,8 @@ GRANT UPDATE (
     email_confirme, double_auth_activee, secret_totp_chiffre, canal_notification,
     nb_tentatives_echouees, nb_blocages, date_fin_blocage, date_demande_suppression)
     ON utilisateur TO walletflow_app;
+REVOKE EXECUTE ON FUNCTION fn_effacer_vieux_evenements() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION fn_effacer_vieux_evenements() TO walletflow_app;
 
 COMMIT;
 ```
@@ -427,16 +445,16 @@ COMMIT;
 - Chaque compte et chaque opération reçus de la banque, enregistrés une seule fois (`ux_compte_externe`, `ux_transaction_externe`).
 - Une alerte non désactivable toujours activée (`tg_parametrer_controle`).
 - La suppression d'un sac et l'effacement d'un compte utilisateur (`tg_sac_avant_suppression`, `tg_utilisateur_avant_suppression` et les règles ON DELETE).
-- Le rôle d'un utilisateur, que l'application ne peut ni choisir ni changer, et le journal de sécurité, auquel elle ne peut qu'ajouter des événements (droits de `walletflow_app`, section 8 du script).
+- Le rôle d'un utilisateur, que l'application ne peut ni choisir ni changer, et le journal de sécurité, auquel elle ne peut qu'ajouter des événements (droits de `walletflow_app`, section 8 du script). Seule la fonction `fn_effacer_vieux_evenements` efface les événements de plus d'un an.
 
 **Vérifié par l'application**
 - L'appartenance au même utilisateur : la catégorie d'une transaction et son compte, les deux sacs d'un mouvement (SS §4).
-- Un sac jamais négatif et un total des sacs qui ne dépasse pas le solde total. Le contrôle se fait dans une transaction SQL qui verrouille les lignes concernées (`SELECT … FOR UPDATE`), pour que deux déplacements simultanés ne le contournent pas (SS §5).
+- Un sac jamais négatif et un total des sacs qui ne dépasse pas le solde total. Le contrôle se fait dans la transaction SQL du déplacement, qui réécrit la ligne de l'utilisateur en vérifiant sa version (`xmin`) : de deux déplacements simultanés, le second échoue et refait ses contrôles, pour que deux déplacements ne les contournent pas (SS §5).
 - La borne qui dépend de la date du jour : une date d'objectif dans le futur. Une contrainte CHECK ne peut pas la vérifier de façon fiable.
 - La catégorie « Autres » ni renommée ni supprimée, et les transactions d'une catégorie déplacées dans « Autres » avant sa suppression (GR Dépenses).
 - La création des 8 catégories par défaut, dans la même transaction SQL que l'utilisateur (cardinalité 1,n de DISPOSER).
 - Le hachage des mots de passe et des codes de secours, et le chiffrement du secret TOTP, avant l'enregistrement (SS §2).
-- Les durées : expiration des jetons, fermeture des sessions après 30 minutes d'inactivité, mise à jour des comptes jusqu'à 4 fois par jour, rappel 7 jours avant la fin d'une autorisation bancaire, effacement des comptes 30 jours après la demande, effacement des comptes non confirmés une fois leur lien expiré, conservation du journal de 6 mois à 1 an, réapparition d'une suggestion ignorée après 30 jours. Ce sont des tâches planifiées.
+- Les durées : expiration des jetons, fermeture des sessions après 30 minutes d'inactivité, mise à jour des comptes jusqu'à 4 fois par jour, rappel 7 jours avant la fin d'une autorisation bancaire, effacement des comptes 30 jours après la demande, effacement des comptes non confirmés une fois leur lien expiré, conservation du journal un an (la tâche appelle `fn_effacer_vieux_evenements`), réapparition d'une suggestion ignorée après 30 jours. Ce sont des tâches planifiées.
 - La révocation de l'autorisation chez le prestataire, quand l'utilisateur déconnecte une banque ou demande la suppression de son compte (GR Comptes, GR Suppression).
 
 

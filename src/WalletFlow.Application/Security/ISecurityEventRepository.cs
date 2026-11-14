@@ -10,4 +10,8 @@ public interface ISecurityEventRepository
 
     // Prépare un événement : il partira avec les autres changements, dans la même transaction, à l'appel de l'unité de travail.
     void PrepareEvent(SecurityEvent securityEvent);
+
+    // Efface tout de suite les événements de plus d'un an (SS §11), et renvoie leur nombre. La durée est gardée par la base :
+    // l'application n'a pas le droit d'effacer un événement plus récent.
+    Task<int> DeleteExpiredEventsAsync();
 }

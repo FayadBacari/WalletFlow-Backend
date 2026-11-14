@@ -39,7 +39,7 @@ public class TwoFactorDeactivationServiceTests
             AccountPassword,
             services.CalculateCurrentCode(activatedAccount.Secret));
 
-        Assert.Equal(TwoFactorDeactivationResult.TwoFactorDeactivated, result);
+        Assert.IsType<TwoFactorDeactivationResult.TwoFactorDeactivated>(result);
         Assert.False(activatedAccount.UserAccount.IsTwoFactorEnabled);
         Assert.Null(activatedAccount.UserAccount.EncryptedTotpSecret);
         Assert.Empty(services.TwoFactorRepository.SavedBackupCodes);
@@ -59,7 +59,7 @@ public class TwoFactorDeactivationServiceTests
 
         var result = await DeactivateAsync(activatedAccount.UserAccount, AccountPassword, activatedAccount.BackupCodes[0]);
 
-        Assert.Equal(TwoFactorDeactivationResult.TwoFactorDeactivated, result);
+        Assert.IsType<TwoFactorDeactivationResult.TwoFactorDeactivated>(result);
         Assert.False(activatedAccount.UserAccount.IsTwoFactorEnabled);
     }
 
@@ -78,8 +78,8 @@ public class TwoFactorDeactivationServiceTests
             AccountPassword,
             services.FindWrongCode(activatedAccount.Secret));
 
-        Assert.Equal(TwoFactorDeactivationResult.WrongPasswordOrCode, wrongPasswordResult);
-        Assert.Equal(wrongPasswordResult, wrongCodeResult);
+        Assert.IsType<TwoFactorDeactivationResult.WrongPasswordOrCode>(wrongPasswordResult);
+        Assert.IsType<TwoFactorDeactivationResult.WrongPasswordOrCode>(wrongCodeResult);
         AssertAccountStillActivated(activatedAccount);
         Assert.Equal(2, services.CountSecurityEvents(SecurityEventType.TwoFactorDeactivation, SecurityEventResult.Failure));
     }
@@ -94,7 +94,7 @@ public class TwoFactorDeactivationServiceTests
 
         var result = await DeactivateAsync(activatedAccount.UserAccount, AccountPassword, code);
 
-        Assert.Equal(TwoFactorDeactivationResult.TwoFactorDeactivated, result);
+        Assert.IsType<TwoFactorDeactivationResult.TwoFactorDeactivated>(result);
     }
 
     [Fact]
@@ -115,7 +115,7 @@ public class TwoFactorDeactivationServiceTests
 
         var result = await DeactivateAsync(activatedAccount.UserAccount, "Mot-De-Passe\u0301-1", activatedAccount.BackupCodes[0]);
 
-        Assert.Equal(TwoFactorDeactivationResult.TwoFactorDeactivated, result);
+        Assert.IsType<TwoFactorDeactivationResult.TwoFactorDeactivated>(result);
     }
 
     [Fact]
@@ -125,7 +125,7 @@ public class TwoFactorDeactivationServiceTests
 
         var result = await DeactivateAsync(account, AccountPassword, "123456");
 
-        Assert.Equal(TwoFactorDeactivationResult.TwoFactorNotEnabled, result);
+        Assert.IsType<TwoFactorDeactivationResult.TwoFactorNotEnabled>(result);
         Assert.Equal(0, services.PasswordHasher.VerifiedPasswordCount);
         Assert.Empty(services.SecurityEventRepository.SavedSecurityEvents);
     }
@@ -135,7 +135,7 @@ public class TwoFactorDeactivationServiceTests
     {
         var result = await services.CreateDeactivationService().DeactivateAsync(Guid.NewGuid(), AccountPassword, "123456", IpAddress);
 
-        Assert.Equal(TwoFactorDeactivationResult.TwoFactorNotEnabled, result);
+        Assert.IsType<TwoFactorDeactivationResult.TwoFactorNotEnabled>(result);
     }
 
     // SS §2 : un code qui vient de servir à se connecter ne peut pas servir à désactiver.
@@ -148,7 +148,7 @@ public class TwoFactorDeactivationServiceTests
 
         var result = await DeactivateAsync(activatedAccount.UserAccount, AccountPassword, code);
 
-        Assert.Equal(TwoFactorDeactivationResult.WrongPasswordOrCode, result);
+        Assert.IsType<TwoFactorDeactivationResult.WrongPasswordOrCode>(result);
         AssertAccountStillActivated(activatedAccount);
     }
 
@@ -193,7 +193,7 @@ public class TwoFactorDeactivationServiceTests
 
         var result = await DeactivateAsync(activatedAccount.UserAccount, AccountPassword, activatedAccount.BackupCodes[0]);
 
-        Assert.Equal(TwoFactorDeactivationResult.WrongPasswordOrCode, result);
+        Assert.IsType<TwoFactorDeactivationResult.WrongPasswordOrCode>(result);
         AssertAccountStillActivated(activatedAccount);
     }
 
@@ -206,7 +206,7 @@ public class TwoFactorDeactivationServiceTests
 
         var result = await DeactivateAsync(activatedAccount.UserAccount, AccountPassword, activatedAccount.BackupCodes[0]);
 
-        Assert.Equal(TwoFactorDeactivationResult.WrongPasswordOrCode, result);
+        Assert.IsType<TwoFactorDeactivationResult.WrongPasswordOrCode>(result);
         Assert.Equal("secret-du-nouveau-telephone", activatedAccount.UserAccount.EncryptedTotpSecret);
     }
 
@@ -220,7 +220,7 @@ public class TwoFactorDeactivationServiceTests
 
         var result = await DeactivateAsync(activatedAccount.UserAccount, AccountPassword, activatedAccount.BackupCodes[0]);
 
-        Assert.Equal(TwoFactorDeactivationResult.TwoFactorNotEnabled, result);
+        Assert.IsType<TwoFactorDeactivationResult.TwoFactorNotEnabled>(result);
     }
 
     // --- Les conflits et les pannes
@@ -233,7 +233,7 @@ public class TwoFactorDeactivationServiceTests
 
         var result = await DeactivateAsync(activatedAccount.UserAccount, AccountPassword, activatedAccount.BackupCodes[0]);
 
-        Assert.Equal(TwoFactorDeactivationResult.TwoFactorDeactivated, result);
+        Assert.IsType<TwoFactorDeactivationResult.TwoFactorDeactivated>(result);
         Assert.Equal(1, services.CountSecurityEvents(SecurityEventType.TwoFactorDeactivation, SecurityEventResult.Success));
     }
 
@@ -245,7 +245,7 @@ public class TwoFactorDeactivationServiceTests
 
         var result = await DeactivateAsync(activatedAccount.UserAccount, AccountPassword, activatedAccount.BackupCodes[0]);
 
-        Assert.NotEqual(TwoFactorDeactivationResult.TwoFactorDeactivated, result);
+        Assert.IsNotType<TwoFactorDeactivationResult.TwoFactorDeactivated>(result);
         AssertAccountStillActivated(activatedAccount);
     }
 

@@ -25,7 +25,7 @@ public class MonthComparisonService
     // Donne chaque catégorie de l'utilisateur, dans l'ordre de leur liste, avec son mois en cours et sa moyenne.
     public async Task<MonthComparison> ReadAsync(Guid userId, Guid? accountId)
     {
-        var today = ChartRules.FindUsersToday(clock.GetUtcNow());
+        var today = UsersCalendar.FindToday(clock.GetUtcNow());
         var monthStart = new DateOnly(today.Year, today.Month, 1);
         var monthEnd = monthStart.AddMonths(1).AddDays(-1);
         var averageStart = monthStart.AddMonths(-ChartRules.AverageMonthCount);

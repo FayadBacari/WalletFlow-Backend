@@ -71,12 +71,12 @@ public class ConcurrentRequestsTests
             var results = await RunSimultaneouslyAsync(api, (services, requestNumber) =>
                 services.GetRequiredService<PasswordResetService>().ResetAsync(linkToken, "Nouveau-Mot-De-Passe-" + requestNumber, null));
 
-            Assert.Equal(1, results.Count(result => result == PasswordResetResult.PasswordChanged));
-            Assert.Equal(SimultaneousRequestCount - 1, results.Count(result => result == PasswordResetResult.LinkNoLongerValid));
+            Assert.Equal(1, results.Count(result => result is PasswordResetResult.PasswordChanged));
+            Assert.Equal(SimultaneousRequestCount - 1, results.Count(result => result is PasswordResetResult.LinkNoLongerValid));
             await using var databaseContext = LocalTestDatabase.CreateDatabaseContext();
             Assert.Equal(1, await CountEventsAsync(databaseContext, account.Id, SecurityEventType.PasswordChange, SecurityEventResult.Success));
             var savedAccount = await databaseContext.Users.SingleAsync(row => row.Id == account.Id);
-            var winningRequestNumber = results.IndexOf(PasswordResetResult.PasswordChanged);
+            var winningRequestNumber = results.FindIndex(result => result is PasswordResetResult.PasswordChanged);
             var passwordHasher = api.Services.GetRequiredService<IPasswordHasher>();
             Assert.True(await passwordHasher.VerifyAsync("Nouveau-Mot-De-Passe-" + winningRequestNumber, savedAccount.PasswordHash));
         }

@@ -1,5 +1,5 @@
 -- Tests du script de création de la base (database/001_create_walletflow_schema.sql).
--- Ils vérifient les contraintes, les déclencheurs et les suppressions en cascade du MPD.
+-- Ils vérifient les contraintes, les déclencheurs, les suppressions en cascade et les droits du MPD.
 -- Tout se passe dans une seule transaction, annulée à la fin : la base reste vide.
 --
 -- Lancement, depuis le dossier WalletFlow-Backend :
@@ -629,6 +629,28 @@ BEGIN
 END;
 $$;
 
+
+-- 11. SS §11 : le journal est conservé un an. L'application efface les événements plus anciens par la fonction
+--     fn_effacer_vieux_evenements, qui ne touche à aucun événement plus récent.
+DO $$
+DECLARE
+    nb_effaces integer;
+BEGIN
+    INSERT INTO evenement_securite (type_evenement, resultat_evenement, date_evenement)
+    VALUES ('connexion', 'echec', now() - interval '1 year 1 second'),
+           ('connexion', 'echec', now() - interval '1 year' + interval '1 second'),
+           ('connexion', 'echec', now());
+
+    nb_effaces := fn_effacer_vieux_evenements();
+
+    ASSERT nb_effaces = 1, 'ÉCHEC : la fonction devait effacer un seul événement';
+    ASSERT NOT EXISTS (SELECT 1 FROM evenement_securite WHERE date_evenement < now() - interval '1 year'),
+        'ÉCHEC : un événement de plus d''un an est resté';
+    ASSERT (SELECT count(*) FROM evenement_securite WHERE date_evenement >= now() - interval '1 year') >= 2,
+        'ÉCHEC : un événement de moins d''un an a disparu';
+    RAISE NOTICE 'OK : seuls les événements de plus d''un an sont effacés du journal';
+END;
+$$;
 
 \echo
 \echo 'Tous les tests sont passés. La transaction est annulée : la base reste vide.'

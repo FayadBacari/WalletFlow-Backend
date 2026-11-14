@@ -103,7 +103,7 @@ public class AccountRecoveryRealChainTests
     {
         var recoveryRequestService = new PasswordRecoveryRequestService(new InMemoryPasswordRecoveryRequestLimiter(clock), emailQueue);
 
-        Assert.Equal(PasswordRecoveryRequestResult.RequestAccepted, recoveryRequestService.Request(emailAddress, IpAddress));
+        Assert.IsType<PasswordRecoveryRequestResult.RequestAccepted>(recoveryRequestService.Request(emailAddress, IpAddress));
         await ProcessQueuedRequestsAsync(databaseContext);
 
         return ReadConfirmationToken(emailSender.SentEmails.Last().Body);
@@ -164,7 +164,7 @@ public class AccountRecoveryRealChainTests
         var linkToken = await RequestRecoveryThenReadTokenAsync(databaseContext, "chaine-recuperation@exemple.test");
         var resetResult = await ResetPasswordAsync(databaseContext, linkToken, NewPassword);
 
-        Assert.Equal(PasswordResetResult.PasswordChanged, resetResult);
+        Assert.IsType<PasswordResetResult.PasswordChanged>(resetResult);
         Assert.Equal(0, await databaseContext.UserSessions.CountAsync(row => row.UserId == accountId));
         Assert.Equal(1, await CountSecurityEventsAsync(databaseContext, accountId, SecurityEventType.PasswordRecovery, SecurityEventResult.Success));
         Assert.Equal(1, await CountSecurityEventsAsync(databaseContext, accountId, SecurityEventType.PasswordChange, SecurityEventResult.Success));
@@ -175,7 +175,7 @@ public class AccountRecoveryRealChainTests
         Assert.IsType<AccountLoginResult.LoggedIn>(newPasswordResult);
 
         var reusedLinkResult = await ResetPasswordAsync(databaseContext, linkToken, "Encore-Un-Mot-De-Passe-3");
-        Assert.Equal(PasswordResetResult.LinkNoLongerValid, reusedLinkResult);
+        Assert.IsType<PasswordResetResult.LinkNoLongerValid>(reusedLinkResult);
     }
 
     // Le vrai Argon2 voit deux mots différents sans la normalisation : c'est le seul test qui le prouve de bout en bout.
@@ -239,7 +239,7 @@ public class AccountRecoveryRealChainTests
 
         var unlockResult = await UnlockAccountAsync(databaseContext, linkToken);
 
-        Assert.Equal(AccountUnlockResult.AccountUnlocked, unlockResult);
+        Assert.IsType<AccountUnlockResult.AccountUnlocked>(unlockResult);
         Assert.Equal(0, await databaseContext.UserSessions.CountAsync(row => row.UserId == accountId));
         Assert.Equal(1, await CountSecurityEventsAsync(databaseContext, accountId, SecurityEventType.Unlock, SecurityEventResult.Success));
 
@@ -252,7 +252,7 @@ public class AccountRecoveryRealChainTests
         Assert.IsType<AccountLoginResult.LoggedIn>(loginResult);
 
         var reusedLinkResult = await UnlockAccountAsync(databaseContext, linkToken);
-        Assert.Equal(AccountUnlockResult.LinkNoLongerValid, reusedLinkResult);
+        Assert.IsType<AccountUnlockResult.LinkNoLongerValid>(reusedLinkResult);
     }
 
     [Fact]
@@ -268,8 +268,8 @@ public class AccountRecoveryRealChainTests
         var firstResult = await ResetPasswordAsync(databaseContext, firstRecoveryToken, NewPassword);
         var secondResult = await ResetPasswordAsync(databaseContext, secondRecoveryToken, NewPassword);
 
-        Assert.Equal(PasswordResetResult.LinkNoLongerValid, firstResult);
-        Assert.Equal(PasswordResetResult.PasswordChanged, secondResult);
+        Assert.IsType<PasswordResetResult.LinkNoLongerValid>(firstResult);
+        Assert.IsType<PasswordResetResult.PasswordChanged>(secondResult);
     }
 
     // Un lien de récupération arrivé à 30 minutes est refusé sur la vraie base, à la seconde près.
@@ -284,7 +284,7 @@ public class AccountRecoveryRealChainTests
         clock.Advance(TimeSpan.FromMinutes(30));
         var result = await ResetPasswordAsync(databaseContext, linkToken, NewPassword);
 
-        Assert.Equal(PasswordResetResult.LinkNoLongerValid, result);
+        Assert.IsType<PasswordResetResult.LinkNoLongerValid>(result);
     }
 
     [Fact]

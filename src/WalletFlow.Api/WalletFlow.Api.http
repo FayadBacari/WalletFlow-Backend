@@ -328,3 +328,68 @@ GET {{WalletFlow_Api_SecureAddress}}/api/charts/months?from=2026-01-01&to=2026-1
 GET {{WalletFlow_Api_SecureAddress}}/api/charts/comparison
 
 ###
+
+# Sacs, avec leur solde et leur progression, le solde total, le total des sacs et l'argent disponible.
+GET {{WalletFlow_Api_SecureAddress}}/api/bags
+
+###
+
+# Création d'un sac vide. L'objectif (montant en centimes, date facultative) peut être omis.
+POST {{WalletFlow_Api_SecureAddress}}/api/bags
+Content-Type: application/json
+X-CSRF-TOKEN: colle-ici-le-jeton-anti-csrf
+
+{
+  "name": "Vacances",
+  "targetAmountInCents": 150000,
+  "targetDate": "2027-07-01"
+}
+
+###
+
+# Nouveau nom d'un sac.
+PUT {{WalletFlow_Api_SecureAddress}}/api/bags/colle-ici-l-identifiant/name
+Content-Type: application/json
+X-CSRF-TOKEN: colle-ici-le-jeton-anti-csrf
+
+{
+  "name": "Voyage"
+}
+
+###
+
+# Objectif d'un sac. Deux null enlèvent l'objectif.
+PUT {{WalletFlow_Api_SecureAddress}}/api/bags/colle-ici-l-identifiant/goal
+Content-Type: application/json
+X-CSRF-TOKEN: colle-ici-le-jeton-anti-csrf
+
+{
+  "targetAmountInCents": 200000,
+  "targetDate": null
+}
+
+###
+
+# Déplacement d'argent. Un sac null est l'argent disponible.
+POST {{WalletFlow_Api_SecureAddress}}/api/bags/movements
+Content-Type: application/json
+X-CSRF-TOKEN: colle-ici-le-jeton-anti-csrf
+
+{
+  "sourceBagId": null,
+  "destinationBagId": "colle-ici-l-identifiant",
+  "amountInCents": 5000
+}
+
+###
+
+# Historique d'un sac, les mouvements les plus récents d'abord, 50 par page.
+GET {{WalletFlow_Api_SecureAddress}}/api/bags/colle-ici-l-identifiant/movements?page=1
+
+###
+
+# Suppression d'un sac : son argent revient dans l'argent disponible.
+DELETE {{WalletFlow_Api_SecureAddress}}/api/bags/colle-ici-l-identifiant
+X-CSRF-TOKEN: colle-ici-le-jeton-anti-csrf
+
+###

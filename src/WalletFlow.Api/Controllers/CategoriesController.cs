@@ -3,6 +3,7 @@ using WalletFlow.Api.Authentication;
 using WalletFlow.Api.Configuration;
 using WalletFlow.Api.Contracts;
 using WalletFlow.Application.Categories;
+using WalletFlow.Application.Security;
 using WalletFlow.Domain.AccountsAndCategories;
 
 namespace WalletFlow.Api.Controllers;
@@ -21,6 +22,7 @@ public class CategoriesController : ControllerBase
     private readonly CategoryRenameService renameService;
     private readonly CategoryBudgetService budgetService;
     private readonly CategoryDeletionService deletionService;
+    private readonly ForeignAccessJournalService foreignAccessJournal;
 
     // Reçoit les cas d'utilisation des catégories.
     public CategoriesController(
@@ -28,13 +30,15 @@ public class CategoriesController : ControllerBase
         CategoryCreationService creationService,
         CategoryRenameService renameService,
         CategoryBudgetService budgetService,
-        CategoryDeletionService deletionService)
+        CategoryDeletionService deletionService,
+        ForeignAccessJournalService foreignAccessJournal)
     {
         this.listService = listService;
         this.creationService = creationService;
         this.renameService = renameService;
         this.budgetService = budgetService;
         this.deletionService = deletionService;
+        this.foreignAccessJournal = foreignAccessJournal;
     }
 
     // GET api/categories : les catégories de l'utilisateur avec leur budget, dans l'ordre alphabétique, « Autres » à la fin.
@@ -98,6 +102,7 @@ public class CategoriesController : ControllerBase
 
         if (result is CategoryRenameResult.NotFound)
         {
+            await RecordForeignAccessAsync(OwnedResource.Category, categoryId);
             return Problem(statusCode: StatusCodes.Status404NotFound);
         }
 
@@ -133,6 +138,7 @@ public class CategoriesController : ControllerBase
 
         if (result is CategoryBudgetResult.NotFound)
         {
+            await RecordForeignAccessAsync(OwnedResource.Category, categoryId);
             return Problem(statusCode: StatusCodes.Status404NotFound);
         }
 
@@ -160,10 +166,21 @@ public class CategoriesController : ControllerBase
 
         if (result is CategoryDeletionResult.NotFound)
         {
+            await RecordForeignAccessAsync(OwnedResource.Category, categoryId);
             return Problem(statusCode: StatusCodes.Status404NotFound);
         }
 
         return Problem(statusCode: StatusCodes.Status409Conflict, title: ErrorMessages.OtherCategoryIsFixed);
+    }
+
+    // Note au journal si la ressource visée est à un autre utilisateur (SS §11). La réponse reste la même dans tous les cas.
+    private async Task RecordForeignAccessAsync(OwnedResource resource, Guid? resourceId)
+    {
+        await foreignAccessJournal.RecordIfForeignAsync(
+            SessionClaims.ReadUserId(User),
+            HttpContext.Connection.RemoteIpAddress,
+            resource,
+            resourceId);
     }
 
     // Donne le message d'un nom refusé, sur le champ Name.

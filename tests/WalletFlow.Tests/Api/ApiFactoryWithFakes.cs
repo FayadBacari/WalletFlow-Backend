@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using WalletFlow.Application.Bags;
 using WalletFlow.Application.BankConnections;
 using WalletFlow.Application.Categories;
 using WalletFlow.Application.Emails;
@@ -26,6 +27,8 @@ public class ApiFactoryWithFakes : WebApplicationFactory<Program>
     public FakeCategoryRepository CategoryRepository { get; }
     public FakeBankConnectionRepository BankRepository { get; } = new FakeBankConnectionRepository();
     public FakeTransactionRepository TransactionRepository { get; }
+    public FakeBagRepository BagRepository { get; }
+    public FakeResourceOwnershipRepository OwnershipRepository { get; }
     public FakeBankDataProvider BankProvider { get; } = new FakeBankDataProvider();
     public FakeDatabaseUnitOfWork UnitOfWork { get; }
     public FakeEmailSender EmailSender { get; } = new FakeEmailSender();
@@ -36,11 +39,14 @@ public class ApiFactoryWithFakes : WebApplicationFactory<Program>
     public string TotpEncryptionKey { get; } = TwoFactorTestTools.CreateEncryptionKey();
 
     // Relie les faux accès à la fausse unité de travail, qui garde leurs changements ensemble.
-    // Les catégories créées à l'inscription sont celles que le faux accès aux catégories lit.
+    // Les catégories créées à l'inscription sont celles que le faux accès aux catégories lit, et les comptes inscrits
+    // sont ceux que le faux accès aux sacs lit.
     public ApiFactoryWithFakes()
     {
         CategoryRepository = new FakeCategoryRepository(AccountRepository.SavedCategories);
         TransactionRepository = new FakeTransactionRepository(BankRepository, CategoryRepository);
+        BagRepository = new FakeBagRepository(AccountRepository.SavedUsers);
+        OwnershipRepository = new FakeResourceOwnershipRepository(CategoryRepository, BankRepository, BagRepository);
         UnitOfWork = new FakeDatabaseUnitOfWork(
             AccountRepository,
             SessionRepository,
@@ -48,7 +54,8 @@ public class ApiFactoryWithFakes : WebApplicationFactory<Program>
             SecurityEventRepository,
             CategoryRepository,
             BankRepository,
-            TransactionRepository);
+            TransactionRepository,
+            BagRepository);
     }
 
     // Remplace les services avant le démarrage de l'API (nom imposé par le framework).
@@ -66,6 +73,8 @@ public class ApiFactoryWithFakes : WebApplicationFactory<Program>
             services.AddSingleton<ICategoryRepository>(CategoryRepository);
             services.AddSingleton<IBankConnectionRepository>(BankRepository);
             services.AddSingleton<ITransactionRepository>(TransactionRepository);
+            services.AddSingleton<IBagRepository>(BagRepository);
+            services.AddSingleton<IResourceOwnershipRepository>(OwnershipRepository);
             services.AddSingleton<IBankDataProvider>(BankProvider);
             services.AddSingleton<IEmailSender>(EmailSender);
             services.AddSingleton<TimeProvider>(Clock);

@@ -125,8 +125,8 @@ public class AccountRegistrationRealChainTests
         var firstResult = await ConfirmAccountAsync(databaseContext, token, ValidPassword);
         var secondResult = await ConfirmAccountAsync(databaseContext, token, ValidPassword);
 
-        Assert.Equal(AccountConfirmationResult.AccountConfirmed, firstResult);
-        Assert.Equal(AccountConfirmationResult.LinkNoLongerValid, secondResult);
+        Assert.IsType<AccountConfirmationResult.AccountConfirmed>(firstResult);
+        Assert.IsType<AccountConfirmationResult.LinkNoLongerValid>(secondResult);
         var reloadedUser = await ReadAccountAsync(databaseContext, "test-chaine-confirmation@exemple.test");
         Assert.True(reloadedUser.IsEmailConfirmed);
     }
@@ -141,12 +141,12 @@ public class AccountRegistrationRealChainTests
 
         var wrongPasswordResult = await ConfirmAccountAsync(databaseContext, token, OtherPassword);
 
-        Assert.Equal(AccountConfirmationResult.WrongPassword, wrongPasswordResult);
+        Assert.IsType<AccountConfirmationResult.WrongPassword>(wrongPasswordResult);
         var reloadedUser = await ReadAccountAsync(databaseContext, "test-chaine-mauvais-mot@exemple.test");
         Assert.False(reloadedUser.IsEmailConfirmed);
 
         var rightPasswordResult = await ConfirmAccountAsync(databaseContext, token, ValidPassword);
-        Assert.Equal(AccountConfirmationResult.AccountConfirmed, rightPasswordResult);
+        Assert.IsType<AccountConfirmationResult.AccountConfirmed>(rightPasswordResult);
     }
 
     // Une nouvelle inscription tue l'ancien lien et l'ancien mot de passe, sans créer de doublon (GR Auth).
@@ -162,9 +162,9 @@ public class AccountRegistrationRealChainTests
         var firstPasswordResult = await ConfirmAccountAsync(databaseContext, secondConfirmationToken, ValidPassword);
         var secondResult = await ConfirmAccountAsync(databaseContext, secondConfirmationToken, OtherPassword);
 
-        Assert.Equal(AccountConfirmationResult.LinkNoLongerValid, firstLinkResult);
-        Assert.Equal(AccountConfirmationResult.WrongPassword, firstPasswordResult);
-        Assert.Equal(AccountConfirmationResult.AccountConfirmed, secondResult);
+        Assert.IsType<AccountConfirmationResult.LinkNoLongerValid>(firstLinkResult);
+        Assert.IsType<AccountConfirmationResult.WrongPassword>(firstPasswordResult);
+        Assert.IsType<AccountConfirmationResult.AccountConfirmed>(secondResult);
 
         var reloadedUser = await ReadAccountAsync(databaseContext, "test-chaine-remplacement@exemple.test");
         var reloadedCategories = await databaseContext.Categories.CountAsync(row =>
@@ -184,12 +184,12 @@ public class AccountRegistrationRealChainTests
         // L'inconnu inscrit l'adresse : le vrai propriétaire reçoit le lien, mais ne connaît pas ce mot de passe.
         var sentToken = await RegisterThenReadTokenAsync(databaseContext, ownerEmail, strangerPassword);
         var clickResult = await ConfirmAccountAsync(databaseContext, sentToken, ValidPassword);
-        Assert.NotEqual(AccountConfirmationResult.AccountConfirmed, clickResult);
+        Assert.IsNotType<AccountConfirmationResult.AccountConfirmed>(clickResult);
 
         // Le vrai propriétaire s'inscrit normalement : le mot de passe de l'inconnu disparaît.
         var ownerToken = await RegisterThenReadTokenAsync(databaseContext, ownerEmail, ValidPassword);
         var ownerResult = await ConfirmAccountAsync(databaseContext, ownerToken, ValidPassword);
-        Assert.Equal(AccountConfirmationResult.AccountConfirmed, ownerResult);
+        Assert.IsType<AccountConfirmationResult.AccountConfirmed>(ownerResult);
 
         // L'inconnu réessaie : le compte confirmé ne change pas, et le propriétaire est seulement prévenu.
         await RegisterThenReadTokenIfAnyAsync(databaseContext, ownerEmail, strangerPassword);
@@ -236,7 +236,7 @@ public class AccountRegistrationRealChainTests
         clock.Advance(TimeSpan.FromHours(24));
 
         var expiredLinkResult = await ConfirmAccountAsync(databaseContext, expiredConfirmationToken, ValidPassword);
-        Assert.Equal(AccountConfirmationResult.LinkNoLongerValid, expiredLinkResult);
+        Assert.IsType<AccountConfirmationResult.LinkNoLongerValid>(expiredLinkResult);
 
         var cleanupService = new UnconfirmedAccountsCleanupService(new UserAccountRepository(databaseContext), clock);
         await cleanupService.DeleteExpiredUnconfirmedAccountsAsync();
@@ -246,6 +246,6 @@ public class AccountRegistrationRealChainTests
 
         var newToken = await RegisterThenReadTokenAsync(databaseContext, "test-chaine-expire@exemple.test", OtherPassword);
         var newAccountResult = await ConfirmAccountAsync(databaseContext, newToken, OtherPassword);
-        Assert.Equal(AccountConfirmationResult.AccountConfirmed, newAccountResult);
+        Assert.IsType<AccountConfirmationResult.AccountConfirmed>(newAccountResult);
     }
 }

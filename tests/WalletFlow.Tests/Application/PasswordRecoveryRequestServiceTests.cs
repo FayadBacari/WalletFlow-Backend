@@ -25,7 +25,7 @@ public class PasswordRecoveryRequestServiceTests
     {
         var result = CreateRecoveryRequestService().Request(" Visiteur@Exemple.TEST ", IpAddress);
 
-        Assert.Equal(PasswordRecoveryRequestResult.RequestAccepted, result);
+        Assert.IsType<PasswordRecoveryRequestResult.RequestAccepted>(result);
         var request = Assert.IsType<BackgroundEmailRequest.PasswordRecovery>(Assert.Single(emailQueue.AddedRequests));
         Assert.Equal("visiteur@exemple.test", request.EmailAddress);
         Assert.Equal(IpAddress, request.IpAddress);
@@ -48,7 +48,7 @@ public class PasswordRecoveryRequestServiceTests
     {
         var result = CreateRecoveryRequestService().Request(malformedEmailAddress, IpAddress);
 
-        Assert.Equal(PasswordRecoveryRequestResult.InvalidEmailAddressFormat, result);
+        Assert.IsType<PasswordRecoveryRequestResult.InvalidEmailAddressFormat>(result);
         Assert.Empty(requestLimiter.CountedAddresses);
         Assert.Empty(emailQueue.AddedRequests);
     }
@@ -60,7 +60,7 @@ public class PasswordRecoveryRequestServiceTests
 
         var result = CreateRecoveryRequestService().Request("visiteur@exemple.test", IpAddress);
 
-        Assert.Equal(PasswordRecoveryRequestResult.TooManyRequests, result);
+        Assert.IsType<PasswordRecoveryRequestResult.TooManyRequests>(result);
         Assert.Empty(emailQueue.AddedRequests);
     }
 }

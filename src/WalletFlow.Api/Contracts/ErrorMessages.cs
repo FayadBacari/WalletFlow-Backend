@@ -100,4 +100,32 @@ public static class ErrorMessages
 
     // La durée écrite ici est ChartRules.MaximumPeriodMonths, en années : un test vérifie qu'elles restent égales.
     public const string ChartPeriodTooLong = "Une période couvre au plus 10 ans.";
+
+    public const string BagNameBreaksRules = "Le nom d'un sac contient de 1 à 50 caractères, sans caractère invisible.";
+
+    // Le nombre écrit ici est BagRules.MaximumCountPerUser : un test vérifie qu'ils restent égaux.
+    public const string TooManyBags = "Tu as déjà 100 sacs, le maximum. Supprimes-en un pour en créer un autre.";
+
+    // Les montants écrits ici sont ceux de BagRules, en euros : 1 centime et 1 000 000 000 centimes.
+    public const string BagGoalAmountBreaksRules = "Le montant à atteindre va de 0,01 € à 10 000 000 €.";
+
+    public const string BagGoalDateWithoutAmount = "Une date d'objectif va avec un montant à atteindre.";
+
+    public const string BagGoalDateTooEarly = "La date de l'objectif doit être après aujourd'hui.";
+
+    public const string MovementWithoutBag = "Choisis au moins un sac.";
+
+    public const string MovementWithSameBag = "Choisis deux sacs différents.";
+
+    // Les montants écrits ici sont ceux de BagRules, en euros : 1 centime et 1 000 000 000 centimes.
+    public const string MovementAmountBreaksRules = "Le montant déplacé va de 0,01 € à 10 000 000 €.";
+
+    public const string SourceBagTooLow = "Ce sac ne contient pas assez d'argent.";
+
+    public const string AvailableMoneyTooLow = "Ton argent disponible ne suffit pas.";
+
+    // Le nombre écrit ici est BagHistoryService.MaximumPage : un test vérifie qu'ils restent égaux.
+    public const string BagHistoryPageBreaksRules = "Le numéro de page va de 1 à 10 000.";
+
+    public const string BagsChangedMeanwhile = "Tes sacs viennent de changer. Réessaie.";
 }

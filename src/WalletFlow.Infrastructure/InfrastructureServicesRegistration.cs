@@ -3,6 +3,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using WalletFlow.Application.AccountRecovery;
 using WalletFlow.Application.AccountSettings;
+using WalletFlow.Application.Bags;
 using WalletFlow.Application.BankConnections;
 using WalletFlow.Application.Categories;
 using WalletFlow.Application.Emails;
@@ -41,6 +42,8 @@ public static class InfrastructureServicesRegistration
         services.AddScoped<ICategoryRepository, CategoryRepository>();
         services.AddScoped<IBankConnectionRepository, BankConnectionRepository>();
         services.AddScoped<ITransactionRepository, TransactionRepository>();
+        services.AddScoped<IBagRepository, BagRepository>();
+        services.AddScoped<IResourceOwnershipRepository, ResourceOwnershipRepository>();
 
         return services;
     }
@@ -103,23 +106,30 @@ public static class InfrastructureServicesRegistration
     }
 
     // Branche le prestataire bancaire Enable Banking, avec l'identifiant de l'application WalletFlow et sa clé privée (SS §7).
-    // La clé est lue tout de suite : une clé illisible fait refuser le démarrage de l'API, au lieu d'échouer plus tard.
+    // La clé est lue tout de suite, une première fois : une clé illisible fait refuser le démarrage de l'API, au lieu d'échouer
+    // plus tard. Le signataire gardé, lui, date ses jetons avec l'horloge de l'application, comme tout le reste.
     public static IServiceCollection AddEnableBanking(
         this IServiceCollection services,
         string applicationId,
         string privateKeyPem)
     {
-        var tokenSigner = new EnableBankingTokenSigner(applicationId, privateKeyPem, TimeProvider.System);
+        using (new EnableBankingTokenSigner(applicationId, privateKeyPem, TimeProvider.System))
+        {
+        }
+
         var httpClient = new HttpClient(new SocketsHttpHandler { PooledConnectionLifetime = TimeSpan.FromMinutes(5) })
         {
             BaseAddress = EnableBankingClient.ApiAddress,
             Timeout = TimeSpan.FromSeconds(30)
         };
 
-        services.AddSingleton(tokenSigner);
+        services.AddSingleton(serviceProvider => new EnableBankingTokenSigner(
+            applicationId,
+            privateKeyPem,
+            serviceProvider.GetRequiredService<TimeProvider>()));
         services.AddSingleton<IBankDataProvider>(serviceProvider => new EnableBankingClient(
             httpClient,
-            tokenSigner,
+            serviceProvider.GetRequiredService<EnableBankingTokenSigner>(),
             serviceProvider.GetRequiredService<TimeProvider>(),
             serviceProvider.GetRequiredService<ILogger<EnableBankingClient>>()));
 

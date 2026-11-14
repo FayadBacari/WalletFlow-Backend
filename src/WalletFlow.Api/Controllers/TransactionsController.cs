@@ -1,7 +1,9 @@
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 using WalletFlow.Api.Authentication;
 using WalletFlow.Api.Configuration;
 using WalletFlow.Api.Contracts;
+using WalletFlow.Application.Security;
 using WalletFlow.Application.Transactions;
 
 namespace WalletFlow.Api.Controllers;
@@ -17,21 +19,25 @@ public class TransactionsController : ControllerBase
     private readonly TransactionSearchService searchService;
     private readonly TransactionCategoryChangeService categoryChangeService;
     private readonly TransactionTransferService transferService;
+    private readonly ForeignAccessJournalService foreignAccessJournal;
 
     // Reçoit les cas d'utilisation des opérations.
     public TransactionsController(
         TransactionSearchService searchService,
         TransactionCategoryChangeService categoryChangeService,
-        TransactionTransferService transferService)
+        TransactionTransferService transferService,
+        ForeignAccessJournalService foreignAccessJournal)
     {
         this.searchService = searchService;
         this.categoryChangeService = categoryChangeService;
         this.transferService = transferService;
+        this.foreignAccessJournal = foreignAccessJournal;
     }
 
     // GET api/transactions : cherche par libellé, montant, dates, compte et catégorie ; les plus récentes d'abord, 50 par page.
     // Ce sont des données financières : aucun navigateur ni intermédiaire ne doit les garder.
     [HttpGet]
+    [EnableRateLimiting(RateLimitingConfiguration.CostlyReadPolicy)]
     [ResponseCache(NoStore = true, Location = ResponseCacheLocation.None)]
     public async Task<IActionResult> Search([FromQuery] TransactionSearchRequest request)
     {
@@ -48,6 +54,9 @@ public class TransactionsController : ControllerBase
 
         if (result is TransactionSearchResult.Found found)
         {
+            // Le compte ou la catégorie d'un autre ne filtre rien de visible, mais la tentative est notée.
+            await RecordForeignAccessAsync(OwnedResource.BankAccount, request.AccountId);
+            await RecordForeignAccessAsync(OwnedResource.Category, request.CategoryId);
             var items = found.Page.Items.Select(CreateResponse).ToList();
             return Ok(new TransactionPageResponse(items, page, TransactionSearchService.PageSize, found.Page.TotalCount));
         }
@@ -87,8 +96,15 @@ public class TransactionsController : ControllerBase
             return Ok(CreateResponse(changed.Transaction));
         }
 
-        if (result is TransactionCategoryChangeResult.TransactionNotFound || result is TransactionCategoryChangeResult.CategoryNotFound)
+        if (result is TransactionCategoryChangeResult.TransactionNotFound)
         {
+            await RecordForeignAccessAsync(OwnedResource.Transaction, transactionId);
+            return Problem(statusCode: StatusCodes.Status404NotFound);
+        }
+
+        if (result is TransactionCategoryChangeResult.CategoryNotFound)
+        {
+            await RecordForeignAccessAsync(OwnedResource.Category, request.CategoryId);
             return Problem(statusCode: StatusCodes.Status404NotFound);
         }
 
@@ -115,10 +131,21 @@ public class TransactionsController : ControllerBase
 
         if (result is TransactionTransferResult.NotFound)
         {
+            await RecordForeignAccessAsync(OwnedResource.Transaction, transactionId);
             return Problem(statusCode: StatusCodes.Status404NotFound);
         }
 
         return Problem(statusCode: StatusCodes.Status409Conflict, title: ErrorMessages.TransactionsChangedMeanwhile);
+    }
+
+    // Note au journal si la ressource visée est à un autre utilisateur (SS §11). La réponse reste la même dans tous les cas.
+    private async Task RecordForeignAccessAsync(OwnedResource resource, Guid? resourceId)
+    {
+        await foreignAccessJournal.RecordIfForeignAsync(
+            SessionClaims.ReadUserId(User),
+            HttpContext.Connection.RemoteIpAddress,
+            resource,
+            resourceId);
     }
 
     // Donne le message d'un champ refusé.

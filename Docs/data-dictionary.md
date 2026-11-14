@@ -302,7 +302,7 @@ Les règles communes, comme « CARREFOUR » → Alimentation, font partie de la 
 - `id_sac` : UUID.
 - `nom_sac` : 1 à 50 caractères.
 - `montant_objectif` : en centimes, supérieur à 0.
-- `date_objectif` : postérieure à la date du jour au moment de la saisie.
+- `date_objectif` : postérieure à la date du jour, à Paris, au moment de la saisie. Elle est vérifiée à chaque saisie de l'objectif, même si elle n'a pas changé.
 
 Si le solde total passe sous le total des sacs, l'application prévient l'utilisateur et lui demande de retirer de l'argent d'un ou plusieurs sacs (GR Sacs).
 
@@ -321,6 +321,8 @@ Si le solde total passe sous le total des sacs, l'application prévient l'utilis
 - `date_mouvement` : renseignée automatiquement.
 
 Un mouvement part de l'argent disponible ou d'un sac, et arrive dans un sac ou dans l'argent disponible : au moins l'un des deux est un sac, et ils sont différents (GR Sacs). Un mouvement créé en acceptant une suggestion est lié à cette suggestion. Ces liens deviendront des associations dans le MCD.
+
+Quand un sac est supprimé, ses mouvements avec l'argent disponible disparaissent. Ceux avec un autre sac restent dans l'historique de cet autre sac, comme des mouvements avec l'argent disponible : le solde de l'autre sac ne change pas (GR Sacs).
 
 
 ## 8. Suggestions d'épargne
@@ -435,6 +437,8 @@ Ces données ne sont **pas stockées** : elles sont recalculées à chaque affic
 
 **Précisions**
 
+- `argent_disponible` : négatif quand le total des sacs dépasse le solde total. C'est alors le montant que l'utilisateur doit retirer de ses sacs (GR Sacs).
+- `progression_sac` : arrondie vers le bas : 100 % n'est atteint qu'une fois l'objectif vraiment atteint. Elle peut dépasser 100 %.
 - `depenses_categorie_mois` : total net de la catégorie sur le mois, quand il est négatif : un remboursement réduit la dépense. Un total positif est un revenu.
 - `moyenne_categorie_3_mois` : porte sur les 3 mois complets avant le mois en cours, divisés par 3, et n'existe qu'avec 3 mois complets d'historique. Sert aussi à comparer le mois en cours avec les 3 derniers mois, catégorie par catégorie (GR Dépenses).
 - `taux_budget` : arrondi vers le bas : 80 % n'est atteint qu'une fois 80 % vraiment dépensés.
@@ -455,12 +459,15 @@ Ces valeurs sont les mêmes pour tous les utilisateurs. Elles relèvent de la co
 | Validité du lien de récupération             | 30 minutes                       | GR Auth        |
 | Validité des liens de confirmation           | 24 heures (inscription, e-mail)  | SS §2          |
 | Validité du lien de déblocage                | 1 heure                          | SS §2          |
-| Nombre de codes de secours                   | 10                               | SS §2          |
+| Nombre de codes de secours                   | 10                               | GR Auth, SS §2 |
 | Durée d'une autorisation bancaire            | 180 jours au plus                | GR Comptes     |
 | Rappel avant la fin de l'autorisation        | 7 jours                          | GR Comptes     |
 | Mises à jour en arrière-plan                 | 4 par jour au plus               | GR Comptes     |
 | Catégories créées à l'inscription            | 8 (voir §6.1)                    | GR Dépenses    |
 | Catégories par utilisateur                   | 100 au plus                      | SS §6          |
+| Sacs par utilisateur                         | 100 au plus                      | SS §6          |
+| Déplacements d'argent par utilisateur        | 1 000 sur 24 heures glissantes   | SS §6          |
+| Lectures coûteuses par session               | 60 par minute                    | SS §6          |
 | Règles de classement communes                | Liste fournie par l'application  | GR Dépenses    |
 | Seuil de dépassement d'une catégorie         | Moyenne sur 3 mois + 20 %        | GR Sacs        |
 | Historique minimal (suggestions par moyenne) | 3 mois                           | GR Sacs        |
@@ -471,7 +478,7 @@ Ces valeurs sont les mêmes pour tous les utilisateurs. Elles relèvent de la co
 | Délai avant effacement d'un compte           | 30 jours                         | GR Suppression |
 | Effacement d'un compte non confirmé          | À l'expiration de son lien       | GR Auth        |
 | Conservation des sauvegardes                 | 30 jours                         | SS §7          |
-| Conservation du journal de sécurité          | 6 mois à 1 an                    | SS §11         |
+| Conservation du journal de sécurité          | 1 an                             | SS §11         |
 
 
 ## 13. Données volontairement non collectées
