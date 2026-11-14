@@ -18,6 +18,9 @@ public static class TestApiSettings
     public const string AllowedHosts = "localhost;127.0.0.1;walletflow.test";
     public const string BankApplicationId = "application-enable-banking-des-tests";
 
+    // Nom du réglage d'ASP.NET Core qui active ou non la relecture des fichiers appsettings quand ils changent.
+    public const string HostReloadSettingName = "hostBuilder:reloadConfigOnChange";
+
     // Une clé RSA jetable pour la configuration d'Enable Banking : écrite une fois par lancement des tests, effacée à la fin.
     // Les tests remplacent le prestataire : aucune requête n'est jamais signée avec elle.
     private static readonly Lazy<string> ThrowawayBankKeyPath = new Lazy<string>(WriteThrowawayBankKey);
@@ -26,6 +29,12 @@ public static class TestApiSettings
     public static void Apply(IWebHostBuilder builder, string totpEncryptionKey)
     {
         builder.UseEnvironment(EnvironmentName);
+
+        // Une API surveille ses fichiers appsettings pour les relire quand ils changent. Sous Linux, chaque surveillance compte
+        // dans une limite de 128 par utilisateur : au-delà, les API suivantes ne démarrent plus, ce qui a fait échouer la CI
+        // de l'étape 10. Les tests ne changent jamais ces fichiers : la surveillance ne leur sert à rien.
+        builder.UseSetting(HostReloadSettingName, "false");
+
         builder.UseSetting("ConnectionStrings:WalletFlowDatabase", "Host=localhost;Database=base_jamais_contactee");
         builder.UseSetting("TwoFactorSecretEncryptionKey", totpEncryptionKey);
         builder.UseSetting("PublicWebsiteAddress", WebsiteAddress);

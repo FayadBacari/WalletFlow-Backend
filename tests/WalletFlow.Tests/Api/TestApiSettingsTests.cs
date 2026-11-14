@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Hosting;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace WalletFlow.Tests.Api;
@@ -18,5 +19,19 @@ public class TestApiSettingsTests
 
         Assert.Equal(TestApiSettings.EnvironmentName, environment.EnvironmentName);
         Assert.IsType<EphemeralDataProtectionProvider>(dataProtectionProvider);
+    }
+
+    // Aucun fichier de réglages n'est surveillé : sous Linux, chaque surveillance compte dans une limite de 128,
+    // et les tests lancent bien plus d'API que cela (CI de l'étape 10).
+    [Fact]
+    public void ApiOfTheTestsWatchesNoSettingsFile()
+    {
+        using var api = new ApiFactoryWithFakes();
+
+        var configuration = (IConfigurationRoot)api.Services.GetRequiredService<IConfiguration>();
+        var settingsFiles = configuration.Providers.OfType<FileConfigurationProvider>().ToList();
+
+        Assert.NotEmpty(settingsFiles);
+        Assert.All(settingsFiles, settingsFile => Assert.False(settingsFile.Source.ReloadOnChange));
     }
 }
