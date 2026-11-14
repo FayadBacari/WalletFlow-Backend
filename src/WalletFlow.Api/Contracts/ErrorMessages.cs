@@ -128,4 +128,8 @@ public static class ErrorMessages
     public const string BagHistoryPageBreaksRules = "Le numéro de page va de 1 à 10 000.";
 
     public const string BagsChangedMeanwhile = "Tes sacs viennent de changer. Réessaie.";
+
+    public const string SuggestionAmountBreaksRules = "Le montant placé va de 0,01 € au montant de la suggestion.";
+
+    public const string SuggestionAlreadyAnswered = "Tu as déjà répondu à cette suggestion.";
 }

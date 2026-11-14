@@ -7,5 +7,6 @@ public enum OwnedResource
     Transaction,
     BankConnection,
     BankAccount,
-    Bag
+    Bag,
+    Suggestion
 }

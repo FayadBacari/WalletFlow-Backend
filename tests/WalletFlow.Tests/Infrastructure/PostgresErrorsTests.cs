@@ -45,10 +45,11 @@ public class PostgresErrorsTests
         Assert.True(PostgresErrors.IsConflict(CreateSaveError(PostgresErrorCodes.ForeignKeyViolation, PostgresErrors.RuleCategoryForeignKey)));
         Assert.True(PostgresErrors.IsConflict(CreateSaveError(PostgresErrorCodes.ForeignKeyViolation, PostgresErrors.MovementSourceBagForeignKey)));
         Assert.True(PostgresErrors.IsConflict(CreateSaveError(PostgresErrorCodes.ForeignKeyViolation, PostgresErrors.MovementDestinationBagForeignKey)));
+        Assert.True(PostgresErrors.IsConflict(CreateSaveError(PostgresErrorCodes.ForeignKeyViolation, PostgresErrors.SuggestionCategoryForeignKey)));
         Assert.True(PostgresErrors.IsConflict(categoryGoneAtCommit));
         Assert.False(PostgresErrors.IsConflict(CreateSaveError(PostgresErrorCodes.ForeignKeyViolation, "mouvement_sac_id_suggestion_fkey")));
         Assert.False(PostgresErrors.IsConflict(CreateSaveError(PostgresErrorCodes.ForeignKeyViolation, "sac_id_utilisateur_fkey")));
-        Assert.False(PostgresErrors.IsConflict(CreateSaveError(PostgresErrorCodes.ForeignKeyViolation, "suggestion_id_categorie_fkey")));
+        Assert.False(PostgresErrors.IsConflict(CreateSaveError(PostgresErrorCodes.ForeignKeyViolation, "suggestion_id_utilisateur_fkey")));
         Assert.False(PostgresErrors.IsConflict(CreateSaveError(PostgresErrorCodes.UniqueViolation, PostgresErrors.BankAccountConnectionForeignKey)));
     }
 
@@ -75,6 +76,10 @@ public class PostgresErrorsTests
         Assert.True(PostgresErrors.IsConflict(CreateSaveError(PostgresErrorCodes.UniqueViolation, PostgresErrors.EmailUniqueConstraint)));
         Assert.True(PostgresErrors.IsConflict(CreateSaveError(PostgresErrorCodes.UniqueViolation, PostgresErrors.CategoryNameUniqueIndex)));
         Assert.True(PostgresErrors.IsConflict(CreateSaveError(PostgresErrorCodes.UniqueViolation, PostgresErrors.TransactionExternalIdUniqueConstraint)));
+        Assert.True(PostgresErrors.IsConflict(CreateSaveError(PostgresErrorCodes.UniqueViolation, PostgresErrors.SuggestionCategoryMonthUniqueIndex)));
+        Assert.True(PostgresErrors.IsConflict(CreateSaveError(PostgresErrorCodes.UniqueViolation, PostgresErrors.SuggestionRuleMonthUniqueIndex)));
+        Assert.True(PostgresErrors.IsConflict(CreateSaveError(PostgresErrorCodes.UniqueViolation, PostgresErrors.MovementSuggestionUniqueConstraint)));
+        Assert.Equal("mouvement_sac_id_suggestion_key", PostgresErrors.MovementSuggestionUniqueConstraint);
         Assert.False(PostgresErrors.IsConflict(CreateSaveError(PostgresErrorCodes.UniqueViolation, "ux_categorie_autres")));
         Assert.False(PostgresErrors.IsConflict(CreateSaveError(PostgresErrorCodes.CheckViolation, "ck_transaction_montant")));
         Assert.False(PostgresErrors.IsConflict(new InvalidOperationException()));

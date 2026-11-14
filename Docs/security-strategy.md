@@ -168,22 +168,22 @@ Toute donnée est validée **côté serveur**, même si l'interface la valide d�
 ### Limitation de débit
 Les valeurs ci-dessous sont des points de départ, à ajuster selon l'usage réel.
 
-| Point d'entrée                   | Limite                                                                                   |
-|----------------------------------|------------------------------------------------------------------------------------------|
-| Connexion                        | 10 essais par minute et par adresse IP, en plus des 5 tentatives par compte              |
-| Inscription                      | 5 par heure et par adresse IP, 3 par heure et par adresse e-mail                         |
-| Confirmation de l'inscription    | 10 essais par heure et par adresse IP                                                    |
-| Mot de passe oublié              | 3 par heure et par adresse e-mail, 10 par heure et par adresse IP                        |
-| Lien de récupération             | 10 essais par heure et par adresse IP                                                    |
-| Lien de déblocage                | 10 essais par heure et par adresse IP                                                    |
-| Code de double authentification  | 5 essais, puis il faut recommencer la connexion ; 10 essais par minute et par adresse IP |
-| Réglage de la double auth.       | 10 par heure et par adresse IP                                                           |
-| Changement de mot de passe       | 10 par heure et par adresse IP                                                           |
-| Changement d'adresse e-mail      | 3 par heure et par nouvelle adresse, 10 par heure et par adresse IP                      |
-| Lien de changement d'adresse     | 10 essais par heure et par adresse IP                                                    |
-| Formulaire de support (visiteur) | 3 par heure et par adresse IP                                                            |
-| Mise à jour des comptes          | 1 par minute et par utilisateur                                                          |
-| Recherche, graphiques et sacs    | 60 par minute et par session, toutes ces lectures ensemble                               |
+| Point d'entrée                             | Limite                                                                                   |
+|--------------------------------------------|------------------------------------------------------------------------------------------|
+| Connexion                                  | 10 essais par minute et par adresse IP, en plus des 5 tentatives par compte              |
+| Inscription                                | 5 par heure et par adresse IP, 3 par heure et par adresse e-mail                         |
+| Confirmation de l'inscription              | 10 essais par heure et par adresse IP                                                    |
+| Mot de passe oublié                        | 3 par heure et par adresse e-mail, 10 par heure et par adresse IP                        |
+| Lien de récupération                       | 10 essais par heure et par adresse IP                                                    |
+| Lien de déblocage                          | 10 essais par heure et par adresse IP                                                    |
+| Code de double authentification            | 5 essais, puis il faut recommencer la connexion ; 10 essais par minute et par adresse IP |
+| Réglage de la double auth.                 | 10 par heure et par adresse IP                                                           |
+| Changement de mot de passe                 | 10 par heure et par adresse IP                                                           |
+| Changement d'adresse e-mail                | 3 par heure et par nouvelle adresse, 10 par heure et par adresse IP                      |
+| Lien de changement d'adresse               | 10 essais par heure et par adresse IP                                                    |
+| Formulaire de support (visiteur)           | 3 par heure et par adresse IP                                                            |
+| Mise à jour des comptes                    | 1 par minute et par utilisateur                                                          |
+| Recherche, graphiques, sacs et suggestions | 60 par minute et par session, toutes ces lectures ensemble                               |
 
 Au-delà de la limite, le serveur répond « trop de requêtes » (429).
 

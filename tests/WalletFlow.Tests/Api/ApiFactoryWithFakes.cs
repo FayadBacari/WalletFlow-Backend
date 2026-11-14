@@ -8,6 +8,7 @@ using WalletFlow.Application.BankConnections;
 using WalletFlow.Application.Categories;
 using WalletFlow.Application.Emails;
 using WalletFlow.Application.Security;
+using WalletFlow.Application.Suggestions;
 using WalletFlow.Application.Transactions;
 using WalletFlow.Application.TwoFactorAuthentication;
 using WalletFlow.Application.UserAccounts;
@@ -28,6 +29,7 @@ public class ApiFactoryWithFakes : WebApplicationFactory<Program>
     public FakeBankConnectionRepository BankRepository { get; } = new FakeBankConnectionRepository();
     public FakeTransactionRepository TransactionRepository { get; }
     public FakeBagRepository BagRepository { get; }
+    public FakeSuggestionRepository SuggestionRepository { get; }
     public FakeResourceOwnershipRepository OwnershipRepository { get; }
     public FakeBankDataProvider BankProvider { get; } = new FakeBankDataProvider();
     public FakeDatabaseUnitOfWork UnitOfWork { get; }
@@ -46,7 +48,8 @@ public class ApiFactoryWithFakes : WebApplicationFactory<Program>
         CategoryRepository = new FakeCategoryRepository(AccountRepository.SavedCategories);
         TransactionRepository = new FakeTransactionRepository(BankRepository, CategoryRepository);
         BagRepository = new FakeBagRepository(AccountRepository.SavedUsers);
-        OwnershipRepository = new FakeResourceOwnershipRepository(CategoryRepository, BankRepository, BagRepository);
+        SuggestionRepository = new FakeSuggestionRepository(BagRepository);
+        OwnershipRepository = new FakeResourceOwnershipRepository(CategoryRepository, BankRepository, BagRepository, SuggestionRepository);
         UnitOfWork = new FakeDatabaseUnitOfWork(
             AccountRepository,
             SessionRepository,
@@ -55,7 +58,8 @@ public class ApiFactoryWithFakes : WebApplicationFactory<Program>
             CategoryRepository,
             BankRepository,
             TransactionRepository,
-            BagRepository);
+            BagRepository,
+            SuggestionRepository);
     }
 
     // Remplace les services avant le démarrage de l'API (nom imposé par le framework).
@@ -74,6 +78,7 @@ public class ApiFactoryWithFakes : WebApplicationFactory<Program>
             services.AddSingleton<IBankConnectionRepository>(BankRepository);
             services.AddSingleton<ITransactionRepository>(TransactionRepository);
             services.AddSingleton<IBagRepository>(BagRepository);
+            services.AddSingleton<ISuggestionRepository>(SuggestionRepository);
             services.AddSingleton<IResourceOwnershipRepository>(OwnershipRepository);
             services.AddSingleton<IBankDataProvider>(BankProvider);
             services.AddSingleton<IEmailSender>(EmailSender);

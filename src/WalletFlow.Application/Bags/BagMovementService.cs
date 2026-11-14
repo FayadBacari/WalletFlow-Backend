@@ -1,4 +1,3 @@
-using WalletFlow.Application.BankConnections;
 using WalletFlow.Application.Persistence;
 using WalletFlow.Domain.BagsAndSuggestions;
 
@@ -10,19 +9,19 @@ namespace WalletFlow.Application.Bags;
 public class BagMovementService
 {
     private readonly IBagRepository bagRepository;
-    private readonly BankBalanceTotalService balanceTotalService;
+    private readonly BagMovementChecks movementChecks;
     private readonly DatabaseChangesSavingService savingService;
     private readonly TimeProvider clock;
 
-    // Reçoit l'accès aux sacs, le calcul du solde total, l'enregistrement avec réessai, et l'horloge qui date le mouvement.
+    // Reçoit l'accès aux sacs, les contrôles d'un déplacement, l'enregistrement avec réessai, et l'horloge qui date le mouvement.
     public BagMovementService(
         IBagRepository bagRepository,
-        BankBalanceTotalService balanceTotalService,
+        BagMovementChecks movementChecks,
         DatabaseChangesSavingService savingService,
         TimeProvider clock)
     {
         this.bagRepository = bagRepository;
-        this.balanceTotalService = balanceTotalService;
+        this.movementChecks = movementChecks;
         this.savingService = savingService;
         this.clock = clock;
     }
@@ -67,42 +66,12 @@ public class BagMovementService
             return PreparedChanges<BagMovementResult>.NothingToSave(new BagMovementResult.NotSaved());
         }
 
-        // SS §4 : les deux sacs doivent être à l'utilisateur. Les soldes lus ne contiennent que ses sacs.
-        var balances = await bagRepository.SumBalancesAsync(userId);
-
-        if (sourceBagId is Guid sourceId && !balances.ContainsKey(sourceId))
-        {
-            return PreparedChanges<BagMovementResult>.NothingToSave(new BagMovementResult.NotFound());
-        }
-
-        if (destinationBagId is Guid destinationId && !balances.ContainsKey(destinationId))
-        {
-            return PreparedChanges<BagMovementResult>.NothingToSave(new BagMovementResult.NotFound());
-        }
-
         var now = clock.GetUtcNow().UtcDateTime;
+        var problem = await movementChecks.FindProblemAsync(userId, sourceBagId, destinationBagId, amountInCents, now);
 
-        if (await bagRepository.CountMovementsSinceAsync(userId, now - BagRules.MovementDay) >= BagRules.MaximumMovementsPerDay)
+        if (problem != null)
         {
-            return PreparedChanges<BagMovementResult>.NothingToSave(new BagMovementResult.TooManyMovements());
-        }
-
-        if (sourceBagId is Guid emptiedBagId && balances[emptiedBagId] < amountInCents)
-        {
-            return PreparedChanges<BagMovementResult>.NothingToSave(new BagMovementResult.SourceBagTooLow());
-        }
-
-        // Seul l'argent qui vient de l'argent disponible fait grandir le total des sacs : lui seul doit tenir sous le solde total.
-        // Un déplacement entre deux sacs, ou vers l'argent disponible, reste permis même quand les sacs dépassent déjà ce solde.
-        if (sourceBagId == null)
-        {
-            var total = await balanceTotalService.ReadAsync(userId);
-            var bagsTotalInCents = balances.Values.Sum();
-
-            if (bagsTotalInCents + amountInCents > total.TotalInCents)
-            {
-                return PreparedChanges<BagMovementResult>.NothingToSave(new BagMovementResult.AvailableMoneyTooLow());
-            }
+            return PreparedChanges<BagMovementResult>.NothingToSave(problem);
         }
 
         var movement = new BagMovement
@@ -112,6 +81,7 @@ public class BagMovementService
             SourceBagId = sourceBagId,
             DestinationBagId = destinationBagId
         };
+
         bagRepository.PrepareMovement(movement);
         bagRepository.PrepareUserCheck(user);
 

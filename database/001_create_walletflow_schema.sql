@@ -23,6 +23,7 @@ CREATE TABLE utilisateur (
     nb_blocages              SMALLINT     NOT NULL DEFAULT 0,
     date_fin_blocage         TIMESTAMPTZ,
     date_demande_suppression TIMESTAMPTZ,
+    dernier_mois_suggestions DATE,
     CONSTRAINT ck_utilisateur_email CHECK (email_utilisateur = lower(email_utilisateur)),
     CONSTRAINT ck_utilisateur_nom CHECK (char_length(nom_utilisateur) >= 1),
     CONSTRAINT ck_utilisateur_prenom CHECK (char_length(prenom_utilisateur) >= 1),
@@ -30,6 +31,7 @@ CREATE TABLE utilisateur (
     CONSTRAINT ck_utilisateur_totp CHECK (double_auth_activee = (secret_totp_chiffre IS NOT NULL)),
     CONSTRAINT ck_utilisateur_canal CHECK (
         canal_notification IN ('email', 'telephone', 'les_deux')),
+    CONSTRAINT ck_utilisateur_mois_suggestions CHECK (EXTRACT(DAY FROM dernier_mois_suggestions) = 1),
     CONSTRAINT ck_utilisateur_tentatives CHECK (nb_tentatives_echouees BETWEEN 0 AND 5),
     CONSTRAINT ck_utilisateur_blocages CHECK (nb_blocages BETWEEN 0 AND 8)
 );
@@ -176,6 +178,7 @@ CREATE TABLE sac (
 CREATE TABLE suggestion (
     id_suggestion          UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
     regle_suggestion       VARCHAR(30) NOT NULL,
+    mois_suggestion        DATE        NOT NULL,
     economie_mensuelle     INTEGER     NOT NULL,
     statut_suggestion      VARCHAR(10) NOT NULL DEFAULT 'proposee',
     date_statut_suggestion TIMESTAMPTZ,
@@ -185,12 +188,21 @@ CREATE TABLE suggestion (
         REFERENCES categorie (id_categorie) ON DELETE SET NULL,
     CONSTRAINT ck_suggestion_regle CHECK (regle_suggestion IN (
         'depassement_categorie', 'argent_disponible', 'epargne_insuffisante')),
-    CONSTRAINT ck_suggestion_economie CHECK (economie_mensuelle BETWEEN 0 AND 1000000000),
+    CONSTRAINT ck_suggestion_mois CHECK (EXTRACT(DAY FROM mois_suggestion) = 1),
+    CONSTRAINT ck_suggestion_economie CHECK (economie_mensuelle BETWEEN 1 AND 1000000000),
     CONSTRAINT ck_suggestion_statut CHECK (
         statut_suggestion IN ('proposee', 'acceptee', 'ignoree')),
     CONSTRAINT ck_suggestion_categorie CHECK (
         id_categorie IS NULL OR regle_suggestion = 'depassement_categorie')
 );
+
+-- Une seule suggestion par mois pour une même catégorie dépassée, et une seule pour chacune des deux autres règles.
+-- Une suggestion acceptée dont la catégorie est supprimée n'a plus de catégorie : elle sort de la première unicité,
+-- et la suppression de la catégorie ne peut pas échouer sur deux suggestions du même mois.
+CREATE UNIQUE INDEX ux_suggestion_categorie_mois ON suggestion (id_utilisateur, id_categorie, mois_suggestion)
+    WHERE regle_suggestion = 'depassement_categorie';
+CREATE UNIQUE INDEX ux_suggestion_regle_mois ON suggestion (id_utilisateur, regle_suggestion, mois_suggestion)
+    WHERE regle_suggestion <> 'depassement_categorie';
 
 CREATE TABLE mouvement_sac (
     id_mouvement      UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -374,7 +386,8 @@ GRANT INSERT (
 GRANT UPDATE (
     email_utilisateur, mot_de_passe_hash, nom_utilisateur, prenom_utilisateur,
     email_confirme, double_auth_activee, secret_totp_chiffre, canal_notification,
-    nb_tentatives_echouees, nb_blocages, date_fin_blocage, date_demande_suppression)
+    nb_tentatives_echouees, nb_blocages, date_fin_blocage, date_demande_suppression,
+    dernier_mois_suggestions)
     ON utilisateur TO walletflow_app;
 REVOKE EXECUTE ON FUNCTION fn_effacer_vieux_evenements() FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION fn_effacer_vieux_evenements() TO walletflow_app;

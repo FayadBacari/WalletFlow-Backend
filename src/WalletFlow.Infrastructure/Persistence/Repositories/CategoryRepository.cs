@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using WalletFlow.Application.Categories;
 using WalletFlow.Domain.AccountsAndCategories;
+using WalletFlow.Domain.BagsAndSuggestions;
 
 namespace WalletFlow.Infrastructure.Persistence.Repositories;
 
@@ -101,6 +102,8 @@ public class CategoryRepository : ICategoryRepository
     // ajoutée au même instant ne peut plus la viser. Puis déplace dans « Autres » les transactions qui la visaient.
     // La clé étrangère est différée (MPD §1.3) : elle n'est vérifiée qu'à la fin, quand tout est déjà dans « Autres ».
     // Les règles de la catégorie disparaissent avec elle (ON DELETE CASCADE), ses suggestions restent sans catégorie (SET NULL).
+    // Ses suggestions sans réponse sont ensuite retirées (GR Sacs) : celles d'un dépassement encore proposées et sans catégorie.
+    // Ses suggestions acceptées restent, pour que les économies déjà réalisées restent comptées.
     private async Task<bool> DeleteThenMoveTransactionsAsync(Guid userId, Guid categoryId)
     {
         var deletedCount = await databaseContext.Categories
@@ -123,6 +126,14 @@ public class CategoryRepository : ICategoryRepository
         await databaseContext.BankTransactions
             .Where(transaction => transaction.CategoryId == categoryId)
             .ExecuteUpdateAsync(setters => setters.SetProperty(transaction => transaction.CategoryId, otherCategoryId));
+
+        await databaseContext.SavingsSuggestions
+            .Where(suggestion =>
+                suggestion.UserId == userId
+                && suggestion.Rule == SuggestionRule.CategoryOverrun
+                && suggestion.Status == SuggestionStatus.Proposed
+                && suggestion.CategoryId == null)
+            .ExecuteDeleteAsync();
 
         return true;
     }

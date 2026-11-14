@@ -82,6 +82,7 @@ Les sections 11 à 13 complètent le dictionnaire : données calculées, paramè
 | nb_blocages              | Nombre de blocages successifs     | N    | 1      | Oui    | GR Auth         |
 | date_fin_blocage         | Fin du blocage en cours           | DH   | —      | Non    | GR Auth         |
 | date_demande_suppression | Date de la demande de suppression | DH   | —      | Non    | GR Suppression  |
+| dernier_mois_suggestions | Mois des dernières suggestions    | D    | —      | Non    | GR Sacs         |
 
 **Contraintes**
 
@@ -99,6 +100,7 @@ Les sections 11 à 13 complètent le dictionnaire : données calculées, paramè
 - `nb_blocages` : 0 par défaut. Sert à doubler la durée de chaque nouveau blocage. Il s'arrête à 8 : la durée maximale est alors atteinte. Remis à 0 après une connexion réussie.
 - `date_fin_blocage` : vide si le compte n'est pas bloqué.
 - `date_demande_suppression` : vide s'il n'y a pas de demande. Effacement définitif 30 jours après.
+- `dernier_mois_suggestions` : premier jour du dernier mois dont les suggestions ont été calculées, vide avant le premier calcul. Les suggestions d'un mois ne sont calculées qu'une fois (GR Sacs).
 
 
 ## 4. Sécurité du compte
@@ -331,6 +333,7 @@ Quand un sac est supprimé, ses mouvements avec l'argent disponible disparaissen
 |------------------------|-------------------------------------|------|--------|--------|---------|
 | id_suggestion          | Identifiant de la suggestion        | AN   | 36     | Oui    | SS §4   |
 | regle_suggestion       | Règle qui a déclenché la suggestion | AN   | 30     | Oui    | GR Sacs |
+| mois_suggestion        | Mois évalué par la suggestion       | D    | —      | Oui    | GR Sacs |
 | economie_mensuelle     | Économie estimée par mois           | N    | 10     | Oui    | GR Sacs |
 | statut_suggestion      | État de la suggestion               | AN   | 10     | Oui    | GR Sacs |
 | date_statut_suggestion | Date du dernier changement d'état   | DH   | —      | Non    | GR Sacs |
@@ -339,9 +342,12 @@ Quand un sac est supprimé, ses mouvements avec l'argent disponible disparaissen
 
 - `id_suggestion` : UUID.
 - `regle_suggestion` : `depassement_categorie`, `argent_disponible` ou `epargne_insuffisante`.
-- `economie_mensuelle` : en centimes, 0 ou plus.
-- `statut_suggestion` : `proposee`, `acceptee` ou `ignoree`, `proposee` par défaut.
-- `date_statut_suggestion` : une suggestion ignorée ne réapparaît pas pendant 30 jours.
+- `mois_suggestion` : premier jour du mois évalué, le dernier mois complet à Paris. Une seule suggestion par règle et par mois, et par catégorie pour `depassement_categorie`.
+- `economie_mensuelle` : en centimes, de 1 à 1 000 000 000. Selon la règle : ce que la catégorie a dépensé au-dessus de sa moyenne, l'argent disponible au moment du calcul, ou ce qui manque à l'épargne du mois pour atteindre 20 % des revenus.
+- `statut_suggestion` : `proposee`, `acceptee` ou `ignoree`, `proposee` par défaut. Une suggestion acceptée ou ignorée ne change plus.
+- `date_statut_suggestion` : pendant 30 jours après une suggestion ignorée, aucune suggestion de la même règle, ni de la même catégorie, n'est proposée.
+
+Une suggestion proposée est effacée au calcul du mois suivant, ou quand sa catégorie est supprimée. Une suggestion ignorée est effacée après ses 30 jours.
 
 
 ## 9. Notifications
@@ -472,7 +478,7 @@ Ces valeurs sont les mêmes pour tous les utilisateurs. Elles relèvent de la co
 | Seuil de dépassement d'une catégorie         | Moyenne sur 3 mois + 20 %        | GR Sacs        |
 | Historique minimal (suggestions par moyenne) | 3 mois                           | GR Sacs        |
 | Seuil d'épargne mensuelle                    | 20 % des revenus                 | GR Sacs        |
-| Réapparition d'une suggestion ignorée        | Après 30 jours                   | GR Sacs        |
+| Pause après une suggestion ignorée           | 30 jours                         | GR Sacs        |
 | Seuils d'alerte de budget                    | 80 % et 100 %                    | GR Dépenses    |
 | Durée d'une période de graphique             | 10 ans au plus                   | SS §6          |
 | Délai avant effacement d'un compte           | 30 jours                         | GR Suppression |

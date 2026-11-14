@@ -15,15 +15,26 @@ public static class PostgresErrors
     // Nom de la contrainte du script SQL : une opération n'est gardée qu'une fois pour un même compte.
     public const string TransactionExternalIdUniqueConstraint = "ux_transaction_externe";
 
+    // Noms des index uniques du script SQL : une suggestion par catégorie dépassée et par mois, et une par mois pour chacune
+    // des deux autres règles.
+    public const string SuggestionCategoryMonthUniqueIndex = "ux_suggestion_categorie_mois";
+    public const string SuggestionRuleMonthUniqueIndex = "ux_suggestion_regle_mois";
+
+    // Nom donné par PostgreSQL à la contrainte UNIQUE de mouvement_sac.id_suggestion : une suggestion crée un seul mouvement.
+    // EF Core écrit les tables dans l'ordre de leur nom : le mouvement part avant la ligne de l'utilisateur. Un second clic
+    // sur « accepter » bute donc sur cette contrainte avant le contrôle de la ligne : c'est le même conflit, à rejouer.
+    public const string MovementSuggestionUniqueConstraint = "mouvement_sac_id_suggestion_key";
+
     // Noms donnés par PostgreSQL aux clés étrangères vers une ligne qu'une autre requête peut supprimer au même instant :
     // la connexion d'un nouveau compte, le compte d'une nouvelle opération, la catégorie d'une opération ou d'une règle,
-    // et les deux sacs d'un nouveau mouvement.
+    // les deux sacs d'un nouveau mouvement, et la catégorie dépassée d'une nouvelle suggestion.
     public const string BankAccountConnectionForeignKey = "compte_bancaire_id_connexion_fkey";
     public const string TransactionAccountForeignKey = "transaction_id_compte_fkey";
     public const string TransactionCategoryForeignKey = "transaction_id_categorie_fkey";
     public const string RuleCategoryForeignKey = "regle_classement_id_categorie_fkey";
     public const string MovementSourceBagForeignKey = "mouvement_sac_id_sac_depart_fkey";
     public const string MovementDestinationBagForeignKey = "mouvement_sac_id_sac_arrivee_fkey";
+    public const string SuggestionCategoryForeignKey = "suggestion_id_categorie_fkey";
 
     // Nom de la contrainte du script SQL : un mouvement garde au moins un sac. L'application ne crée jamais un mouvement
     // sans sac : cette contrainte refuse seulement deux suppressions simultanées de deux sacs reliés par un mouvement,
@@ -31,16 +42,18 @@ public static class PostgresErrors
     public const string MovementWithOneBagCheck = "ck_mouvement_un_sac";
 
     // Les contraintes d'unicité qu'une autre requête peut prendre au même instant : l'adresse e-mail, le nom de catégorie,
-    // ou l'opération qu'une autre mise à jour vient d'ajouter.
+    // l'opération qu'une autre mise à jour vient d'ajouter, la suggestion qu'un autre calcul du même mois vient d'enregistrer,
+    // ou le mouvement qu'une autre acceptation de la même suggestion vient de créer.
     private static readonly List<string> ConflictUniqueConstraints = new List<string>
     {
-        EmailUniqueConstraint, CategoryNameUniqueIndex, TransactionExternalIdUniqueConstraint
+        EmailUniqueConstraint, CategoryNameUniqueIndex, TransactionExternalIdUniqueConstraint,
+        SuggestionCategoryMonthUniqueIndex, SuggestionRuleMonthUniqueIndex, MovementSuggestionUniqueConstraint
     };
 
     private static readonly List<string> ConflictForeignKeys = new List<string>
     {
         BankAccountConnectionForeignKey, TransactionAccountForeignKey, TransactionCategoryForeignKey, RuleCategoryForeignKey,
-        MovementSourceBagForeignKey, MovementDestinationBagForeignKey
+        MovementSourceBagForeignKey, MovementDestinationBagForeignKey, SuggestionCategoryForeignKey
     };
 
     // Renvoie vrai si l'erreur vient de l'unicité de l'adresse e-mail : un autre compte utilise déjà cette adresse.
