@@ -2,10 +2,12 @@
 # - la base est créée dans un PostgreSQL 18 neuf avec le script du MPD, puis vérifiée par ses tests SQL ;
 # - un paquet qui a une faille connue arrête la vérification ;
 # - le projet est compilé avec les versions verrouillées des paquets, sans aucun avertissement, puis tous les tests sont lancés ;
-# - gitleaks cherche dans tout l'historique un secret écrit par erreur.
+# - gitleaks cherche un secret écrit par erreur : dans les nouveaux commits à chaque envoi ou pull request,
+#   dans tout l'historique à la demande.
 name: Intégration continue
 
-# La relance à la demande sert quand un passage n'a pas pu démarrer : GitHub ne permet pas de le relancer.
+# La relance à la demande sert quand un passage n'a pas pu démarrer, car GitHub ne permet pas de le relancer,
+# et pour revérifier tout l'historique avec gitleaks.
 on:
   push:
   pull_request:
@@ -91,6 +93,8 @@ jobs:
           fetch-depth: 0
 
       # La version est fixée : c'est celle qui a vérifié le dépôt, avec les exceptions de .gitleaks.toml.
+      # gitleaks-action ne lit que les commits de l'envoi ou de la pull request ; à la demande, il lit tout l'historique.
+      # Chaque commit est donc vérifié à son arrivée, et la relance à la demande revérifie tout le dépôt.
       - name: Lancer gitleaks
         uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0
         env:
