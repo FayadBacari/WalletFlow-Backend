@@ -1,13 +1,15 @@
-# Intégration continue de l'API WalletFlow (SS §10). À chaque envoi sur GitHub :
+# Intégration continue de l'API WalletFlow (SS §10). À chaque envoi sur GitHub, et à la demande depuis l'onglet Actions :
 # - la base est créée dans un PostgreSQL 18 neuf avec le script du MPD, puis vérifiée par ses tests SQL ;
 # - un paquet qui a une faille connue arrête la vérification ;
 # - le projet est compilé avec les versions verrouillées des paquets, sans aucun avertissement, puis tous les tests sont lancés ;
 # - gitleaks cherche dans tout l'historique un secret écrit par erreur.
 name: Intégration continue
 
+# La relance à la demande sert quand un passage n'a pas pu démarrer : GitHub ne permet pas de le relancer.
 on:
   push:
   pull_request:
+  workflow_dispatch:
 
 # Le jeton de GitHub ne sert qu'à lire le code : ces vérifications n'écrivent rien dans le dépôt.
 # Chaque action est désignée par l'empreinte de sa version, pas par une étiquette qu'on peut déplacer (SS §10).
