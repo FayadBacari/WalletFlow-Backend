@@ -4,6 +4,7 @@ using System.Text.Json;
 using WalletFlow.Api.Configuration;
 using WalletFlow.Api.Contracts;
 using WalletFlow.Domain.AccountsAndCategories;
+using WalletFlow.Domain.UsersAndSecurity;
 using WalletFlow.Tests.Fakes;
 using static WalletFlow.Tests.Api.LoginRequestTestValues;
 using static WalletFlow.Tests.Api.TwoFactorRequestTestValues;
@@ -172,6 +173,43 @@ public class ChartEndpointTests
 
         Assert.Empty(chart.GetProperty("categories").EnumerateArray());
         Assert.Equal(0, chart.GetProperty("totalExpensesInCents").GetInt64());
+    }
+
+    // SS §11 : le compte d'un autre utilisateur, donné en filtre, ne montre rien, et la tentative est notée au journal,
+    // une fois par graphique. Un compte inconnu n'appartient à personne : il ne laisse rien.
+    [Fact]
+    public async Task AccountOfAnotherUserIsJournaled()
+    {
+        using var api = new ApiFactoryWithFakes();
+        var client = await LogInWithOperationsAsync(api, (2, -4520, "CB CARREFOUR"));
+        var otherConnection = new BankConnection
+        {
+            ExternalConnectionId = "session-autre",
+            BankName = "Banque de test",
+            AuthorizationExpiresAt = api.Clock.GetUtcNow().UtcDateTime.AddDays(100),
+            UserId = Guid.NewGuid()
+        };
+        var otherAccount = new BankAccount
+        {
+            ExternalAccountId = "compte-autre",
+            Name = "Compte courant",
+            BalanceInCents = 50_000,
+            BalanceUpdatedAt = api.Clock.GetUtcNow().UtcDateTime,
+            BankConnectionId = otherConnection.Id
+        };
+        api.BankRepository.SavedConnections.Add(otherConnection);
+        api.BankRepository.SavedAccounts.Add(otherAccount);
+
+        await ReadSuccessAsync(await client.GetAsync(CategoriesEndpoint + November + "&accountId=" + otherAccount.Id));
+        await ReadSuccessAsync(await client.GetAsync(MonthsEndpoint + November + "&accountId=" + otherAccount.Id));
+        await ReadSuccessAsync(await client.GetAsync(ComparisonEndpoint + "?accountId=" + otherAccount.Id));
+        await ReadSuccessAsync(await client.GetAsync(ComparisonEndpoint + "?accountId=" + Guid.NewGuid()));
+
+        var deniedAccesses = api.SecurityEventRepository.SavedSecurityEvents
+            .Where(securityEvent => securityEvent.Type == SecurityEventType.AccessDenied)
+            .ToList();
+        Assert.Equal(3, deniedAccesses.Count);
+        Assert.All(deniedAccesses, securityEvent => Assert.Equal(api.AccountRepository.SavedUsers.Single().Id, securityEvent.UserId));
     }
 
     // Le message écrit la durée en années : elle doit rester égale à la règle, en mois.

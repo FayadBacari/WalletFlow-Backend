@@ -2,6 +2,8 @@ using System.Buffers.Text;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using Microsoft.Extensions.DependencyInjection;
+using WalletFlow.Infrastructure;
 using WalletFlow.Infrastructure.BankData;
 using WalletFlow.Tests.Fakes;
 
@@ -40,6 +42,31 @@ public class EnableBankingTokenSignerTests
             Base64Url.DecodeFromChars(parts[2]),
             HashAlgorithmName.SHA256,
             RSASignaturePadding.Pkcs1));
+    }
+
+    // Le signataire enregistré dans l'API date ses jetons avec l'horloge de l'application, pas avec celle de la machine.
+    [Fact]
+    public void RegisteredSignerUsesTheClockOfTheApplication()
+    {
+        using var key = RSA.Create(2048);
+        var clock = new FakeTimeProvider();
+        var services = new ServiceCollection();
+        services.AddSingleton<TimeProvider>(clock);
+        services.AddEnableBanking("application-de-test", key.ExportPkcs8PrivateKeyPem());
+        using var serviceProvider = services.BuildServiceProvider();
+
+        var token = serviceProvider.GetRequiredService<EnableBankingTokenSigner>().GetToken();
+
+        Assert.Equal(clock.GetUtcNow().ToUnixTimeSeconds(), ReadPart(token.Split('.')[1]).GetProperty("iat").GetInt64());
+    }
+
+    // Une clé illisible fait refuser l'enregistrement, donc le démarrage de l'API, avant toute requête.
+    [Fact]
+    public void UnreadableKeyIsRefusedAtRegistration()
+    {
+        var services = new ServiceCollection();
+
+        Assert.Throws<InvalidOperationException>(() => services.AddEnableBanking("application-de-test", "pas une clé"));
     }
 
     // Un jeton sert tant qu'il lui reste plus de 5 minutes, puis un nouveau est signé.

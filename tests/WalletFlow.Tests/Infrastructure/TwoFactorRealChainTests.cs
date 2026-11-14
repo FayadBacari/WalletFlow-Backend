@@ -69,7 +69,7 @@ public class TwoFactorRealChainTests
         var result = await confirmationService.ConfirmAsync(
             ReadConfirmationToken(emailSender.SentEmails.Last().Body),
             ValidPassword);
-        Assert.Equal(AccountConfirmationResult.AccountConfirmed, result);
+        Assert.IsType<AccountConfirmationResult.AccountConfirmed>(result);
         databaseContext.ChangeTracker.Clear();
 
         var reloadedAccount = await databaseContext.Users.AsNoTracking().SingleAsync(row =>
@@ -361,7 +361,7 @@ public class TwoFactorRealChainTests
 
         var deactivationResult = await DeactivateAsync(databaseContext, accountId, firstBackupCodes[0]);
 
-        Assert.Equal(TwoFactorDeactivationResult.TwoFactorDeactivated, deactivationResult);
+        Assert.IsType<TwoFactorDeactivationResult.TwoFactorDeactivated>(deactivationResult);
         var reloadedAccount = await ReadAccountAsync(databaseContext, accountId);
         Assert.False(reloadedAccount.IsTwoFactorEnabled);
         Assert.Null(reloadedAccount.EncryptedTotpSecret);
@@ -395,7 +395,7 @@ public class TwoFactorRealChainTests
 
         var result = await DeactivateAsync(databaseContext, accountId, "000000");
 
-        Assert.NotEqual(TwoFactorDeactivationResult.TwoFactorDeactivated, result);
+        Assert.IsNotType<TwoFactorDeactivationResult.TwoFactorDeactivated>(result);
         Assert.True((await ReadAccountAsync(databaseContext, accountId)).IsTwoFactorEnabled);
         Assert.Equal(1, await CountSecurityEventsAsync(databaseContext, accountId, SecurityEventType.TwoFactorDeactivation, SecurityEventResult.Failure));
     }
@@ -430,7 +430,7 @@ public class TwoFactorRealChainTests
             clock);
         var recoveryResult = await passwordResetService.ResetAsync(recoveryToken.Token, "Nouveau-Mot-De-Passe-3", IpAddress);
         databaseContext.ChangeTracker.Clear();
-        Assert.Equal(PasswordResetResult.PasswordChanged, recoveryResult);
+        Assert.IsType<PasswordResetResult.PasswordChanged>(recoveryResult);
 
         var thiefResult = await FinishLoginAsync(databaseContext, Assert.IsType<AccountLoginResult.WaitingForTwoFactorCode>(thiefLogin).WaitingLoginToken, CalculateCurrentCode(secret));
         Assert.IsType<TwoFactorLoginResult.LoginMustRestart>(thiefResult);

@@ -61,7 +61,7 @@ public class AccountUnlockServiceTests
     // Vérifie que le lien a été refusé, et que le compte est resté bloqué, sans trace au journal.
     private void AssertLinkRefusedAndAccountLocked(AccountUnlockResult result, User account)
     {
-        Assert.Equal(AccountUnlockResult.LinkNoLongerValid, result);
+        Assert.IsType<AccountUnlockResult.LinkNoLongerValid>(result);
         Assert.NotNull(account.LockoutEndsAt);
         Assert.Equal(5, account.FailedLoginAttemptCount);
         Assert.Empty(securityEventRepository.SavedSecurityEvents);
@@ -75,7 +75,7 @@ public class AccountUnlockServiceTests
 
         var result = await UnlockAccountAsync();
 
-        Assert.Equal(AccountUnlockResult.AccountUnlocked, result);
+        Assert.IsType<AccountUnlockResult.AccountUnlocked>(result);
         Assert.Equal(0, account.FailedLoginAttemptCount);
         Assert.Null(account.LockoutEndsAt);
         Assert.Equal(2, account.LockoutCount);
@@ -91,7 +91,7 @@ public class AccountUnlockServiceTests
         Assert.Equal(clock.GetUtcNow().UtcDateTime, accountRepository.SavedEmailTokens[0].UsedAt);
 
         var result = await UnlockAccountAsync();
-        Assert.Equal(AccountUnlockResult.LinkNoLongerValid, result);
+        Assert.IsType<AccountUnlockResult.LinkNoLongerValid>(result);
         Assert.Single(securityEventRepository.SavedSecurityEvents);
     }
 
@@ -119,7 +119,7 @@ public class AccountUnlockServiceTests
 
         var result = await UnlockAccountAsync();
 
-        Assert.Equal(AccountUnlockResult.AccountUnlocked, result);
+        Assert.IsType<AccountUnlockResult.AccountUnlocked>(result);
         Assert.Equal(0, account.FailedLoginAttemptCount);
     }
 
@@ -177,7 +177,7 @@ public class AccountUnlockServiceTests
 
         var result = await UnlockAccountAsync();
 
-        Assert.Equal(AccountUnlockResult.AccountUnlocked, result);
+        Assert.IsType<AccountUnlockResult.AccountUnlocked>(result);
         Assert.Null(account.LockoutEndsAt);
         Assert.Single(securityEventRepository.SavedSecurityEvents);
     }
@@ -190,7 +190,7 @@ public class AccountUnlockServiceTests
 
         var result = await UnlockAccountAsync();
 
-        Assert.Equal(AccountUnlockResult.LinkNoLongerValid, result);
+        Assert.IsType<AccountUnlockResult.LinkNoLongerValid>(result);
         Assert.Empty(securityEventRepository.SavedSecurityEvents);
     }
 
@@ -202,7 +202,7 @@ public class AccountUnlockServiceTests
 
         var result = await UnlockAccountAsync();
 
-        Assert.Equal(AccountUnlockResult.LinkNoLongerValid, result);
+        Assert.IsType<AccountUnlockResult.LinkNoLongerValid>(result);
         Assert.Equal(990, accountRepository.LinkUseConflicts);
     }
 

@@ -42,19 +42,19 @@ public class EmailChangeRequestService
         var newEmail = EmailAddressRules.Normalize(attempt.NewEmail);
         if (!EmailAddressRules.IsValid(newEmail))
         {
-            return EmailChangeRequestResult.InvalidEmailAddress;
+            return new EmailChangeRequestResult.InvalidEmailAddress();
         }
 
         var account = await accountRepository.FindByIdAsync(attempt.UserId);
         if (account == null)
         {
-            return EmailChangeRequestResult.WrongPassword;
+            return new EmailChangeRequestResult.WrongPassword();
         }
 
         // C'est déjà l'adresse du compte : le dire ne révèle rien, l'utilisateur la connaît.
         if (account.Email == newEmail)
         {
-            return EmailChangeRequestResult.SameEmailAddress;
+            return new EmailChangeRequestResult.SameEmailAddress();
         }
 
         // Lus avant la vérification : l'usage d'un code de secours contrôlera qu'ils sont toujours les bons.
@@ -70,7 +70,7 @@ public class EmailChangeRequestService
         // La limite par adresse ne compte que les demandes du propriétaire du compte : une session volée ne peut pas l'épuiser (SS §6).
         if (!requestLimiter.TryCountRequest(newEmail))
         {
-            return EmailChangeRequestResult.TooManyRequests;
+            return new EmailChangeRequestResult.TooManyRequests();
         }
 
         if (identityCheck.BackupCodeId != null)
@@ -92,7 +92,7 @@ public class EmailChangeRequestService
             IpAddress = attempt.IpAddress
         });
 
-        return EmailChangeRequestResult.RequestAccepted;
+        return new EmailChangeRequestResult.RequestAccepted();
     }
 
     // Un passage : lit le compte, vérifie que le mot de passe et le secret contrôlés sont toujours les bons, puis prépare l'usage
@@ -128,9 +128,9 @@ public class EmailChangeRequestService
 
         if (account.IsTwoFactorEnabled)
         {
-            return EmailChangeRequestResult.WrongPasswordOrCode;
+            return new EmailChangeRequestResult.WrongPasswordOrCode();
         }
 
-        return EmailChangeRequestResult.WrongPassword;
+        return new EmailChangeRequestResult.WrongPassword();
     }
 }

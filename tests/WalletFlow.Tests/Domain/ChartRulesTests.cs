@@ -8,20 +8,8 @@ public class ChartRulesTests
     [Fact]
     public void LimitsAreTheChosenOnes()
     {
-        Assert.Equal("Europe/Paris", ChartRules.UsersTimeZoneId);
         Assert.Equal(120, ChartRules.MaximumPeriodMonths);
         Assert.Equal(3, ChartRules.AverageMonthCount);
-    }
-
-    // Le mois en cours commence à minuit, heure de Paris : une heure ou deux avant minuit en temps universel.
-    [Theory]
-    [InlineData("2026-11-30T22:59:00Z", "2026-11-30")]
-    [InlineData("2026-11-30T23:00:00Z", "2026-12-01")]
-    [InlineData("2026-06-30T21:59:00Z", "2026-06-30")]
-    [InlineData("2026-06-30T22:00:00Z", "2026-07-01")]
-    public void TodayIsTheDayInParis(string utcNow, string expectedDay)
-    {
-        Assert.Equal(DateOnly.Parse(expectedDay), ChartRules.FindUsersToday(DateTimeOffset.Parse(utcNow)));
     }
 
     // Une période compte chaque mois civil qu'elle touche, même pour un seul jour.

@@ -29,12 +29,12 @@ public class PasswordRecoveryRequestService
 
         if (!EmailAddressRules.IsValid(email))
         {
-            return PasswordRecoveryRequestResult.InvalidEmailAddressFormat;
+            return new PasswordRecoveryRequestResult.InvalidEmailAddressFormat();
         }
 
         if (!requestLimiter.TryCountRequest(email))
         {
-            return PasswordRecoveryRequestResult.TooManyRequests;
+            return new PasswordRecoveryRequestResult.TooManyRequests();
         }
 
         emailQueue.Add(new BackgroundEmailRequest.PasswordRecovery
@@ -43,6 +43,6 @@ public class PasswordRecoveryRequestService
             IpAddress = ipAddress
         });
 
-        return PasswordRecoveryRequestResult.RequestAccepted;
+        return new PasswordRecoveryRequestResult.RequestAccepted();
     }
 }

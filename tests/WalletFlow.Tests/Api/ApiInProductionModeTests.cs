@@ -7,7 +7,7 @@ using static WalletFlow.Tests.Api.RegistrationRequestTestValues;
 
 namespace WalletFlow.Tests.Api;
 
-// Vérifie ce qu'un vrai visiteur reçoit en production : erreurs génériques et HSTS (SS §6 et §10).
+// Vérifie ce qu'un vrai visiteur reçoit en production : erreurs génériques, HSTS et noms du site permis (SS §6 et §10).
 public class ApiInProductionModeTests
 {
     // Une panne imprévue donne une erreur générique : le détail ne va que dans les journaux (SS §10).
@@ -48,6 +48,38 @@ public class ApiInProductionModeTests
             response,
             "Strict-Transport-Security",
             "max-age=31536000; includeSubDomains");
+    }
+
+    // En production, l'API ne répond qu'aux noms du site : une requête sous un autre nom est refusée avant toute lecture.
+    [Fact]
+    public async Task RequestUnderAnotherHostNameIsRefused()
+    {
+        using var productionApi = new ApiFactoryInProduction();
+        var client = productionApi.CreateClient(
+            new WebApplicationFactoryClientOptions { BaseAddress = new Uri("https://site-piege.example") });
+
+        var response = await client.PostAsJsonAsync(
+            RegistrationEndpoint,
+            new { email = "visiteur@exemple.test", password = ValidPassword });
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Empty(productionApi.AccountRepository.SavedUsers);
+    }
+
+    // Sans noms du site, ou avec « * », l'API refuse de démarrer en production.
+    [Theory]
+    [InlineData("")]
+    [InlineData("*")]
+    [InlineData("walletflow.test; *")]
+    public void ProductionRefusesToStartWithoutPreciseHostNames(string allowedHosts)
+    {
+        using var productionApi = new ApiFactoryInProduction();
+        using var misconfiguredApi = productionApi.WithWebHostBuilder(apiBuilder =>
+            apiBuilder.UseSetting("AllowedHosts", allowedHosts));
+
+        var exception = Assert.Throws<InvalidOperationException>(() => misconfiguredApi.CreateClient());
+
+        Assert.Contains("AllowedHosts", exception.Message);
     }
 
     // Une requête en HTTP est redirigée vers HTTPS, et rien n'est enregistré (SS §7).

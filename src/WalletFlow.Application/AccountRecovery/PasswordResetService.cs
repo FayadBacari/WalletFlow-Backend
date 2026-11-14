@@ -45,14 +45,14 @@ public class PasswordResetService
 
         if (await FindUsableTokenAsync(tokenHash) == null)
         {
-            return PasswordResetResult.LinkNoLongerValid;
+            return new PasswordResetResult.LinkNoLongerValid();
         }
 
         var normalizedPassword = PasswordRules.Normalize(newPassword);
 
         if (!PasswordRules.IsValid(normalizedPassword))
         {
-            return PasswordResetResult.PasswordBreaksRules;
+            return new PasswordResetResult.PasswordBreaksRules();
         }
 
         // Le hachage est lent : il passe avant la lecture du compte, pour que l'écriture suive de près la lecture.
@@ -71,13 +71,13 @@ public class PasswordResetService
 
         if (accountId == null)
         {
-            return PasswordResetResult.LinkNoLongerValid;
+            return new PasswordResetResult.LinkNoLongerValid();
         }
 
         // Après l'enregistrement, et pas pendant : une connexion en cours avec l'ancien mot de passe a soit
         // déjà ouvert sa session, qui est effacée ici, soit trouvera le nouveau mot de passe et sera refusée (SS §3).
         await sessionRepository.DeleteAllForUserAsync(accountId.Value);
-        return PasswordResetResult.PasswordChanged;
+        return new PasswordResetResult.PasswordChanged();
     }
 
     // Un passage : lit le lien et son compte, les vérifie, puis prépare le nouveau mot de passe, le compte débloqué,

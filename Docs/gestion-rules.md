@@ -73,12 +73,13 @@
 - L'utilisateur peut renommer ses sacs.
 - L'utilisateur peut supprimer ses sacs.
 - L'utilisateur peut déplacer de l'argent disponible vers un sac, d'un sac à un autre, ou d'un sac vers l'argent disponible.
-- L'utilisateur peut donner un objectif à un sac : un montant à atteindre et, s'il le souhaite, une date.
+- L'utilisateur peut donner un objectif à un sac : un montant à atteindre et, s'il le souhaite, une date. Il peut le changer ou l'enlever.
 - L'utilisateur peut voir la progression de chaque sac vers son objectif.
 - L'utilisateur peut voir l'historique des mouvements d'un sac.
 - L'argent qui n'est dans aucun sac est affiché comme « argent disponible ».
 - Un déplacement d'argent ne peut pas porter le total des sacs au-dessus du solde total.
 - Si le solde total passe sous le total des sacs, l'application prévient l'utilisateur et lui demande de retirer de l'argent d'un ou plusieurs sacs.
+- Tant que le total des sacs dépasse le solde total, l'utilisateur peut toujours retirer de l'argent d'un sac ou en déplacer d'un sac à un autre : seul l'ajout depuis l'argent disponible est refusé.
 - Un déplacement d'argent ne peut pas rendre un sac négatif.
 - Supprimer un sac remet son montant dans l'argent disponible.
 - L'utilisateur peut voir des suggestions d'épargne adaptées à ses dépenses.
@@ -155,7 +156,7 @@
 
 - L'utilisateur peut choisir comment il reçoit ses alertes : par e-mail, par notification sur son téléphone, ou les deux.
 - L'utilisateur peut activer ou désactiver chaque type d'alerte.
-- Types d'alertes : budget d'une catégorie atteint, nouvelle suggestion d'épargne, objectif d'un sac atteint, connexion depuis un nouvel appareil, autorisation bancaire à renouveler.
+- Types d'alertes : budget d'une catégorie atteint, nouvelle suggestion d'épargne, objectif d'un sac atteint, autorisation bancaire à renouveler, et les alertes de sécurité : connexion depuis un nouvel appareil, compte bloqué, changement de mot de passe ou d'adresse e-mail.
 - Les alertes de sécurité (connexion depuis un nouvel appareil, compte bloqué, changement de mot de passe ou d'adresse e-mail) ne peuvent pas être désactivées.
 
 

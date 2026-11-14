@@ -48,13 +48,13 @@ public class EmailChangeConfirmationService
         var token = await FindUsableTokenAsync(tokenHash);
         if (token == null)
         {
-            return EmailChangeConfirmationResult.LinkNoLongerValid;
+            return new EmailChangeConfirmationResult.LinkNoLongerValid();
         }
 
         var account = await accountRepository.FindByIdAsync(token.UserId);
         if (account == null || !account.IsEmailConfirmed)
         {
-            return EmailChangeConfirmationResult.LinkNoLongerValid;
+            return new EmailChangeConfirmationResult.LinkNoLongerValid();
         }
 
         var checkedPasswordHash = account.PasswordHash;
@@ -63,15 +63,15 @@ public class EmailChangeConfirmationService
         if (!await passwordHasher.VerifyAsync(normalizedPassword, checkedPasswordHash))
         {
             await securityJournal.SaveEventNowAsync(SecurityEventType.EmailChange, SecurityEventResult.Failure, account.Id, ipAddress);
-            return EmailChangeConfirmationResult.WrongPassword;
+            return new EmailChangeConfirmationResult.WrongPassword();
         }
 
         var oldEmail = account.Email;
         var result = await savingService.SaveWithRetriesAsync(
             () => PrepareNewEmailAsync(tokenHash, checkedPasswordHash, ipAddress),
-            EmailChangeConfirmationResult.LinkNoLongerValid);
+            new EmailChangeConfirmationResult.LinkNoLongerValid());
 
-        if (result == EmailChangeConfirmationResult.EmailChanged)
+        if (result is EmailChangeConfirmationResult.EmailChanged)
         {
             emailQueue.Add(new BackgroundEmailRequest.EmailChangedNotice
             {
@@ -94,7 +94,7 @@ public class EmailChangeConfirmationService
         var token = await FindUsableTokenAsync(tokenHash);
         if (token == null || token.NewEmail == null)
         {
-            return PreparedChanges<EmailChangeConfirmationResult>.NothingToSave(EmailChangeConfirmationResult.LinkNoLongerValid);
+            return PreparedChanges<EmailChangeConfirmationResult>.NothingToSave(new EmailChangeConfirmationResult.LinkNoLongerValid());
         }
 
         var account = await accountRepository.FindByIdAsync(token.UserId);
@@ -102,13 +102,13 @@ public class EmailChangeConfirmationService
             || !account.IsEmailConfirmed
             || account.PasswordHash != checkedPasswordHash)
         {
-            return PreparedChanges<EmailChangeConfirmationResult>.NothingToSave(EmailChangeConfirmationResult.LinkNoLongerValid);
+            return PreparedChanges<EmailChangeConfirmationResult>.NothingToSave(new EmailChangeConfirmationResult.LinkNoLongerValid());
         }
 
         // Le premier compte qui confirme une adresse la garde : un autre compte l'a peut-être prise depuis la demande.
         if (await accountRepository.FindByEmailAsync(token.NewEmail) != null)
         {
-            return PreparedChanges<EmailChangeConfirmationResult>.NothingToSave(EmailChangeConfirmationResult.EmailAlreadyUsed);
+            return PreparedChanges<EmailChangeConfirmationResult>.NothingToSave(new EmailChangeConfirmationResult.EmailAlreadyUsed());
         }
 
         account.ReplaceEmail(token.NewEmail);
@@ -116,7 +116,7 @@ public class EmailChangeConfirmationService
         await accountRepository.PrepareRecoveryAndUnlockLinksRemovalAsync(account.Id);
         securityJournal.PrepareEvent(SecurityEventType.EmailChange, SecurityEventResult.Success, account.Id, ipAddress);
 
-        return PreparedChanges<EmailChangeConfirmationResult>.SaveThenReturn(EmailChangeConfirmationResult.EmailChanged);
+        return PreparedChanges<EmailChangeConfirmationResult>.SaveThenReturn(new EmailChangeConfirmationResult.EmailChanged());
     }
 
     // Cherche le jeton du lien. Renvoie null s'il n'existe pas, s'il a déjà servi ou s'il a expiré.

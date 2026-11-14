@@ -1,6 +1,5 @@
 using WalletFlow.Application.Persistence;
 using WalletFlow.Application.Security;
-using WalletFlow.Application.Transactions;
 using WalletFlow.Domain.AccountsAndCategories;
 using WalletFlow.Domain.UsersAndSecurity;
 
@@ -15,19 +14,19 @@ public class BankConnectionFinishService
     private readonly IBankConnectionRepository connectionRepository;
     private readonly IBankAuthorizationStore authorizationStore;
     private readonly ISecureTokenGenerator tokenGenerator;
-    private readonly BankTransactionArrival transactionArrival;
+    private readonly BankFirstTransactionsReading firstTransactionsReading;
     private readonly DatabaseChangesSavingService savingService;
     private readonly SecurityJournalService securityJournal;
     private readonly TimeProvider clock;
 
     // Reçoit le prestataire, l'accès aux connexions, la mémoire des autorisations commencées, le créateur de jetons,
-    // l'arrivée des opérations, l'enregistrement avec réessai, le journal de sécurité et l'horloge.
+    // la première lecture des opérations, l'enregistrement avec réessai, le journal de sécurité et l'horloge.
     public BankConnectionFinishService(
         IBankDataProvider bankProvider,
         IBankConnectionRepository connectionRepository,
         IBankAuthorizationStore authorizationStore,
         ISecureTokenGenerator tokenGenerator,
-        BankTransactionArrival transactionArrival,
+        BankFirstTransactionsReading firstTransactionsReading,
         DatabaseChangesSavingService savingService,
         SecurityJournalService securityJournal,
         TimeProvider clock)
@@ -36,7 +35,7 @@ public class BankConnectionFinishService
         this.connectionRepository = connectionRepository;
         this.authorizationStore = authorizationStore;
         this.tokenGenerator = tokenGenerator;
-        this.transactionArrival = transactionArrival;
+        this.firstTransactionsReading = firstTransactionsReading;
         this.savingService = savingService;
         this.securityJournal = securityJournal;
         this.clock = clock;
@@ -78,91 +77,19 @@ public class BankConnectionFinishService
 
         if (result is BankConnectionFinishResult.Connected connected)
         {
-            await ReceiveFirstTransactionsAsync(userId, connected.ConnectionId, session, presence);
+            await firstTransactionsReading.ReadAsync(userId, connected.ConnectionId, session, presence);
             return result;
         }
 
         if (result is BankConnectionFinishResult.Renewed renewed)
         {
-            await ReceiveFirstTransactionsAsync(userId, renewed.ConnectionId, session, presence);
+            await firstTransactionsReading.ReadAsync(userId, renewed.ConnectionId, session, presence);
             return result;
         }
 
         // Une session qui n'a rien donné est révoquée tout de suite : WalletFlow ne garde aucun accès inutile.
         await RevokeQuietlyAsync(session.SessionId);
         return result;
-    }
-
-    // Lit les opérations de chaque compte gardé, l'utilisateur étant là, juste après l'autorisation : c'est alors que la banque
-    // donne le plus d'historique. Si elle ne répond pas, la connexion reste faite : les opérations arriveront à la mise à jour
-    // suivante, qui repart de la dernière opération gardée.
-    private async Task ReceiveFirstTransactionsAsync(Guid userId, Guid connectionId, ProvidedSession session, UserPresence presence)
-    {
-        var today = DateOnly.FromDateTime(clock.GetUtcNow().UtcDateTime);
-        var storedAccounts = await connectionRepository.FindAccountsAsync(new List<Guid> { connectionId });
-        var transactionsByAccount = new Dictionary<Guid, List<ReceivedTransaction>>();
-
-        foreach (var storedAccount in storedAccounts)
-        {
-            var sessionAccount = session.Accounts.FirstOrDefault(account => account.StableId == storedAccount.ExternalAccountId);
-
-            if (sessionAccount == null)
-            {
-                continue;
-            }
-
-            var startDate = await transactionArrival.ChooseReadingStartAsync(storedAccount.Id, today);
-
-            try
-            {
-                var providedTransactions = await bankProvider.ReadTransactionsAsync(sessionAccount.Uid, startDate, presence);
-                transactionsByAccount[storedAccount.Id] = TransactionReception.Receive(providedTransactions);
-            }
-            catch (BankProviderException)
-            {
-            }
-        }
-
-        if (transactionsByAccount.Count == 0)
-        {
-            return;
-        }
-
-        await savingService.SaveWithRetriesAsync(
-            () => PrepareFirstTransactionsAsync(userId, connectionId, transactionsByAccount),
-            0);
-    }
-
-    // Un passage : vérifie que la connexion est toujours là, puis prépare les opérations nouvelles de chacun de ses comptes.
-    private async Task<PreparedChanges<int>> PrepareFirstTransactionsAsync(
-        Guid userId,
-        Guid connectionId,
-        Dictionary<Guid, List<ReceivedTransaction>> transactionsByAccount)
-    {
-        var connection = await connectionRepository.FindConnectionAsync(userId, connectionId);
-
-        if (connection == null)
-        {
-            return PreparedChanges<int>.NothingToSave(0);
-        }
-
-        var accounts = await connectionRepository.FindAccountsAsync(new List<Guid> { connectionId });
-        var preparedCount = 0;
-
-        foreach (var account in accounts)
-        {
-            if (transactionsByAccount.TryGetValue(account.Id, out var receivedTransactions))
-            {
-                preparedCount = preparedCount + await transactionArrival.PrepareNewTransactionsAsync(userId, account.Id, receivedTransactions);
-            }
-        }
-
-        if (preparedCount == 0)
-        {
-            return PreparedChanges<int>.NothingToSave(0);
-        }
-
-        return PreparedChanges<int>.SaveThenReturn(preparedCount);
     }
 
     // Lit les comptes de la nouvelle session, puis enregistre la connexion ou son renouvellement.
@@ -190,16 +117,17 @@ public class BankConnectionFinishService
             return new BankConnectionFinishResult.ProviderUnavailable();
         }
 
+        var keptSession = new KeptSession(userId, session.SessionId, authorizationEnd, receivedAccounts, skippedAccountNames, presence, now);
         string? replacedSessionId = null;
         var result = await savingService.SaveWithRetriesAsync(
             async () =>
             {
                 if (authorization.RenewedConnectionId is not Guid renewedConnectionId)
                 {
-                    return await PrepareNewConnectionAsync(userId, authorization.BankName, session.SessionId, authorizationEnd, receivedAccounts, skippedAccountNames, presence, now);
+                    return await PrepareNewConnectionAsync(keptSession, authorization.BankName);
                 }
 
-                var renewal = await PrepareRenewalAsync(userId, renewedConnectionId, session.SessionId, authorizationEnd, receivedAccounts, skippedAccountNames, presence, now);
+                var renewal = await PrepareRenewalAsync(keptSession, renewedConnectionId);
                 replacedSessionId = renewal.ReplacedSessionId;
                 return renewal.Changes;
             },
@@ -215,22 +143,14 @@ public class BankConnectionFinishService
     }
 
     // Un passage : ajoute la connexion et ses comptes, sauf ceux déjà présents dans une autre connexion de l'utilisateur.
-    private async Task<PreparedChanges<BankConnectionFinishResult>> PrepareNewConnectionAsync(
-        Guid userId,
-        string bankName,
-        string sessionId,
-        DateTime authorizationEnd,
-        List<ReceivedAccount> receivedAccounts,
-        List<string> skippedAccountNames,
-        UserPresence presence,
-        DateTime now)
+    private async Task<PreparedChanges<BankConnectionFinishResult>> PrepareNewConnectionAsync(KeptSession kept, string bankName)
     {
-        var skippedNames = new List<string>(skippedAccountNames);
+        var skippedNames = new List<string>(kept.SkippedAccountNames);
         var accountsToAdd = new List<ReceivedAccount>();
 
-        foreach (var account in receivedAccounts)
+        foreach (var account in kept.Accounts)
         {
-            if (await connectionRepository.IsAccountConnectedElsewhereAsync(userId, account.StableId, null))
+            if (await connectionRepository.IsAccountConnectedElsewhereAsync(kept.UserId, account.StableId, null))
             {
                 skippedNames.Add(account.Name);
                 continue;
@@ -247,19 +167,19 @@ public class BankConnectionFinishService
 
         var connection = new BankConnection
         {
-            ExternalConnectionId = sessionId,
+            ExternalConnectionId = kept.SessionId,
             BankName = BankConnectionRules.CleanReceivedName(bankName, BankConnectionRules.MaximumBankNameLength, BankConnectionRules.BankNameReplacement),
-            AuthorizationExpiresAt = authorizationEnd,
-            UserId = userId
+            AuthorizationExpiresAt = kept.AuthorizationEnd,
+            UserId = kept.UserId
         };
         connectionRepository.PrepareConnection(connection);
 
         foreach (var account in accountsToAdd)
         {
-            connectionRepository.PrepareAccount(CreateAccount(account, connection.Id, now));
+            connectionRepository.PrepareAccount(CreateAccount(account, connection.Id, kept.Now));
         }
 
-        securityJournal.PrepareEvent(SecurityEventType.BankConnection, SecurityEventResult.Success, userId, presence.IpAddress);
+        securityJournal.PrepareEvent(SecurityEventType.BankConnection, SecurityEventResult.Success, kept.UserId, kept.Presence.IpAddress);
 
         return PreparedChanges<BankConnectionFinishResult>.SaveThenReturn(new BankConnectionFinishResult.Connected
         {
@@ -271,17 +191,9 @@ public class BankConnectionFinishService
 
     // Un passage : renouvelle la connexion, met à jour ses comptes, et ajoute ceux qui sont nouveaux.
     // Les comptes que la banque ne donne plus restent, avec leurs transactions.
-    private async Task<RenewalChanges> PrepareRenewalAsync(
-        Guid userId,
-        Guid connectionId,
-        string sessionId,
-        DateTime authorizationEnd,
-        List<ReceivedAccount> receivedAccounts,
-        List<string> skippedAccountNames,
-        UserPresence presence,
-        DateTime now)
+    private async Task<RenewalChanges> PrepareRenewalAsync(KeptSession kept, Guid connectionId)
     {
-        var connection = await connectionRepository.FindConnectionAsync(userId, connectionId);
+        var connection = await connectionRepository.FindConnectionAsync(kept.UserId, connectionId);
 
         if (connection == null)
         {
@@ -292,32 +204,32 @@ public class BankConnectionFinishService
 
         var replacedSessionId = connection.ExternalConnectionId;
         var storedAccounts = await connectionRepository.FindAccountsAsync(new List<Guid> { connection.Id });
-        var skippedNames = new List<string>(skippedAccountNames);
+        var skippedNames = new List<string>(kept.SkippedAccountNames);
         var addedCount = 0;
 
-        foreach (var account in receivedAccounts)
+        foreach (var account in kept.Accounts)
         {
             var storedAccount = storedAccounts.FirstOrDefault(stored => stored.ExternalAccountId == account.StableId);
 
             if (storedAccount != null)
             {
                 storedAccount.Rename(account.Name);
-                storedAccount.UpdateBalance(account.BalanceInCents, now);
+                storedAccount.UpdateBalance(account.BalanceInCents, kept.Now);
                 continue;
             }
 
-            if (await connectionRepository.IsAccountConnectedElsewhereAsync(userId, account.StableId, connection.Id))
+            if (await connectionRepository.IsAccountConnectedElsewhereAsync(kept.UserId, account.StableId, connection.Id))
             {
                 skippedNames.Add(account.Name);
                 continue;
             }
 
-            connectionRepository.PrepareAccount(CreateAccount(account, connection.Id, now));
+            connectionRepository.PrepareAccount(CreateAccount(account, connection.Id, kept.Now));
             addedCount = addedCount + 1;
         }
 
-        connection.Renew(sessionId, authorizationEnd);
-        securityJournal.PrepareEvent(SecurityEventType.BankConnection, SecurityEventResult.Success, userId, presence.IpAddress);
+        connection.Renew(kept.SessionId, kept.AuthorizationEnd);
+        securityJournal.PrepareEvent(SecurityEventType.BankConnection, SecurityEventResult.Success, kept.UserId, kept.Presence.IpAddress);
 
         var changes = PreparedChanges<BankConnectionFinishResult>.SaveThenReturn(new BankConnectionFinishResult.Renewed
         {
@@ -405,6 +317,17 @@ public class BankConnectionFinishService
         {
         }
     }
+
+    // Une session que la banque vient de donner, prête à être gardée : l'utilisateur, l'identifiant de la session chez
+    // le prestataire, la fin de l'autorisation, les comptes reçus et ceux laissés de côté, la présence de l'utilisateur et l'heure.
+    private sealed record KeptSession(
+        Guid UserId,
+        string SessionId,
+        DateTime AuthorizationEnd,
+        List<ReceivedAccount> Accounts,
+        List<string> SkippedAccountNames,
+        UserPresence Presence,
+        DateTime Now);
 
     // Un compte reçu de la banque, prêt à être gardé : son identifiant stable, son nom enregistré et son solde.
     private sealed record ReceivedAccount(string StableId, string Name, int BalanceInCents);

@@ -183,10 +183,13 @@ Les valeurs ci-dessous sont des points de départ, à ajuster selon l'usage rée
 | Lien de changement d'adresse     | 10 essais par heure et par adresse IP                                                    |
 | Formulaire de support (visiteur) | 3 par heure et par adresse IP                                                            |
 | Mise à jour des comptes          | 1 par minute et par utilisateur                                                          |
+| Recherche, graphiques et sacs    | 60 par minute et par session, toutes ces lectures ensemble                               |
 
 Au-delà de la limite, le serveur répond « trop de requêtes » (429).
 
 Un utilisateur a au plus 100 catégories, les 8 par défaut comprises : un script ne peut pas remplir la base en créant des catégories sans fin.
+
+Un utilisateur a au plus 100 sacs, et fait au plus 1 000 déplacements d'argent sur les dernières 24 heures : un script ne peut pas remplir la base en créant des sacs ou des mouvements sans fin. Au-delà des 1 000 déplacements, le serveur répond « trop de requêtes » (429).
 
 Une période de graphique couvre au plus 10 ans : une requête ne peut pas faire calculer des milliers de mois.
 
@@ -198,6 +201,7 @@ Une période de graphique couvre au plus 10 ans : une requête ne peut pas faire
 ### Origines (CORS)
 - Si l'interface et le serveur sont sur le même domaine, aucune règle CORS n'est nécessaire.
 - Sinon, seule l'origine exacte de l'interface est autorisée, jamais `*`.
+- En production, le serveur ne répond qu'aux noms du site (réglage `AllowedHosts`) : une requête sous un autre nom est refusée.
 
 ### En-têtes de sécurité
 
@@ -313,7 +317,7 @@ Les journaux techniques ne contiennent jamais de mot de passe, de jeton, de code
 
 Pour chaque événement, le journal note la date, l'identifiant de l'utilisateur, l'adresse IP, l'événement et son résultat.
 
-**Conservation** : de 6 mois à 1 an, comme le recommande la CNIL. Quand un compte est supprimé, ses événements restent, mais sans son identifiant ni son adresse IP (§7).
+**Conservation** : 1 an, dans la fourchette de 6 mois à 1 an que recommande la CNIL. Chaque jour, les événements plus anciens sont effacés par une fonction de la base, la seule à pouvoir effacer le journal. Quand un compte est supprimé, ses événements restent, mais sans son identifiant ni son adresse IP (§7).
 
 
 ## 12. En cas d'incident

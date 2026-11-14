@@ -35,12 +35,12 @@ public class AccountConfirmationController : ControllerBase
             request.Token,
             request.Password);
 
-        if (result == AccountConfirmationResult.AccountConfirmed)
+        if (result is AccountConfirmationResult.AccountConfirmed)
         {
             return Ok(new MessageResponse(ConfirmedMessage));
         }
 
-        if (result == AccountConfirmationResult.WrongPassword)
+        if (result is AccountConfirmationResult.WrongPassword)
         {
             ModelState.AddModelError(nameof(ConfirmAccountRequest.Password), ErrorMessages.WrongConfirmationPassword);
             return ValidationProblem();

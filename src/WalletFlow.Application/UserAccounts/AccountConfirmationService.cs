@@ -39,13 +39,13 @@ public class AccountConfirmationService
         var token = await FindUsableTokenAsync(linkToken, now);
         if (token == null)
         {
-            return AccountConfirmationResult.LinkNoLongerValid;
+            return new AccountConfirmationResult.LinkNoLongerValid();
         }
 
         var account = await accountRepository.FindByIdAsync(token.UserId);
         if (account == null || account.IsEmailConfirmed)
         {
-            return AccountConfirmationResult.LinkNoLongerValid;
+            return new AccountConfirmationResult.LinkNoLongerValid();
         }
 
         return await CheckPasswordThenConfirmAsync(account, token, password, now);
@@ -62,7 +62,7 @@ public class AccountConfirmationService
 
         if (!await passwordHasher.VerifyAsync(normalizedPassword, account.PasswordHash))
         {
-            return AccountConfirmationResult.WrongPassword;
+            return new AccountConfirmationResult.WrongPassword();
         }
 
         account.ConfirmEmail();
@@ -74,10 +74,10 @@ public class AccountConfirmationService
 
         if (!saved)
         {
-            return AccountConfirmationResult.LinkNoLongerValid;
+            return new AccountConfirmationResult.LinkNoLongerValid();
         }
 
-        return AccountConfirmationResult.AccountConfirmed;
+        return new AccountConfirmationResult.AccountConfirmed();
     }
 
     // Cherche le jeton du lien. Renvoie null s'il n'existe pas, s'il a déjà servi ou s'il a expiré.

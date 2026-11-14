@@ -63,7 +63,7 @@ public class EmailChangeConfirmationServiceTests
 
         var result = await ConfirmAsync(linkToken, TwoFactorServicesWithFakeTools.AccountPassword);
 
-        Assert.Equal(EmailChangeConfirmationResult.EmailChanged, result);
+        Assert.IsType<EmailChangeConfirmationResult.EmailChanged>(result);
         Assert.Equal(NewEmail, account.Email);
         Assert.NotNull(FindEmailChangeLinkOf(account).UsedAt);
         Assert.Equal(new List<EmailTokenType> { EmailTokenType.EmailChange }, tools.AccountRepository.SavedEmailTokens.Where(token => token.UserId == account.Id).Select(token => token.Type).ToList());
@@ -83,7 +83,7 @@ public class EmailChangeConfirmationServiceTests
 
         var result = await ConfirmAsync(linkToken, TwoFactorServicesWithFakeTools.WrongPassword);
 
-        Assert.Equal(EmailChangeConfirmationResult.WrongPassword, result);
+        Assert.IsType<EmailChangeConfirmationResult.WrongPassword>(result);
         Assert.Equal(TwoFactorServicesWithFakeTools.AccountEmail, account.Email);
         Assert.Null(FindEmailChangeLinkOf(account).UsedAt);
         Assert.Empty(tools.EmailQueue.AddedRequests);
@@ -97,7 +97,7 @@ public class EmailChangeConfirmationServiceTests
 
         var result = await ConfirmAsync("jeton-inconnu", TwoFactorServicesWithFakeTools.AccountPassword);
 
-        Assert.Equal(EmailChangeConfirmationResult.LinkNoLongerValid, result);
+        Assert.IsType<EmailChangeConfirmationResult.LinkNoLongerValid>(result);
     }
 
     // SS §2 : le lien vaut 24 heures, pas une seconde de plus.
@@ -110,7 +110,7 @@ public class EmailChangeConfirmationServiceTests
 
         var result = await ConfirmAsync(linkToken, TwoFactorServicesWithFakeTools.AccountPassword);
 
-        Assert.Equal(EmailChangeConfirmationResult.LinkNoLongerValid, result);
+        Assert.IsType<EmailChangeConfirmationResult.LinkNoLongerValid>(result);
         Assert.Equal(TwoFactorServicesWithFakeTools.AccountEmail, account.Email);
     }
 
@@ -123,7 +123,7 @@ public class EmailChangeConfirmationServiceTests
         await ConfirmAsync(linkToken, TwoFactorServicesWithFakeTools.AccountPassword);
         var secondResult = await ConfirmAsync(linkToken, TwoFactorServicesWithFakeTools.AccountPassword);
 
-        Assert.Equal(EmailChangeConfirmationResult.LinkNoLongerValid, secondResult);
+        Assert.IsType<EmailChangeConfirmationResult.LinkNoLongerValid>(secondResult);
         Assert.Equal(1, tools.CountSecurityEvents(SecurityEventType.EmailChange, SecurityEventResult.Success));
     }
 
@@ -136,7 +136,7 @@ public class EmailChangeConfirmationServiceTests
 
         var result = await ConfirmAsync(recoveryLinkToken, TwoFactorServicesWithFakeTools.AccountPassword);
 
-        Assert.Equal(EmailChangeConfirmationResult.LinkNoLongerValid, result);
+        Assert.IsType<EmailChangeConfirmationResult.LinkNoLongerValid>(result);
         Assert.Equal(TwoFactorServicesWithFakeTools.AccountEmail, account.Email);
     }
 
@@ -150,7 +150,7 @@ public class EmailChangeConfirmationServiceTests
 
         var result = await ConfirmAsync(linkToken, TwoFactorServicesWithFakeTools.AccountPassword);
 
-        Assert.Equal(EmailChangeConfirmationResult.EmailAlreadyUsed, result);
+        Assert.IsType<EmailChangeConfirmationResult.EmailAlreadyUsed>(result);
         Assert.Equal(TwoFactorServicesWithFakeTools.AccountEmail, account.Email);
         Assert.Null(FindEmailChangeLinkOf(account).UsedAt);
         Assert.Empty(tools.EmailQueue.AddedRequests);
@@ -171,7 +171,7 @@ public class EmailChangeConfirmationServiceTests
 
         var result = await ConfirmAsync(linkToken, TwoFactorServicesWithFakeTools.AccountPassword);
 
-        Assert.Equal(EmailChangeConfirmationResult.EmailAlreadyUsed, result);
+        Assert.IsType<EmailChangeConfirmationResult.EmailAlreadyUsed>(result);
         Assert.Equal(TwoFactorServicesWithFakeTools.AccountEmail, account.Email);
         Assert.Null(FindEmailChangeLinkOf(account).UsedAt);
         Assert.Equal(0, tools.UnitOfWork.CommittedTransactionCount);
@@ -188,7 +188,7 @@ public class EmailChangeConfirmationServiceTests
 
         var result = await ConfirmAsync(linkToken, TwoFactorServicesWithFakeTools.AccountPassword);
 
-        Assert.Equal(EmailChangeConfirmationResult.LinkNoLongerValid, result);
+        Assert.IsType<EmailChangeConfirmationResult.LinkNoLongerValid>(result);
         Assert.Equal(TwoFactorServicesWithFakeTools.AccountEmail, account.Email);
     }
 }

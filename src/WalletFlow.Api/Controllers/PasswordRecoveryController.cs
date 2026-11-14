@@ -40,12 +40,12 @@ public class PasswordRecoveryController : ControllerBase
             request.Email,
             HttpContext.Connection.RemoteIpAddress);
 
-        if (result == PasswordRecoveryRequestResult.RequestAccepted)
+        if (result is PasswordRecoveryRequestResult.RequestAccepted)
         {
             return Ok(new MessageResponse(RecoveryRequestedMessage));
         }
 
-        if (result == PasswordRecoveryRequestResult.TooManyRequests)
+        if (result is PasswordRecoveryRequestResult.TooManyRequests)
         {
             return StatusCode(StatusCodes.Status429TooManyRequests);
         }
@@ -65,12 +65,12 @@ public class PasswordRecoveryController : ControllerBase
             request.NewPassword,
             HttpContext.Connection.RemoteIpAddress);
 
-        if (result == PasswordResetResult.PasswordChanged)
+        if (result is PasswordResetResult.PasswordChanged)
         {
             return Ok(new MessageResponse(PasswordChangedMessage));
         }
 
-        if (result == PasswordResetResult.PasswordBreaksRules)
+        if (result is PasswordResetResult.PasswordBreaksRules)
         {
             ModelState.AddModelError(nameof(ResetPasswordRequest.NewPassword), ErrorMessages.PasswordBreaksRules);
             return ValidationProblem();

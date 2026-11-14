@@ -52,6 +52,33 @@ public class BankTransactionArrivalTests
         Assert.False(transactions[0].IsInternalTransfer);
     }
 
+    // Le jour d'où lire est celui de Paris (voir UsersCalendar) : à 0 h 30 à Paris, il est encore 23 h 30 la veille
+    // en temps universel, et la lecture remonte quand même un an avant le jour de Paris.
+    [Fact]
+    public async Task ConnectionReadsFromTheDayInParis()
+    {
+        services.Clock.Advance(new TimeSpan(11, 30, 0));
+
+        await ConnectAsync();
+
+        Assert.Equal(new DateTime(2026, 11, 4, 23, 30, 0, DateTimeKind.Utc), services.Now);
+        Assert.Equal(new DateOnly(2025, 11, 5), Assert.Single(services.Provider.TransactionReadings).StartDate);
+    }
+
+    // Une mise à jour aussi compte le jour à Paris : à minuit à Paris, le jour d'où lire change, même s'il est 23 h
+    // en temps universel.
+    [Fact]
+    public async Task UpdateReadsFromTheDayInParis()
+    {
+        services.Clock.Advance(TimeSpan.FromHours(10));
+        await ConnectAsync();
+        await UpdateLaterAsync();
+
+        Assert.Equal(new DateOnly(2025, 11, 4), services.Provider.TransactionReadings[0].StartDate);
+        Assert.Equal(new DateTime(2026, 11, 4, 23, 0, 0, DateTimeKind.Utc), services.Now);
+        Assert.Equal(new DateOnly(2025, 11, 5), services.Provider.TransactionReadings.Last().StartDate);
+    }
+
     // GR Comptes : une opération en attente n'arrive pas ; elle arrive dès que la banque l'a comptabilisée.
     [Fact]
     public async Task PendingOperationArrivesOnceBooked()

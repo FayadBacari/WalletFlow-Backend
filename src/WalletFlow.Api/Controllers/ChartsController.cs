@@ -1,7 +1,10 @@
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 using WalletFlow.Api.Authentication;
+using WalletFlow.Api.Configuration;
 using WalletFlow.Api.Contracts;
 using WalletFlow.Application.Charts;
+using WalletFlow.Application.Security;
 
 namespace WalletFlow.Api.Controllers;
 
@@ -9,6 +12,7 @@ namespace WalletFlow.Api.Controllers;
 // les dépenses et les revenus mois par mois, et le mois en cours face à la moyenne des 3 derniers mois. Le site les dessine.
 // Ces routes n'ont aucun attribut de sécurité : toute route demande par défaut une session (voir Program.cs).
 // Le compte d'un autre utilisateur ne filtre rien de visible : aucune de ses opérations ne compte (SS §4).
+// La tentative est notée au journal de sécurité (SS §11).
 [ApiController]
 [Route("api/charts")]
 public class ChartsController : ControllerBase
@@ -16,21 +20,25 @@ public class ChartsController : ControllerBase
     private readonly CategoryExpenseChartService categoryExpenseService;
     private readonly MonthlyTotalsChartService monthlyTotalsService;
     private readonly MonthComparisonService comparisonService;
+    private readonly ForeignAccessJournalService foreignAccessJournal;
 
     // Reçoit les cas d'utilisation des graphiques.
     public ChartsController(
         CategoryExpenseChartService categoryExpenseService,
         MonthlyTotalsChartService monthlyTotalsService,
-        MonthComparisonService comparisonService)
+        MonthComparisonService comparisonService,
+        ForeignAccessJournalService foreignAccessJournal)
     {
         this.categoryExpenseService = categoryExpenseService;
         this.monthlyTotalsService = monthlyTotalsService;
         this.comparisonService = comparisonService;
+        this.foreignAccessJournal = foreignAccessJournal;
     }
 
     // GET api/charts/categories : la répartition des dépenses par catégorie entre deux dates comprises, la plus grande d'abord.
     // Ce sont des données financières : aucun navigateur ni intermédiaire ne doit les garder.
     [HttpGet("categories")]
+    [EnableRateLimiting(RateLimitingConfiguration.CostlyReadPolicy)]
     [ResponseCache(NoStore = true, Location = ResponseCacheLocation.None)]
     public async Task<IActionResult> ReadCategoryExpenses([FromQuery] ChartPeriodRequest request)
     {
@@ -40,6 +48,7 @@ public class ChartsController : ControllerBase
         }
 
         var result = await categoryExpenseService.ReadAsync(SessionClaims.ReadUserId(User), from, to, request.AccountId);
+        await RecordForeignAccessAsync(OwnedResource.BankAccount, request.AccountId);
 
         if (result is ChartPeriodResult<List<CategoryExpense>>.Found found)
         {
@@ -55,6 +64,7 @@ public class ChartsController : ControllerBase
 
     // GET api/charts/months : les revenus, les dépenses et l'épargne de chaque mois que touche la période, dans l'ordre.
     [HttpGet("months")]
+    [EnableRateLimiting(RateLimitingConfiguration.CostlyReadPolicy)]
     [ResponseCache(NoStore = true, Location = ResponseCacheLocation.None)]
     public async Task<IActionResult> ReadMonthlyTotals([FromQuery] ChartPeriodRequest request)
     {
@@ -64,6 +74,7 @@ public class ChartsController : ControllerBase
         }
 
         var result = await monthlyTotalsService.ReadAsync(SessionClaims.ReadUserId(User), from, to, request.AccountId);
+        await RecordForeignAccessAsync(OwnedResource.BankAccount, request.AccountId);
 
         if (result is ChartPeriodResult<List<MonthTotals>>.Found found)
         {
@@ -80,10 +91,12 @@ public class ChartsController : ControllerBase
     // GET api/charts/comparison : le mois en cours, tel qu'il est, face à la moyenne des 3 mois complets d'avant,
     // catégorie par catégorie, avec le budget de chaque catégorie et la part déjà dépensée.
     [HttpGet("comparison")]
+    [EnableRateLimiting(RateLimitingConfiguration.CostlyReadPolicy)]
     [ResponseCache(NoStore = true, Location = ResponseCacheLocation.None)]
     public async Task<IActionResult> ReadComparison([FromQuery] ChartAccountRequest request)
     {
         var comparison = await comparisonService.ReadAsync(SessionClaims.ReadUserId(User), request.AccountId);
+        await RecordForeignAccessAsync(OwnedResource.BankAccount, request.AccountId);
         var categories = comparison.Categories
             .Select(category => new CategoryComparisonResponse(
                 category.CategoryId,
@@ -120,6 +133,16 @@ public class ChartsController : ControllerBase
         return ValidationProblem();
     }
 
+
+    // Note au journal si la ressource visée est à un autre utilisateur (SS §11). La réponse reste la même dans tous les cas.
+    private async Task RecordForeignAccessAsync(OwnedResource resource, Guid? resourceId)
+    {
+        await foreignAccessJournal.RecordIfForeignAsync(
+            SessionClaims.ReadUserId(User),
+            HttpContext.Connection.RemoteIpAddress,
+            resource,
+            resourceId);
+    }
     // Refuse une période à l'envers, ou trop longue, sur le champ To.
     private ActionResult AnswerPeriodRefused(bool areDatesReversed)
     {

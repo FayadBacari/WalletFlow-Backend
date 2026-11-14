@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using System.Threading.RateLimiting;
 using Microsoft.AspNetCore.RateLimiting;
 
@@ -17,6 +19,7 @@ public static class RateLimitingConfiguration
     public const string PasswordChangePolicy = "changement-de-mot-de-passe-par-adresse-ip";
     public const string EmailChangePolicy = "changement-d-adresse-par-adresse-ip";
     public const string EmailChangeLinkPolicy = "lien-de-changement-d-adresse-par-adresse-ip";
+    public const string CostlyReadPolicy = "lecture-couteuse-par-session";
 
     // Connexion : 10 essais par minute et par adresse IP, en plus des 5 tentatives par compte.
     public static FixedWindowRateLimiterOptions CreateLoginLimit()
@@ -108,6 +111,17 @@ public static class RateLimitingConfiguration
         };
     }
 
+    // Recherche d'opérations, graphiques, liste des sacs et historique d'un sac : 60 par minute et par session, toutes ces routes
+    // ensemble. Chacune additionne beaucoup de lignes : sans limite, un seul compte pourrait charger la base en boucle.
+    public static FixedWindowRateLimiterOptions CreateCostlyReadLimit()
+    {
+        return new FixedWindowRateLimiterOptions
+        {
+            PermitLimit = 60,
+            Window = TimeSpan.FromMinutes(1)
+        };
+    }
+
     // Ajoute les limites de débit aux services de l'API.
     public static IServiceCollection AddWalletFlowRateLimiting(this IServiceCollection services)
     {
@@ -126,6 +140,7 @@ public static class RateLimitingConfiguration
             AddLimitPerIp(options, PasswordChangePolicy, CreatePasswordChangeLimit());
             AddLimitPerIp(options, EmailChangePolicy, CreateEmailChangeLimit());
             AddLimitPerIp(options, EmailChangeLinkPolicy, CreateEmailChangeLinkLimit());
+            AddLimitPerSession(options, CostlyReadPolicy, CreateCostlyReadLimit());
         });
 
         return services;
@@ -138,6 +153,30 @@ public static class RateLimitingConfiguration
             RateLimitPartition.GetFixedWindowLimiter(
                 ReadIpAddress(httpContext),
                 ipAddress => limit));
+    }
+
+    // Ajoute une limite, avec un compteur par session : elle suit l'utilisateur connecté, même s'il change d'adresse IP.
+    // Le cookie est lu sans la base : la limite passe avant toute lecture, comme les autres.
+    private static void AddLimitPerSession(RateLimiterOptions options, string policyName, FixedWindowRateLimiterOptions limit)
+    {
+        options.AddPolicy(policyName, httpContext =>
+            RateLimitPartition.GetFixedWindowLimiter(
+                ReadSessionKey(httpContext),
+                sessionKey => limit));
+    }
+
+    // Donne l'empreinte SHA-256 du cookie de session : le compteur ne garde jamais le jeton lui-même en mémoire.
+    // Sans cookie, la requête sera refusée plus loin (401) : elle compte avec son adresse IP.
+    private static string ReadSessionKey(HttpContext httpContext)
+    {
+        var sessionToken = httpContext.Request.Cookies[SessionCookiesConfiguration.SessionCookieName];
+
+        if (string.IsNullOrEmpty(sessionToken))
+        {
+            return "adresse-ip:" + ReadIpAddress(httpContext);
+        }
+
+        return "session:" + Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(sessionToken)));
     }
 
     // Donne l'adresse IP qui sert de compteur à une requête.

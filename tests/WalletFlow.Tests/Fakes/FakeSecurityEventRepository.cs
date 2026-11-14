@@ -17,6 +17,9 @@ public class FakeSecurityEventRepository : ISecurityEventRepository, ITransactio
     // Simule une panne de la base au moment d'écrire dans le journal.
     public bool IsDown { get; set; } = false;
 
+    // Le nombre d'effacements des événements de plus d'un an demandés. La vraie durée est testée sur la vraie base.
+    public int CleanupCount { get; private set; } = 0;
+
     // Garde tout de suite l'événement en mémoire.
     public Task SaveEventAsync(SecurityEvent securityEvent)
     {
@@ -31,6 +34,22 @@ public class FakeSecurityEventRepository : ISecurityEventRepository, ITransactio
         }
 
         return Task.CompletedTask;
+    }
+
+    // Note l'effacement demandé, ou lance la panne simulée.
+    public Task<int> DeleteExpiredEventsAsync()
+    {
+        if (IsDown)
+        {
+            throw new InvalidOperationException(FailureDetail);
+        }
+
+        lock (pendingChangesLock)
+        {
+            CleanupCount = CleanupCount + 1;
+        }
+
+        return Task.FromResult(0);
     }
 
     // Garde l'événement de côté : il ne sera gardé qu'avec les autres changements.

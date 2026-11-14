@@ -45,7 +45,7 @@ public class TwoFactorDeactivationService
 
         if (account == null || !account.IsTwoFactorEnabled)
         {
-            return TwoFactorDeactivationResult.TwoFactorNotEnabled;
+            return new TwoFactorDeactivationResult.TwoFactorNotEnabled();
         }
 
         var passwordHash = account.PasswordHash;
@@ -84,7 +84,7 @@ public class TwoFactorDeactivationService
             return await RefuseAsync(userId, ipAddress);
         }
 
-        return result.Value;
+        return result;
     }
 
     // Un passage : lit le compte et vérifie que le mot de passe et le secret qui viennent d'être contrôlés sont encore les bons,
@@ -99,7 +99,7 @@ public class TwoFactorDeactivationService
 
         if (account == null || !account.IsTwoFactorEnabled)
         {
-            return PreparedChanges<TwoFactorDeactivationResult?>.NothingToSave(TwoFactorDeactivationResult.TwoFactorNotEnabled);
+            return PreparedChanges<TwoFactorDeactivationResult?>.NothingToSave(new TwoFactorDeactivationResult.TwoFactorNotEnabled());
         }
 
         if (account.PasswordHash != passwordHash
@@ -112,7 +112,7 @@ public class TwoFactorDeactivationService
         await twoFactorRepository.PrepareBackupCodesRemovalAsync(userId);
         securityJournal.PrepareEvent(SecurityEventType.TwoFactorDeactivation, SecurityEventResult.Success, userId, ipAddress);
 
-        return PreparedChanges<TwoFactorDeactivationResult?>.SaveThenReturn(TwoFactorDeactivationResult.TwoFactorDeactivated);
+        return PreparedChanges<TwoFactorDeactivationResult?>.SaveThenReturn(new TwoFactorDeactivationResult.TwoFactorDeactivated());
     }
 
     // Note le refus dans le journal, et donne le même refus pour un mauvais mot de passe et pour un mauvais code.
@@ -120,6 +120,6 @@ public class TwoFactorDeactivationService
     {
         await securityJournal.SaveEventNowAsync(SecurityEventType.TwoFactorDeactivation, SecurityEventResult.Failure, userId, ipAddress);
 
-        return TwoFactorDeactivationResult.WrongPasswordOrCode;
+        return new TwoFactorDeactivationResult.WrongPasswordOrCode();
     }
 }

@@ -36,18 +36,18 @@ public class EmailChangeConfirmationController : ControllerBase
             request.Password,
             HttpContext.Connection.RemoteIpAddress);
 
-        if (result == EmailChangeConfirmationResult.EmailChanged)
+        if (result is EmailChangeConfirmationResult.EmailChanged)
         {
             return Ok(new MessageResponse(EmailChangedMessage));
         }
 
-        if (result == EmailChangeConfirmationResult.WrongPassword)
+        if (result is EmailChangeConfirmationResult.WrongPassword)
         {
             ModelState.AddModelError(nameof(ConfirmEmailChangeRequest.Password), ErrorMessages.WrongCurrentPassword);
             return ValidationProblem();
         }
 
-        if (result == EmailChangeConfirmationResult.EmailAlreadyUsed)
+        if (result is EmailChangeConfirmationResult.EmailAlreadyUsed)
         {
             return Problem(statusCode: StatusCodes.Status409Conflict, title: ErrorMessages.EmailAlreadyUsed);
         }

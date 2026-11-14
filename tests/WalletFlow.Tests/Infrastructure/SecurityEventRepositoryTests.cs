@@ -12,6 +12,40 @@ public class SecurityEventRepositoryTests
 {
     private static readonly DateTime EventDate = new DateTime(2026, 11, 4, 12, 0, 0, DateTimeKind.Utc);
 
+    // SS §11 : la fonction de la base efface les événements de plus d'un an, et garde les autres. La base compte avec sa propre
+    // horloge : une heure de marge de chaque côté rend le test sûr, quelle que soit l'heure de la machine.
+    [Fact]
+    public async Task OnlyEventsOlderThanOneYearAreDeleted()
+    {
+        await using var databaseContext = CreateDatabaseContext();
+        await using var transaction = await databaseContext.Database.BeginTransactionAsync();
+        var repository = new SecurityEventRepository(databaseContext);
+        var oneYearAgo = DateTime.UtcNow.AddYears(-1);
+        var oldEvent = new SecurityEvent { Type = SecurityEventType.Login, Result = SecurityEventResult.Failure, OccurredAt = oneYearAgo.AddHours(-1) };
+        var recentEvent = new SecurityEvent { Type = SecurityEventType.Login, Result = SecurityEventResult.Failure, OccurredAt = oneYearAgo.AddHours(1) };
+        await repository.SaveEventAsync(oldEvent);
+        await repository.SaveEventAsync(recentEvent);
+
+        var deletedCount = await repository.DeleteExpiredEventsAsync();
+
+        Assert.True(deletedCount >= 1);
+        Assert.False(await databaseContext.SecurityEvents.AnyAsync(row => row.Id == oldEvent.Id));
+        Assert.True(await databaseContext.SecurityEvents.AnyAsync(row => row.Id == recentEvent.Id));
+    }
+
+    // L'application ne peut toujours pas effacer le journal elle-même : seule la fonction de la base le peut.
+    [Fact]
+    public async Task ApplicationStillCannotDeleteTheJournalItself()
+    {
+        await using var databaseContext = CreateDatabaseContext();
+        await using var transaction = await databaseContext.Database.BeginTransactionAsync();
+
+        var refusal = await Assert.ThrowsAsync<Npgsql.PostgresException>(() =>
+            databaseContext.Database.ExecuteSqlRawAsync("DELETE FROM evenement_securite"));
+
+        Assert.Equal(Npgsql.PostgresErrorCodes.InsufficientPrivilege, refusal.SqlState);
+    }
+
     // Les codes écrits dans la table sont ceux du dictionnaire de données, et l'adresse est une vraie adresse IP.
     [Theory]
     [InlineData("203.0.113.7")]

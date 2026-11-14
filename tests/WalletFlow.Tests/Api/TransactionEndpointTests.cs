@@ -260,6 +260,7 @@ public class TransactionEndpointTests
     }
 
     // SS §4 : l'opération ou la catégorie d'un autre utilisateur répond 404, comme une adresse qui n'existe pas.
+    // Chaque tentative est notée au journal de sécurité, au nom de celui qui l'a faite (SS §11), même une simple recherche.
     [Fact]
     public async Task OperationOrCategoryOfAnotherUserIsNotFound()
     {
@@ -283,6 +284,18 @@ public class TransactionEndpointTests
         Assert.Equal(HttpStatusCode.NotFound, otherTransfer.StatusCode);
         Assert.Single(await SearchAsync(stranger.Client));
         Assert.Equal("CB SNCF", (await SearchAsync(stranger.Client))[0].GetProperty("label").GetString());
+        Assert.Empty(await SearchAsync(stranger.Client, "?categoryId=" + CategoryOf(api, owner, "Alimentation").Id));
+        Assert.Equal(3, CountAccessDenied(api, stranger.Account));
+        Assert.Equal(1, CountAccessDenied(api, owner.Account));
+    }
+
+    // Compte les accès refusés notés au journal pour ce compte (SS §11).
+    private static int CountAccessDenied(ApiFactoryWithFakes api, User account)
+    {
+        return api.SecurityEventRepository.SavedSecurityEvents.Count(securityEvent =>
+            securityEvent.Type == SecurityEventType.AccessDenied
+            && securityEvent.Result == SecurityEventResult.Failure
+            && securityEvent.UserId == account.Id);
     }
 
     // Un libellé sans lettre ne peut pas avoir de règle : le refus est sur le champ ApplyToFutureTransactions.

@@ -1,5 +1,4 @@
 using Microsoft.EntityFrameworkCore;
-using Npgsql;
 using WalletFlow.Application.Security;
 using WalletFlow.Domain.UsersAndSecurity;
 
@@ -32,7 +31,7 @@ public class SecurityEventRepository : ISecurityEventRepository
         }
         catch (DbUpdateException exception)
         {
-            if (!IsAccountForeignKeyViolation(exception))
+            if (!PostgresErrors.IsForeignKeyViolation(exception, AccountForeignKey))
             {
                 throw;
             }
@@ -49,16 +48,15 @@ public class SecurityEventRepository : ISecurityEventRepository
         databaseContext.SecurityEvents.Add(securityEvent);
     }
 
-    // Renvoie vrai si l'erreur vient de la clé étrangère du compte : le compte de l'événement n'existe plus.
-    private static bool IsAccountForeignKeyViolation(DbUpdateException exception)
+    // Appelle la fonction de la base qui efface les événements de plus d'un an : l'utilisateur de l'application n'a pas le droit
+    // d'effacer le journal lui-même (MPD, section 8 du script). Cette écriture est immédiate, et n'emporte rien d'autre.
+    public async Task<int> DeleteExpiredEventsAsync()
     {
-        if (exception.InnerException is not PostgresException postgresException)
-        {
-            return false;
-        }
+        databaseContext.ThrowIfChangesArePending();
 
-        return postgresException.SqlState == PostgresErrorCodes.ForeignKeyViolation
-            && postgresException.ConstraintName == AccountForeignKey;
+        return await databaseContext.Database
+            .SqlQuery<int>($"SELECT fn_effacer_vieux_evenements() AS \"Value\"")
+            .SingleAsync();
     }
 
     // Recrée l'événement sans identifiant de compte ni adresse IP. Le reste ne change pas : identifiant, type, résultat et date.

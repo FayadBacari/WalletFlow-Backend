@@ -3,24 +3,14 @@ namespace WalletFlow.Domain.AccountsAndCategories;
 // Règles des graphiques (GR Dépenses, DD §11). Les transferts n'y comptent jamais (GR Comptes) : les requêtes les écartent.
 // Chaque catégorie compte pour son total net : un remboursement réduit ses dépenses. Un total négatif est une dépense,
 // un total positif un revenu : l'épargne d'un mois vaut exactement l'argent entré moins l'argent sorti.
+// Le mois en cours est celui du calendrier des utilisateurs (voir UsersCalendar).
 public static class ChartRules
 {
-    // Le fuseau horaire des utilisateurs, en France : le mois en cours commence à minuit, heure de Paris (GR Dépenses).
-    public const string UsersTimeZoneId = "Europe/Paris";
-
     // Une période couvre au plus 10 ans (SS §6) : le graphique mois par mois a donc 120 barres au plus.
     public const int MaximumPeriodMonths = 120;
 
     // La moyenne porte sur les 3 mois complets avant le mois en cours (DD §11).
     public const int AverageMonthCount = 3;
-
-    // Donne le jour d'aujourd'hui à Paris.
-    public static DateOnly FindUsersToday(DateTimeOffset now)
-    {
-        var usersTimeZone = TimeZoneInfo.FindSystemTimeZoneById(UsersTimeZoneId);
-
-        return DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(now, usersTimeZone).DateTime);
-    }
 
     // Compte les mois civils que touche une période, le premier et le dernier compris.
     public static int CountMonths(DateOnly from, DateOnly to)

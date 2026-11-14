@@ -56,7 +56,9 @@ public class BankServices
     // Crée le service qui termine une autorisation.
     public BankConnectionFinishService CreateFinish()
     {
-        return new BankConnectionFinishService(Provider, Repository, AuthorizationStore, TokenGenerator, CreateArrival(), CreateSavingService(), CreateJournal(), Clock);
+        var firstReading = new BankFirstTransactionsReading(Provider, Repository, CreateArrival(), CreateSavingService(), Clock);
+
+        return new BankConnectionFinishService(Provider, Repository, AuthorizationStore, TokenGenerator, firstReading, CreateSavingService(), CreateJournal(), Clock);
     }
 
     // Crée le service qui met à jour les soldes.

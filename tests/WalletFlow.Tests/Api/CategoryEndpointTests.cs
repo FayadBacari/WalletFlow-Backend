@@ -100,6 +100,15 @@ public class CategoryEndpointTests
         return body.GetProperty("errors").GetProperty(field)[0].GetString();
     }
 
+    // Compte les accès refusés notés au journal pour ce compte (SS §11).
+    private static int CountAccessDenied(ApiFactoryWithFakes api, User account)
+    {
+        return api.SecurityEventRepository.SavedSecurityEvents.Count(securityEvent =>
+            securityEvent.Type == SecurityEventType.AccessDenied
+            && securityEvent.Result == SecurityEventResult.Failure
+            && securityEvent.UserId == account.Id);
+    }
+
     // --- Session et jeton anti-CSRF
 
     [Fact]
@@ -389,6 +398,8 @@ public class CategoryEndpointTests
         Assert.Equal("Loisirs", leisureOfA.Name);
         Assert.Null(leisureOfA.MonthlyBudgetInCents);
         Assert.Contains(leisureOfA, api.CategoryRepository.SavedCategories);
+        Assert.Equal(3, CountAccessDenied(api, userB.Account));
+        Assert.Equal(0, CountAccessDenied(api, userA.Account));
     }
 
     // La réponse pour la catégorie d'un autre est celle d'une adresse qui n'existe pas : elle ne confirme rien.

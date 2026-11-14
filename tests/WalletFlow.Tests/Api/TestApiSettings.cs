@@ -15,6 +15,7 @@ public static class TestApiSettings
 {
     public const string EnvironmentName = "Testing";
     public const string WebsiteAddress = "https://walletflow.test";
+    public const string AllowedHosts = "localhost;127.0.0.1;walletflow.test";
     public const string BankApplicationId = "application-enable-banking-des-tests";
 
     // Une clé RSA jetable pour la configuration d'Enable Banking : écrite une fois par lancement des tests, effacée à la fin.
@@ -28,6 +29,8 @@ public static class TestApiSettings
         builder.UseSetting("ConnectionStrings:WalletFlowDatabase", "Host=localhost;Database=base_jamais_contactee");
         builder.UseSetting("TwoFactorSecretEncryptionKey", totpEncryptionKey);
         builder.UseSetting("PublicWebsiteAddress", WebsiteAddress);
+        // Les noms sous lesquels les tests appellent l'API : le serveur de test, le vrai serveur Kestrel, et le site des tests.
+        builder.UseSetting("AllowedHosts", AllowedHosts);
         builder.UseSetting("EnableBanking:ApplicationId", BankApplicationId);
         builder.UseSetting("EnableBanking:PrivateKeyPath", ThrowawayBankKeyPath.Value);
 

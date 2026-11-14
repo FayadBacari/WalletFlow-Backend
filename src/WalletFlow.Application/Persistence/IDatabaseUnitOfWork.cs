@@ -13,7 +13,8 @@ public interface IDatabaseUnitOfWork
 {
     // Enregistre tout ce qui a été changé ou préparé, ou rien du tout.
     // Renvoie faux si une autre requête vient de modifier ou d'effacer les mêmes lignes, de prendre l'adresse e-mail
-    // ou le nom de catégorie que ces changements donnent, ou de supprimer la connexion bancaire à laquelle ils ajoutent un compte,
+    // ou le nom de catégorie que ces changements donnent, de supprimer la connexion bancaire à laquelle ils ajoutent un compte
+    // ou le sac auquel ils ajoutent un mouvement, de supprimer un sac relié à celui qu'ils suppriment,
     // ou si PostgreSQL arrête l'enregistrement pour débloquer un interblocage :
     // tout est alors oublié, et il faut relire les objets avant de recommencer.
     Task<bool> TrySaveChangesAsync();

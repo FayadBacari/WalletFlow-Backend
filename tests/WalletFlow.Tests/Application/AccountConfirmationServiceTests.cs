@@ -55,7 +55,7 @@ public class AccountConfirmationServiceTests
         var result = await service.ConfirmAsync(
             LinkToken, "Mot-De-Passe\u0301-1");
 
-        Assert.Equal(AccountConfirmationResult.AccountConfirmed, result);
+        Assert.IsType<AccountConfirmationResult.AccountConfirmed>(result);
     }
 
     [Fact]
@@ -67,7 +67,7 @@ public class AccountConfirmationServiceTests
         var result = await service.ConfirmAsync(
             LinkToken, RegistrationPassword);
 
-        Assert.Equal(AccountConfirmationResult.AccountConfirmed, result);
+        Assert.IsType<AccountConfirmationResult.AccountConfirmed>(result);
         Assert.True(unconfirmedAccount.IsEmailConfirmed);
         Assert.Equal(clock.GetUtcNow().UtcDateTime, accountRepository.SavedEmailTokens[0].UsedAt);
     }
@@ -82,14 +82,14 @@ public class AccountConfirmationServiceTests
         var firstResult = await service.ConfirmAsync(
             LinkToken, "Autre-Mot-De-Passe-2");
 
-        Assert.Equal(AccountConfirmationResult.WrongPassword, firstResult);
+        Assert.IsType<AccountConfirmationResult.WrongPassword>(firstResult);
         Assert.False(unconfirmedAccount.IsEmailConfirmed);
         Assert.Null(accountRepository.SavedEmailTokens[0].UsedAt);
 
         var secondResult = await service.ConfirmAsync(
             LinkToken, RegistrationPassword);
 
-        Assert.Equal(AccountConfirmationResult.AccountConfirmed, secondResult);
+        Assert.IsType<AccountConfirmationResult.AccountConfirmed>(secondResult);
     }
 
     [Fact]
@@ -101,7 +101,7 @@ public class AccountConfirmationServiceTests
         var result = await service.ConfirmAsync(
             "jeton-inconnu", RegistrationPassword);
 
-        Assert.Equal(AccountConfirmationResult.LinkNoLongerValid, result);
+        Assert.IsType<AccountConfirmationResult.LinkNoLongerValid>(result);
         Assert.False(unconfirmedAccount.IsEmailConfirmed);
     }
 
@@ -116,7 +116,7 @@ public class AccountConfirmationServiceTests
         var result = await service.ConfirmAsync(
             LinkToken, RegistrationPassword);
 
-        Assert.Equal(AccountConfirmationResult.AccountConfirmed, result);
+        Assert.IsType<AccountConfirmationResult.AccountConfirmed>(result);
     }
 
     [Fact]
@@ -129,7 +129,7 @@ public class AccountConfirmationServiceTests
         var result = await service.ConfirmAsync(
             LinkToken, RegistrationPassword);
 
-        Assert.Equal(AccountConfirmationResult.LinkNoLongerValid, result);
+        Assert.IsType<AccountConfirmationResult.LinkNoLongerValid>(result);
         Assert.False(unconfirmedAccount.IsEmailConfirmed);
     }
 
@@ -144,7 +144,7 @@ public class AccountConfirmationServiceTests
         var result = await service.ConfirmAsync(
             LinkToken, RegistrationPassword);
 
-        Assert.Equal(AccountConfirmationResult.LinkNoLongerValid, result);
+        Assert.IsType<AccountConfirmationResult.LinkNoLongerValid>(result);
         Assert.False(unconfirmedAccount.IsEmailConfirmed);
     }
 
@@ -158,7 +158,7 @@ public class AccountConfirmationServiceTests
         var result = await service.ConfirmAsync(
             LinkToken, RegistrationPassword);
 
-        Assert.Equal(AccountConfirmationResult.LinkNoLongerValid, result);
+        Assert.IsType<AccountConfirmationResult.LinkNoLongerValid>(result);
         Assert.Null(accountRepository.SavedEmailTokens[0].UsedAt);
     }
 
@@ -173,7 +173,7 @@ public class AccountConfirmationServiceTests
         var result = await service.ConfirmAsync(
             LinkToken, RegistrationPassword);
 
-        Assert.Equal(AccountConfirmationResult.LinkNoLongerValid, result);
+        Assert.IsType<AccountConfirmationResult.LinkNoLongerValid>(result);
     }
 
     // Une nouvelle inscription a pu remplacer le lien pendant la vérification du mot de passe.
@@ -187,6 +187,6 @@ public class AccountConfirmationServiceTests
         var result = await service.ConfirmAsync(
             LinkToken, RegistrationPassword);
 
-        Assert.Equal(AccountConfirmationResult.LinkNoLongerValid, result);
+        Assert.IsType<AccountConfirmationResult.LinkNoLongerValid>(result);
     }
 }

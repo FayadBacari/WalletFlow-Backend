@@ -39,7 +39,7 @@ public class AccountUnlockService
 
         return await savingService.SaveWithRetriesAsync(
             () => PrepareUnlockAsync(tokenHash, ipAddress),
-            AccountUnlockResult.LinkNoLongerValid);
+            new AccountUnlockResult.LinkNoLongerValid());
     }
 
     // Un passage : lit le lien et son compte, vérifie le lien, puis prépare le déblocage, le lien utilisé et l'événement du journal.
@@ -51,19 +51,19 @@ public class AccountUnlockService
 
         if (token == null || !token.CanBeUsedAt(now))
         {
-            return PreparedChanges<AccountUnlockResult>.NothingToSave(AccountUnlockResult.LinkNoLongerValid);
+            return PreparedChanges<AccountUnlockResult>.NothingToSave(new AccountUnlockResult.LinkNoLongerValid());
         }
 
         var account = await accountRepository.FindByIdAsync(token.UserId);
         if (account == null)
         {
-            return PreparedChanges<AccountUnlockResult>.NothingToSave(AccountUnlockResult.LinkNoLongerValid);
+            return PreparedChanges<AccountUnlockResult>.NothingToSave(new AccountUnlockResult.LinkNoLongerValid());
         }
 
         account.Unlock();
         token.MarkAsUsed(now);
         securityJournal.PrepareEvent(SecurityEventType.Unlock, SecurityEventResult.Success, account.Id, ipAddress);
 
-        return PreparedChanges<AccountUnlockResult>.SaveThenReturn(AccountUnlockResult.AccountUnlocked);
+        return PreparedChanges<AccountUnlockResult>.SaveThenReturn(new AccountUnlockResult.AccountUnlocked());
     }
 }

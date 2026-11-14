@@ -577,7 +577,7 @@ public class TwoFactorLoginServiceTests
 
         var recoveryResult = await services.CreatePasswordResetService().ResetAsync(recoveryToken.Token, "Nouveau-Mot-De-Passe-3", IpAddress);
 
-        Assert.Equal(PasswordResetResult.PasswordChanged, recoveryResult);
+        Assert.IsType<PasswordResetResult.PasswordChanged>(recoveryResult);
         Assert.True(activatedAccount.UserAccount.IsTwoFactorEnabled);
         Assert.Equal(encryptedSecret, activatedAccount.UserAccount.EncryptedTotpSecret);
         Assert.Equal(10, services.TwoFactorRepository.SavedBackupCodes.Count);

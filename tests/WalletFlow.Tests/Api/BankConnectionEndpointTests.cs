@@ -395,6 +395,8 @@ public class BankConnectionEndpointTests
         Assert.Equal(requestCount, api.BankProvider.AuthorizationRequests.Count);
         Assert.Empty(api.BankProvider.RevokedSessions);
         Assert.Single(await ListConnectionsAsync(userA.Client));
+        Assert.Equal(2, api.SecurityEventRepository.SavedSecurityEvents.Count(securityEvent =>
+            securityEvent.Type == SecurityEventType.AccessDenied && securityEvent.UserId == userB.Account.Id));
     }
 
     // --- Démarrage sans prestataire configuré

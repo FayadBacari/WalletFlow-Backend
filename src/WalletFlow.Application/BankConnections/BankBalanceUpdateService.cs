@@ -66,7 +66,7 @@ public class BankBalanceUpdateService
         var readSessionId = connection.ExternalConnectionId;
         var reading = connection.HasAuthorizationEnded(now)
             ? new BankReading(BankReadingOutcome.SessionEnded, new Dictionary<Guid, int>(), new Dictionary<Guid, List<ReceivedTransaction>>())
-            : await ReadBankAsync(connection, presence, DateOnly.FromDateTime(now));
+            : await ReadBankAsync(connection, presence, UsersCalendar.FindToday(clock.GetUtcNow()));
 
         if (reading.Outcome == BankReadingOutcome.TryLater)
         {

@@ -336,13 +336,29 @@ CREATE TRIGGER tg_parametrer_controle
     BEFORE INSERT OR UPDATE ON parametrer
     FOR EACH ROW EXECUTE FUNCTION fn_parametrer_controle();
 
+-- SS §11 : le journal de sécurité est conservé un an. L'application ne peut pas effacer le journal elle-même
+-- (section 8) : cette fonction, qu'elle appelle chaque jour, efface seulement les événements de plus d'un an,
+-- et renvoie leur nombre. SECURITY DEFINER : la fonction a les droits du propriétaire du script.
+CREATE FUNCTION fn_effacer_vieux_evenements() RETURNS integer LANGUAGE plpgsql
+    SECURITY DEFINER SET search_path = public AS $$
+DECLARE
+    nb_effaces integer;
+BEGIN
+    DELETE FROM evenement_securite
+    WHERE date_evenement < now() - interval '1 year';
+
+    GET DIAGNOSTICS nb_effaces = ROW_COUNT;
+    RETURN nb_effaces;
+END;
+$$;
+
 -- 8. Utilisateur de base de données de l'application (SS §7)
 -- Il lit et écrit les données, mais ne peut ni supprimer de table ni modifier
 -- les types d'alerte. Son mot de passe se définit à part, jamais dans ce script.
 -- Il ne peut ni choisir ni changer le rôle d'un utilisateur : le rôle administrateur
 -- ne s'attribue que depuis le serveur, avec un compte administrateur de PostgreSQL (SS §8 et §14).
 -- Il ne peut qu'ajouter des événements au journal de sécurité, jamais les modifier
--- ni les effacer (SS §11).
+-- ni les effacer (SS §11). Seule la fonction fn_effacer_vieux_evenements efface ceux de plus d'un an.
 
 CREATE ROLE walletflow_app LOGIN;
 GRANT USAGE ON SCHEMA public TO walletflow_app;
@@ -360,5 +376,7 @@ GRANT UPDATE (
     email_confirme, double_auth_activee, secret_totp_chiffre, canal_notification,
     nb_tentatives_echouees, nb_blocages, date_fin_blocage, date_demande_suppression)
     ON utilisateur TO walletflow_app;
+REVOKE EXECUTE ON FUNCTION fn_effacer_vieux_evenements() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION fn_effacer_vieux_evenements() TO walletflow_app;
 
 COMMIT;

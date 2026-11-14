@@ -9,6 +9,7 @@ using WalletFlow.Api.Filters;
 using WalletFlow.Api.Middlewares;
 using WalletFlow.Application.AccountRecovery;
 using WalletFlow.Application.AccountSettings;
+using WalletFlow.Application.Bags;
 using WalletFlow.Application.BankConnections;
 using WalletFlow.Application.Categories;
 using WalletFlow.Application.Charts;
@@ -75,6 +76,17 @@ if (string.IsNullOrWhiteSpace(emailsFolder))
 builder.Services.AddLocalFolderEmails(
     Path.GetFullPath(Path.Combine(builder.Environment.ContentRootPath, emailsFolder)));
 
+// En dehors du développement, l'API ne répond qu'aux noms du site, lus dans l'en-tête Host : « * » répondrait à n'importe quel nom
+// qui pointe vers le serveur. Le réglage « AllowedHosts » donne ces noms, séparés par des points-virgules. Sans lui, l'API refuse
+// de démarrer.
+var allowedHosts = builder.Configuration["AllowedHosts"];
+if (!builder.Environment.IsDevelopment()
+    && (string.IsNullOrWhiteSpace(allowedHosts) || allowedHosts.Split(';').Any(host => host.Trim() == "*")))
+{
+    throw new InvalidOperationException(
+        "Le réglage « AllowedHosts » doit donner les noms du site, séparés par des points-virgules, jamais « * ».");
+}
+
 // Adresse publique du site, qui sert à construire les liens envoyés par e-mail (SS §9).
 builder.Services.AddSingleton(
     new PublicWebsiteSettings(builder.Configuration["PublicWebsiteAddress"]));
@@ -108,6 +120,8 @@ builder.Services.AddBankConnectionTools();
 // Outils communs de la couche Application : enregistrement avec réessai, et journal de sécurité.
 builder.Services.AddScoped<DatabaseChangesSavingService>();
 builder.Services.AddScoped<SecurityJournalService>();
+builder.Services.AddScoped<ForeignAccessJournalService>();
+builder.Services.AddScoped<SecurityJournalCleanupService>();
 
 // Cas d'utilisation de la couche Application.
 builder.Services.AddScoped<AccountRegistrationService>();
@@ -138,6 +152,7 @@ builder.Services.AddScoped<CategoryBudgetService>();
 builder.Services.AddScoped<CategoryDeletionService>();
 builder.Services.AddScoped<BankListService>();
 builder.Services.AddScoped<BankAuthorizationStartService>();
+builder.Services.AddScoped<BankFirstTransactionsReading>();
 builder.Services.AddScoped<BankConnectionFinishService>();
 builder.Services.AddScoped<BankConnectionListService>();
 builder.Services.AddScoped<BankBalanceUpdateService>();
@@ -151,11 +166,20 @@ builder.Services.AddScoped<TransactionTransferService>();
 builder.Services.AddScoped<CategoryExpenseChartService>();
 builder.Services.AddScoped<MonthlyTotalsChartService>();
 builder.Services.AddScoped<MonthComparisonService>();
+builder.Services.AddScoped<BagListService>();
+builder.Services.AddScoped<BagCreationService>();
+builder.Services.AddScoped<BagRenameService>();
+builder.Services.AddScoped<BagGoalService>();
+builder.Services.AddScoped<BagDeletionService>();
+builder.Services.AddScoped<BagMovementService>();
+builder.Services.AddScoped<BagHistoryService>();
 
-// Tâches de fond : effacent chaque jour les comptes non confirmés dont le lien a expiré (GR Auth) et les sessions expirées,
+// Tâches de fond : effacent chaque jour les comptes non confirmés dont le lien a expiré (GR Auth), les sessions expirées
+// et les événements du journal de sécurité de plus d'un an (SS §11),
 // préparent les e-mails de récupération et de déblocage, et mettent à jour les soldes jusqu'à 4 fois par jour (GR Comptes).
 builder.Services.AddHostedService<UnconfirmedAccountsCleanupBackgroundService>();
 builder.Services.AddHostedService<ExpiredUserSessionsCleanupBackgroundService>();
+builder.Services.AddHostedService<SecurityJournalCleanupBackgroundService>();
 builder.Services.AddHostedService<BackgroundEmailRequestsBackgroundService>();
 builder.Services.AddHostedService<BankBalancesBackgroundService>();
 
@@ -216,9 +240,9 @@ builder.Services.AddHsts(options =>
 
 var app = builder.Build();
 
-// Les graphiques comptent le mois en cours à l'heure de Paris (voir ChartRules) : sans ce fuseau sur la machine, par exemple
-// dans une image sans tzdata, l'API refuse de démarrer, au lieu de répondre 500 à chaque comparaison.
-TimeZoneInfo.FindSystemTimeZoneById(ChartRules.UsersTimeZoneId);
+// Les jours se comptent à l'heure de Paris (voir UsersCalendar) : sans ce fuseau sur la machine, par exemple dans une image
+// sans tzdata, l'API refuse de démarrer, au lieu de répondre 500 aux graphiques, aux sacs et aux lectures de la banque.
+TimeZoneInfo.FindSystemTimeZoneById(UsersCalendar.TimeZoneId);
 
 // En développement, sans application Enable Banking configurée, le journal technique le dit dès le démarrage.
 if (!isBankProviderConfigured)

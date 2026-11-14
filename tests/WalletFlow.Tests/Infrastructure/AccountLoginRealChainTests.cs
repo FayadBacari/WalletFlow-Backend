@@ -41,7 +41,7 @@ public class AccountLoginRealChainTests
         var result = await confirmationService.ConfirmAsync(
             ReadConfirmationToken(emailSender.SentEmails.Last().Body),
             password);
-        Assert.Equal(AccountConfirmationResult.AccountConfirmed, result);
+        Assert.IsType<AccountConfirmationResult.AccountConfirmed>(result);
         databaseContext.ChangeTracker.Clear();
 
         return newUserId;
