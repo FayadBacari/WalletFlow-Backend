@@ -26,6 +26,11 @@ public class ResourceOwnershipRepository : IResourceOwnershipRepository
                     .Where(category => category.Id == resourceId)
                     .Select(category => (Guid?)category.UserId)
                     .SingleOrDefaultAsync();
+            case OwnedResource.Suggestion:
+                return await databaseContext.SavingsSuggestions.AsNoTracking()
+                    .Where(suggestion => suggestion.Id == resourceId)
+                    .Select(suggestion => (Guid?)suggestion.UserId)
+                    .SingleOrDefaultAsync();
             case OwnedResource.Bag:
                 return await databaseContext.Bags.AsNoTracking()
                     .Where(bag => bag.Id == resourceId)

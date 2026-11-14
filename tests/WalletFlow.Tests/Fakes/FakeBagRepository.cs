@@ -16,6 +16,7 @@ public class FakeBagRepository : IBagRepository, ITransactionalFakeRepository
     private readonly List<Bag> preparedDeletions = new List<Bag>();
     private readonly List<User> checkedUsers = new List<User>();
     private readonly ReadCopies<Bag> readBags = new ReadCopies<Bag>();
+    private readonly ReadCopies<User> readUsers = new ReadCopies<User>();
     private Action? concurrentChanges = null;
 
     // La version de la ligne de l'utilisateur, comme xmin dans la vraie base : elle change quand une autre requête simulée
@@ -189,7 +190,15 @@ public class FakeBagRepository : IBagRepository, ITransactionalFakeRepository
         lock (pendingChangesLock)
         {
             userRowVersionAtRead = userRowVersion;
-            return Task.FromResult(SavedUsers.SingleOrDefault(user => user.Id == userId));
+            var user = SavedUsers.SingleOrDefault(saved => saved.Id == userId);
+
+            // Une transaction annulée remet aussi le compte comme il était, par exemple le dernier mois des suggestions.
+            if (user != null)
+            {
+                readUsers.Keep(user);
+            }
+
+            return Task.FromResult(user);
         }
     }
 
@@ -244,20 +253,24 @@ public class FakeBagRepository : IBagRepository, ITransactionalFakeRepository
                 copy.Name != current.Name
                 || copy.TargetAmountInCents != current.TargetAmountInCents
                 || copy.TargetDate != current.TargetDate);
+            // Un compte changé depuis sa lecture, par exemple le dernier mois des suggestions, est réécrit avec sa version,
+            // comme un compte contrôlé.
+            var changedUser = readUsers.FindChangedSinceRead((copy, current) => copy.LastSuggestionMonth != current.LastSuggestionMonth);
+            var isUserWritten = checkedUsers.Count > 0 || changedUser != null;
             var isWriting = preparedBags.Count > 0
                 || preparedMovements.Count > 0
                 || preparedDeletions.Count > 0
-                || checkedUsers.Count > 0
+                || isUserWritten
                 || changedBag != null;
 
             // Le contrôle de la ligne de l'utilisateur échoue si une autre requête l'a écrite depuis sa lecture.
-            if (checkedUsers.Count > 0 && userRowVersionAtRead != userRowVersion)
+            if (isUserWritten && userRowVersionAtRead != userRowVersion)
             {
                 return true;
             }
 
             var savedMovement = MovementSavedBeforeSave;
-            if (savedMovement != null && checkedUsers.Count > 0)
+            if (savedMovement != null && isUserWritten)
             {
                 MovementSavedBeforeSave = null;
                 concurrentChanges = () => SavedMovements.Add(savedMovement);
@@ -265,7 +278,7 @@ public class FakeBagRepository : IBagRepository, ITransactionalFakeRepository
             }
 
             var createdBag = BagCreatedBeforeSave;
-            if (createdBag != null && checkedUsers.Count > 0)
+            if (createdBag != null && isUserWritten)
             {
                 BagCreatedBeforeSave = null;
                 concurrentChanges = () => SavedBags.Add(createdBag);
@@ -295,6 +308,7 @@ public class FakeBagRepository : IBagRepository, ITransactionalFakeRepository
         lock (pendingChangesLock)
         {
             readBags.RestoreAll();
+            readUsers.RestoreAll();
             ClearTracking();
         }
     }
@@ -395,6 +409,7 @@ public class FakeBagRepository : IBagRepository, ITransactionalFakeRepository
         preparedDeletions.Clear();
         checkedUsers.Clear();
         readBags.Clear();
+        readUsers.Clear();
         userRowVersionAtRead = null;
     }
 }

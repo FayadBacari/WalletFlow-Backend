@@ -393,3 +393,26 @@ DELETE {{WalletFlow_Api_SecureAddress}}/api/bags/colle-ici-l-identifiant
 X-CSRF-TOKEN: colle-ici-le-jeton-anti-csrf
 
 ###
+
+# Suggestions d'épargne du dernier mois complet, et économies réalisées. La première lecture après la fin d'un mois le calcule.
+GET {{WalletFlow_Api_SecureAddress}}/api/suggestions
+
+###
+
+# Accepter une suggestion : son montant, ou un montant plus petit, va de l'argent disponible vers le sac choisi.
+POST {{WalletFlow_Api_SecureAddress}}/api/suggestions/colle-ici-l-identifiant/accept
+Content-Type: application/json
+X-CSRF-TOKEN: colle-ici-le-jeton-anti-csrf
+
+{
+  "bagId": "colle-ici-l-identifiant-du-sac",
+  "amountInCents": 5000
+}
+
+###
+
+# Ignorer une suggestion : sa règle ne propose plus rien pendant 30 jours.
+POST {{WalletFlow_Api_SecureAddress}}/api/suggestions/colle-ici-l-identifiant/ignore
+X-CSRF-TOKEN: colle-ici-le-jeton-anti-csrf
+
+###

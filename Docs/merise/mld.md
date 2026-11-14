@@ -17,6 +17,7 @@
 | nb_blocages              |        |
 | date_fin_blocage         |        |
 | date_demande_suppression |        |
+| dernier_mois_suggestions |        |
 
 | CODE_SECOURS                  | Clé              |
 |-------------------------------|------------------|
@@ -112,6 +113,7 @@
 |------------------------|-----------------------------|
 | **id_suggestion**      | PK                          |
 | regle_suggestion       |                             |
+| mois_suggestion        |                             |
 | economie_mensuelle     |                             |
 | statut_suggestion      |                             |
 | date_statut_suggestion |                             |

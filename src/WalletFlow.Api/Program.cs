@@ -16,6 +16,7 @@ using WalletFlow.Application.Charts;
 using WalletFlow.Application.Configuration;
 using WalletFlow.Application.Persistence;
 using WalletFlow.Application.Security;
+using WalletFlow.Application.Suggestions;
 using WalletFlow.Application.Transactions;
 using WalletFlow.Application.TwoFactorAuthentication;
 using WalletFlow.Application.UserAccounts;
@@ -171,8 +172,12 @@ builder.Services.AddScoped<BagCreationService>();
 builder.Services.AddScoped<BagRenameService>();
 builder.Services.AddScoped<BagGoalService>();
 builder.Services.AddScoped<BagDeletionService>();
+builder.Services.AddScoped<BagMovementChecks>();
 builder.Services.AddScoped<BagMovementService>();
 builder.Services.AddScoped<BagHistoryService>();
+builder.Services.AddScoped<SuggestionListService>();
+builder.Services.AddScoped<SuggestionAcceptanceService>();
+builder.Services.AddScoped<SuggestionDismissalService>();
 
 // Tâches de fond : effacent chaque jour les comptes non confirmés dont le lien a expiré (GR Auth), les sessions expirées
 // et les événements du journal de sécurité de plus d'un an (SS §11),

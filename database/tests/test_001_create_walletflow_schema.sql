@@ -73,8 +73,8 @@ BEGIN
     VALUES ('Vacances', identifiant_de_l_utilisateur_des_contraintes)
     RETURNING id_sac INTO identifiant_du_sac_commun_aux_tests_contraintes;
 
-    INSERT INTO suggestion (regle_suggestion, economie_mensuelle, statut_suggestion, id_utilisateur)
-    VALUES ('argent_disponible', 3000, 'acceptee', identifiant_de_l_utilisateur_des_contraintes)
+    INSERT INTO suggestion (regle_suggestion, mois_suggestion, economie_mensuelle, statut_suggestion, id_utilisateur)
+    VALUES ('argent_disponible', DATE '2026-10-01', 3000, 'acceptee', identifiant_de_l_utilisateur_des_contraintes)
     RETURNING id_suggestion INTO identifiant_de_la_suggestion_commune_aux_tests;
 
     INSERT INTO mouvement_sac (montant_mouvement, id_sac_arrivee, id_suggestion)
@@ -195,8 +195,8 @@ BEGIN
              FROM donnees_communes_aux_tests_de_contraintes WHERE nom = 'utilisateur'$sql$,
         '23514', 'un sac n''a une date d''objectif que s''il a un montant à atteindre');
     PERFORM pg_temp.verifier_que_la_base_refuse_cette_instruction(
-        $sql$INSERT INTO suggestion (regle_suggestion, economie_mensuelle, id_utilisateur, id_categorie)
-             SELECT 'argent_disponible', 1000,
+        $sql$INSERT INTO suggestion (regle_suggestion, mois_suggestion, economie_mensuelle, id_utilisateur, id_categorie)
+             SELECT 'argent_disponible', DATE '2026-09-01', 1000,
                     (SELECT identifiant FROM donnees_communes_aux_tests_de_contraintes WHERE nom = 'utilisateur'),
                     (SELECT identifiant FROM donnees_communes_aux_tests_de_contraintes WHERE nom = 'categorie_autres')$sql$,
         '23514', 'seule la règle « dépassement de catégorie » vise une catégorie');
@@ -386,8 +386,8 @@ BEGIN
             identifiant_du_compte_des_categories_testees, identifiant_de_la_categorie_loisirs_supprimee);
     INSERT INTO regle_classement (libelle_regle, id_categorie)
     VALUES ('CINEMA', identifiant_de_la_categorie_loisirs_supprimee);
-    INSERT INTO suggestion (regle_suggestion, economie_mensuelle, id_utilisateur, id_categorie)
-    VALUES ('depassement_categorie', 1500, identifiant_de_l_utilisateur_des_categories,
+    INSERT INTO suggestion (regle_suggestion, mois_suggestion, economie_mensuelle, id_utilisateur, id_categorie)
+    VALUES ('depassement_categorie', DATE '2026-10-01', 1500, identifiant_de_l_utilisateur_des_categories,
             identifiant_de_la_categorie_loisirs_supprimee)
     RETURNING id_suggestion INTO identifiant_de_la_suggestion_sur_les_loisirs;
 
@@ -437,8 +437,8 @@ BEGIN
     RETURNING id_utilisateur INTO identifiant_de_l_utilisateur_des_suggestions;
     INSERT INTO sac (nom_sac, id_utilisateur) VALUES ('Épargne', identifiant_de_l_utilisateur_des_suggestions)
     RETURNING id_sac INTO identifiant_du_sac_qui_recoit_l_economie;
-    INSERT INTO suggestion (regle_suggestion, economie_mensuelle, statut_suggestion, id_utilisateur)
-    VALUES ('epargne_insuffisante', 2000, 'acceptee', identifiant_de_l_utilisateur_des_suggestions)
+    INSERT INTO suggestion (regle_suggestion, mois_suggestion, economie_mensuelle, statut_suggestion, id_utilisateur)
+    VALUES ('epargne_insuffisante', DATE '2026-10-01', 2000, 'acceptee', identifiant_de_l_utilisateur_des_suggestions)
     RETURNING id_suggestion INTO identifiant_de_la_suggestion_que_le_test_supprime;
     INSERT INTO mouvement_sac (montant_mouvement, id_sac_arrivee, id_suggestion)
     VALUES (2000, identifiant_du_sac_qui_recoit_l_economie, identifiant_de_la_suggestion_que_le_test_supprime)
@@ -524,8 +524,8 @@ BEGIN
         (500, NULL, identifiant_du_premier_sac_de_l_utilisateur),
         (200, identifiant_du_premier_sac_de_l_utilisateur, identifiant_du_second_sac_de_l_utilisateur);
 
-    INSERT INTO suggestion (regle_suggestion, economie_mensuelle, id_utilisateur)
-    VALUES ('argent_disponible', 3000, identifiant_de_l_utilisateur_a_effacer);
+    INSERT INTO suggestion (regle_suggestion, mois_suggestion, economie_mensuelle, id_utilisateur)
+    VALUES ('argent_disponible', DATE '2026-10-01', 3000, identifiant_de_l_utilisateur_a_effacer);
     INSERT INTO parametrer (id_utilisateur, code_type_alerte, alerte_activee)
     VALUES (identifiant_de_l_utilisateur_a_effacer, 'budget_atteint', FALSE);
     INSERT INTO demande_support (message_demande, id_utilisateur)
@@ -626,6 +626,12 @@ BEGIN
     -- L'application garde les droits dont elle a besoin sur les autres colonnes du compte.
     UPDATE utilisateur SET nb_tentatives_echouees = 1 WHERE email_utilisateur = 'test-contraintes@exemple.test';
     RAISE NOTICE 'OK : l''application peut encore modifier les compteurs d''un compte';
+    UPDATE utilisateur SET dernier_mois_suggestions = DATE '2026-10-01' WHERE email_utilisateur = 'test-contraintes@exemple.test';
+    RAISE NOTICE 'OK : l''application peut noter le dernier mois dont les suggestions sont calculées';
+    PERFORM pg_temp.verifier_que_la_base_refuse_cette_instruction(
+        $sql$UPDATE utilisateur SET dernier_mois_suggestions = DATE '2026-10-15'
+             WHERE email_utilisateur = 'test-contraintes@exemple.test'$sql$,
+        '23514', 'le dernier mois des suggestions est le premier jour d''un mois');
 END;
 $$;
 
@@ -649,6 +655,66 @@ BEGIN
     ASSERT (SELECT count(*) FROM evenement_securite WHERE date_evenement >= now() - interval '1 year') >= 2,
         'ÉCHEC : un événement de moins d''un an a disparu';
     RAISE NOTICE 'OK : seuls les événements de plus d''un an sont effacés du journal';
+END;
+$$;
+
+
+-- 12. GR Sacs et DD §8 : une suggestion porte sur le premier jour d'un mois, pour un montant d'au moins 1 centime,
+--     et une même règle ne crée qu'une suggestion par mois, et par catégorie pour le dépassement.
+--     Supprimer deux catégories dont les suggestions acceptées portent sur le même mois reste possible.
+DO $$
+DECLARE
+    utilisateur_id uuid;
+    alimentation_id uuid;
+    loisirs_id uuid;
+BEGIN
+    INSERT INTO utilisateur (email_utilisateur, mot_de_passe_hash)
+    VALUES ('test-mois-suggestions@exemple.test', 'empreinte-de-test')
+    RETURNING id_utilisateur INTO utilisateur_id;
+    INSERT INTO categorie (nom_categorie, id_utilisateur) VALUES ('Alimentation', utilisateur_id)
+    RETURNING id_categorie INTO alimentation_id;
+    INSERT INTO categorie (nom_categorie, id_utilisateur) VALUES ('Loisirs', utilisateur_id)
+    RETURNING id_categorie INTO loisirs_id;
+    INSERT INTO donnees_communes_aux_tests_de_contraintes VALUES
+        ('utilisateur_des_mois', utilisateur_id), ('alimentation_des_mois', alimentation_id);
+
+    -- Une suggestion de chaque sorte pour octobre : toutes sont permises ensemble.
+    INSERT INTO suggestion (regle_suggestion, mois_suggestion, economie_mensuelle, statut_suggestion, id_utilisateur, id_categorie)
+    VALUES ('depassement_categorie', DATE '2026-10-01', 1200, 'acceptee', utilisateur_id, alimentation_id),
+           ('depassement_categorie', DATE '2026-10-01', 800, 'acceptee', utilisateur_id, loisirs_id),
+           ('argent_disponible', DATE '2026-10-01', 5000, 'proposee', utilisateur_id, NULL),
+           ('epargne_insuffisante', DATE '2026-10-01', 3000, 'proposee', utilisateur_id, NULL),
+           ('argent_disponible', DATE '2026-11-01', 4000, 'proposee', utilisateur_id, NULL);
+    RAISE NOTICE 'OK : chaque règle, chaque catégorie et chaque mois a sa propre suggestion';
+
+    PERFORM pg_temp.verifier_que_la_base_refuse_cette_instruction(
+        $sql$INSERT INTO suggestion (regle_suggestion, mois_suggestion, economie_mensuelle, id_utilisateur)
+             SELECT 'argent_disponible', DATE '2026-10-15', 1000, identifiant
+             FROM donnees_communes_aux_tests_de_contraintes WHERE nom = 'utilisateur_des_mois'$sql$,
+        '23514', 'une suggestion porte sur le premier jour d''un mois');
+    PERFORM pg_temp.verifier_que_la_base_refuse_cette_instruction(
+        $sql$INSERT INTO suggestion (regle_suggestion, mois_suggestion, economie_mensuelle, id_utilisateur)
+             SELECT 'argent_disponible', DATE '2026-12-01', 0, identifiant
+             FROM donnees_communes_aux_tests_de_contraintes WHERE nom = 'utilisateur_des_mois'$sql$,
+        '23514', 'une suggestion fait économiser au moins 1 centime');
+    PERFORM pg_temp.verifier_que_la_base_refuse_cette_instruction(
+        $sql$INSERT INTO suggestion (regle_suggestion, mois_suggestion, economie_mensuelle, id_utilisateur)
+             SELECT 'argent_disponible', DATE '2026-10-01', 1000, identifiant
+             FROM donnees_communes_aux_tests_de_contraintes WHERE nom = 'utilisateur_des_mois'$sql$,
+        '23505', 'une règle sans catégorie ne crée qu''une suggestion par mois');
+    PERFORM pg_temp.verifier_que_la_base_refuse_cette_instruction(
+        $sql$INSERT INTO suggestion (regle_suggestion, mois_suggestion, economie_mensuelle, id_utilisateur, id_categorie)
+             SELECT 'depassement_categorie', DATE '2026-10-01', 1000,
+                    (SELECT identifiant FROM donnees_communes_aux_tests_de_contraintes WHERE nom = 'utilisateur_des_mois'),
+                    (SELECT identifiant FROM donnees_communes_aux_tests_de_contraintes WHERE nom = 'alimentation_des_mois')$sql$,
+        '23505', 'une catégorie ne crée qu''une suggestion de dépassement par mois');
+
+    -- Les deux suggestions acceptées d'octobre perdent leur catégorie, sans se gêner l'une l'autre.
+    DELETE FROM categorie WHERE id_categorie IN (alimentation_id, loisirs_id);
+    ASSERT (SELECT count(*) FROM suggestion
+            WHERE id_utilisateur = utilisateur_id AND regle_suggestion = 'depassement_categorie' AND id_categorie IS NULL) = 2,
+        'ÉCHEC : les suggestions acceptées des catégories supprimées devaient rester, sans catégorie';
+    RAISE NOTICE 'OK : supprimer deux catégories garde leurs suggestions acceptées du même mois';
 END;
 $$;
 

@@ -18,7 +18,8 @@ public class CostlyReadRateLimitTests
     // Les routes qui additionnent beaucoup de lignes à chaque appel.
     private static readonly List<string> CostlyRoutes = new List<string>
     {
-        "api/transactions", "api/charts/categories", "api/charts/months", "api/charts/comparison", "api/bags", "api/bags/{bagId:guid}/movements"
+        "api/transactions", "api/charts/categories", "api/charts/months", "api/charts/comparison", "api/bags", "api/bags/{bagId:guid}/movements",
+        "api/suggestions"
     };
 
     // Ajoute un compte avec ses catégories, le connecte dans un nouveau navigateur, et renvoie ce navigateur.

@@ -38,6 +38,10 @@ public class UserTableConfiguration : IEntityTypeConfiguration<User>
         builder.Property(nameof(User.EncryptedTotpSecret)).HasColumnName("secret_totp_chiffre");
         builder.Property(nameof(User.FailedLoginAttemptCount)).HasColumnName("nb_tentatives_echouees");
         builder.Property(nameof(User.LockoutEndsAt)).HasColumnName("date_fin_blocage");
+        // L'application peut modifier le repère des suggestions, mais pas l'écrire à l'inscription (droits de walletflow_app,
+        // section 8 du script) : EF Core ne l'envoie donc pas à la création du compte, où il reste vide.
+        builder.Property(nameof(User.LastSuggestionMonth)).HasColumnName("dernier_mois_suggestions")
+            .Metadata.SetBeforeSaveBehavior(PropertySaveBehavior.Ignore);
 
         // Toute écriture du compte vérifie que personne ne l'a changé depuis sa lecture, quelle que soit la colonne. Par exemple :
         // - une nouvelle inscription ne remplace pas le mot de passe d'un compte confirmé au même instant ;

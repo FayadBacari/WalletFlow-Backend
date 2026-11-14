@@ -21,6 +21,7 @@ public class SavingsSuggestionTableConfiguration : IEntityTypeConfiguration<Savi
 
         builder.Property(nameof(SavingsSuggestion.Rule)).HasColumnName("regle_suggestion")
             .HasConversion(SuggestionRuleDatabaseCodes.Table.Converter);
+        builder.Property(nameof(SavingsSuggestion.Month)).HasColumnName("mois_suggestion");
         builder.Property(nameof(SavingsSuggestion.MonthlySavingsInCents)).HasColumnName("economie_mensuelle");
         builder.Property(nameof(SavingsSuggestion.Status)).HasColumnName("statut_suggestion")
             .HasConversion(SuggestionStatusDatabaseCodes.Table.Converter);

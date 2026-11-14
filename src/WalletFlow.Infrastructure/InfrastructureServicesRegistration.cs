@@ -4,6 +4,7 @@ using Microsoft.Extensions.Logging;
 using WalletFlow.Application.AccountRecovery;
 using WalletFlow.Application.AccountSettings;
 using WalletFlow.Application.Bags;
+using WalletFlow.Application.Suggestions;
 using WalletFlow.Application.BankConnections;
 using WalletFlow.Application.Categories;
 using WalletFlow.Application.Emails;
@@ -43,6 +44,7 @@ public static class InfrastructureServicesRegistration
         services.AddScoped<IBankConnectionRepository, BankConnectionRepository>();
         services.AddScoped<ITransactionRepository, TransactionRepository>();
         services.AddScoped<IBagRepository, BagRepository>();
+        services.AddScoped<ISuggestionRepository, SuggestionRepository>();
         services.AddScoped<IResourceOwnershipRepository, ResourceOwnershipRepository>();
 
         return services;

@@ -67,7 +67,7 @@ public class BagServices
     // Crée le service qui déplace de l'argent.
     public BagMovementService CreateMovement()
     {
-        return new BagMovementService(Repository, new BankBalanceTotalService(Bank), new DatabaseChangesSavingService(UnitOfWork), Clock);
+        return new BagMovementService(Repository, new BagMovementChecks(Repository, new BankBalanceTotalService(Bank)), new DatabaseChangesSavingService(UnitOfWork), Clock);
     }
 
     // Crée le service qui lit l'historique d'un sac.

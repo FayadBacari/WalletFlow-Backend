@@ -20,4 +20,7 @@ public static class RequestSizeConfiguration
     // Le plus long nom de sac permis, écrit comme celui d'une catégorie (600 octets au plus), avec un objectif et sa date,
     // tient dans cette taille. Deux identifiants de sac et un montant aussi.
     public const long MaximumBagRequestBytes = 1024;
+
+    // Un identifiant de sac et un montant tiennent largement dans cette taille.
+    public const long MaximumSuggestionRequestBytes = 1024;
 }

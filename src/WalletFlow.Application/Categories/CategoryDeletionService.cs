@@ -1,7 +1,8 @@
 namespace WalletFlow.Application.Categories;
 
 // Cas d'utilisation : l'utilisateur connecté supprime une de ses catégories, sauf « Autres » (GR Dépenses).
-// Ses transactions passent dans « Autres », ses règles disparaissent, et ses suggestions restent sans catégorie (MPD §1.3).
+// Ses transactions passent dans « Autres », ses règles disparaissent, ses suggestions sans réponse sont retirées,
+// et ses suggestions acceptées restent sans catégorie, pour que les économies réalisées restent comptées (GR Sacs, MPD §1.3).
 public class CategoryDeletionService
 {
     private readonly ICategoryRepository categoryRepository;

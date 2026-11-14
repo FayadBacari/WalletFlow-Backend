@@ -24,7 +24,10 @@ public class ResourceOwnershipRepositoryTests
         await SaveTransactionsAsync(databaseContext, operation);
         var bag = new Bag { Name = "Vacances", UserId = user.Id };
         var otherBag = new Bag { Name = "Sac d'un autre", UserId = otherUser.Id };
+        var suggestion = new SavingsSuggestion { Rule = SuggestionRule.UnallocatedMoney, Month = new DateOnly(2026, 10, 1), MonthlySavingsInCents = 500, UserId = user.Id };
+        var otherSuggestion = new SavingsSuggestion { Rule = SuggestionRule.UnallocatedMoney, Month = new DateOnly(2026, 10, 1), MonthlySavingsInCents = 500, UserId = otherUser.Id };
         databaseContext.Bags.AddRange(bag, otherBag);
+        databaseContext.SavingsSuggestions.AddRange(suggestion, otherSuggestion);
         await databaseContext.SaveChangesAsync();
         var repository = new ResourceOwnershipRepository(databaseContext);
 
@@ -34,6 +37,8 @@ public class ResourceOwnershipRepositoryTests
         Assert.Equal(user.Id, await repository.FindOwnerAsync(OwnedResource.Transaction, operation.Id));
         Assert.Equal(user.Id, await repository.FindOwnerAsync(OwnedResource.Bag, bag.Id));
         Assert.Equal(otherUser.Id, await repository.FindOwnerAsync(OwnedResource.Bag, otherBag.Id));
+        Assert.Equal(user.Id, await repository.FindOwnerAsync(OwnedResource.Suggestion, suggestion.Id));
+        Assert.Equal(otherUser.Id, await repository.FindOwnerAsync(OwnedResource.Suggestion, otherSuggestion.Id));
     }
 
     // Un identifiant inconnu, ou celui d'une ressource d'une autre sorte, n'a pas de propriétaire.
@@ -52,6 +57,7 @@ public class ResourceOwnershipRepositoryTests
         }
 
         Assert.Null(await repository.FindOwnerAsync(OwnedResource.Bag, account.Id));
+        Assert.Null(await repository.FindOwnerAsync(OwnedResource.Suggestion, account.Id));
         Assert.Null(await repository.FindOwnerAsync(OwnedResource.Transaction, connection.Id));
     }
 }

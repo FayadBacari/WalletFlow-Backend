@@ -16,6 +16,7 @@ public class User
     private short failedLoginAttemptCount = 0;
     private short lockoutCount = 0;
     private DateTime? lockoutEndsAt = null;
+    private DateOnly? lastSuggestionMonth = null;
 
     // id_utilisateur
     public Guid Id { get; init; } = Guid.NewGuid();
@@ -99,6 +100,13 @@ public class User
     // date_demande_suppression : vide s'il n'y a pas de demande de suppression.
     public DateTime? DeletionRequestedAt { get; init; }
 
+    // dernier_mois_suggestions : premier jour du dernier mois dont les suggestions ont été calculées, vide avant le premier calcul.
+    public DateOnly? LastSuggestionMonth
+    {
+        get => lastSuggestionMonth;
+        init => lastSuggestionMonth = value;
+    }
+
     // Renvoie vrai si le compte est bloqué à cette date. Le blocage finit à sa date de fin exacte.
     public bool IsLockedAt(DateTime now)
     {
@@ -148,6 +156,18 @@ public class User
         failedLoginAttemptCount = 0;
         lockoutCount = 0;
         lockoutEndsAt = null;
+    }
+
+    // Note que les suggestions de ce mois sont calculées : elles ne le seront plus (GR Sacs). Le mois est un premier jour de mois,
+    // après le dernier mois noté : un autre jour, ou un retour en arrière, est refusé.
+    public void NoteSuggestionMonth(DateOnly month)
+    {
+        if (month.Day != 1 || (lastSuggestionMonth is DateOnly noted && month <= noted))
+        {
+            throw new ArgumentException("Le mois n'est pas un premier jour de mois, ou il n'est pas après le dernier mois noté.", nameof(month));
+        }
+
+        lastSuggestionMonth = month;
     }
 
     // Note que le propriétaire a ouvert le lien de confirmation : le compte devient actif (GR Auth).

@@ -209,8 +209,9 @@ public class CategoryRepositoryTests
             row.UserId == account.Id && row.Name.ToLower() == "abonnements"));
     }
 
-    // GR Dépenses : la catégorie disparaît, ses transactions vont dans « Autres », ses règles disparaissent,
-    // et sa suggestion reste sans catégorie (MPD §1.3). Les autres catégories ne bougent pas.
+    // GR Dépenses et GR Sacs : la catégorie disparaît, ses transactions vont dans « Autres », ses règles disparaissent,
+    // sa suggestion sans réponse est retirée, et sa suggestion acceptée reste sans catégorie (MPD §1.3).
+    // Les autres catégories et leurs suggestions ne bougent pas.
     [Fact]
     public async Task DeletionMovesTransactionsToOtherAndRemovesRules()
     {
@@ -222,15 +223,32 @@ public class CategoryRepositoryTests
         var otherCategory = await ReadCategoryAsync(databaseContext, account.Id, "Autres");
         var cinema = await SaveTransactionAsync(databaseContext, account, leisure, "CINEMA");
         var pharmacy = await SaveTransactionAsync(databaseContext, account, health, "PHARMACIE");
-        var suggestion = new SavingsSuggestion
+        var october = new DateOnly(2026, 10, 1);
+        var proposed = new SavingsSuggestion
         {
             Rule = SuggestionRule.CategoryOverrun,
+            Month = october,
             MonthlySavingsInCents = 1500,
             UserId = account.Id,
             CategoryId = leisure.Id
         };
+        var accepted = new SavingsSuggestion
+        {
+            Rule = SuggestionRule.CategoryOverrun,
+            Month = new DateOnly(2026, 9, 1),
+            MonthlySavingsInCents = 900,
+            Status = SuggestionStatus.Accepted,
+            UserId = account.Id,
+            CategoryId = leisure.Id
+        };
+        var otherProposals = new List<SavingsSuggestion>
+        {
+            new SavingsSuggestion { Rule = SuggestionRule.CategoryOverrun, Month = october, MonthlySavingsInCents = 700, UserId = account.Id, CategoryId = health.Id },
+            new SavingsSuggestion { Rule = SuggestionRule.UnallocatedMoney, Month = october, MonthlySavingsInCents = 5000, UserId = account.Id }
+        };
         databaseContext.CategorizationRules.Add(new CategorizationRule { Label = "CINEMA", CategoryId = leisure.Id });
-        databaseContext.SavingsSuggestions.Add(suggestion);
+        databaseContext.SavingsSuggestions.AddRange(proposed, accepted);
+        databaseContext.SavingsSuggestions.AddRange(otherProposals);
         await databaseContext.SaveChangesAsync();
         databaseContext.ChangeTracker.Clear();
 
@@ -243,8 +261,39 @@ public class CategoryRepositoryTests
         Assert.Equal(otherCategory.Id, (await databaseContext.BankTransactions.AsNoTracking().SingleAsync(row => row.Id == cinema.Id)).CategoryId);
         Assert.Equal(health.Id, (await databaseContext.BankTransactions.AsNoTracking().SingleAsync(row => row.Id == pharmacy.Id)).CategoryId);
         Assert.False(await databaseContext.CategorizationRules.AnyAsync(row => row.CategoryId == leisure.Id));
-        Assert.Null((await databaseContext.SavingsSuggestions.AsNoTracking().SingleAsync(row => row.Id == suggestion.Id)).CategoryId);
+        Assert.False(await databaseContext.SavingsSuggestions.AnyAsync(row => row.Id == proposed.Id));
+        Assert.Null((await databaseContext.SavingsSuggestions.AsNoTracking().SingleAsync(row => row.Id == accepted.Id)).CategoryId);
+        Assert.Equal(2, await databaseContext.SavingsSuggestions.CountAsync(row => otherProposals.Select(other => other.Id).Contains(row.Id)));
         Assert.Equal(7, await databaseContext.Categories.CountAsync(row => row.UserId == account.Id));
+    }
+
+    // SS §4 : supprimer une catégorie ne retire que les suggestions de son utilisateur. La suggestion sans réponse et sans
+    // catégorie d'un autre utilisateur reste, comme la suggestion acceptée sans catégorie de l'utilisateur lui-même.
+    [Fact]
+    public async Task DeletionWithdrawsOnlyTheProposalsOfTheUser()
+    {
+        await using var databaseContext = CreateDatabaseContext();
+        await using var transaction = await databaseContext.Database.BeginTransactionAsync();
+        var account = await SaveAccountWithCategoriesAsync(databaseContext, "test-categories-retrait-a@exemple.test");
+        var otherAccount = await SaveAccountWithCategoriesAsync(databaseContext, "test-categories-retrait-b@exemple.test");
+        var leisure = await ReadCategoryAsync(databaseContext, account.Id, "Loisirs");
+        var october = new DateOnly(2026, 10, 1);
+        var proposalOfOther = new SavingsSuggestion
+        {
+            Rule = SuggestionRule.CategoryOverrun, Month = october, MonthlySavingsInCents = 400, UserId = otherAccount.Id
+        };
+        var acceptedOfUser = new SavingsSuggestion
+        {
+            Rule = SuggestionRule.CategoryOverrun, Month = october, MonthlySavingsInCents = 300, Status = SuggestionStatus.Accepted, UserId = account.Id
+        };
+        databaseContext.SavingsSuggestions.AddRange(proposalOfOther, acceptedOfUser);
+        await databaseContext.SaveChangesAsync();
+        databaseContext.ChangeTracker.Clear();
+
+        Assert.True(await new CategoryRepository(databaseContext).DeleteAsync(account.Id, leisure.Id));
+
+        Assert.True(await databaseContext.SavingsSuggestions.AnyAsync(row => row.Id == proposalOfOther.Id));
+        Assert.True(await databaseContext.SavingsSuggestions.AnyAsync(row => row.Id == acceptedOfUser.Id));
     }
 
     // « Autres », la catégorie d'un autre utilisateur et une catégorie inconnue ne sont jamais supprimées.
