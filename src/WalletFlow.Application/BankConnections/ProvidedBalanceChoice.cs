@@ -9,7 +9,7 @@ public static class ProvidedBalanceChoice
     // Renvoie le montant choisi en centimes, ou null si aucun solde ne convient.
     public static int? Choose(List<ProvidedBalance> balances)
     {
-        var usableBalances = new List<ProvidedBalance>();
+        var usableBalances = new List<(string Type, long AmountInCents)>();
 
         foreach (var balance in balances)
         {
@@ -17,17 +17,17 @@ public static class ProvidedBalanceChoice
                 && balance.AmountInCents is long amountInCents
                 && BankConnectionRules.IsBalanceValid(amountInCents))
             {
-                usableBalances.Add(balance);
+                usableBalances.Add((balance.Type, amountInCents));
             }
         }
 
-        var position = BankConnectionRules.FindPreferredBalance(usableBalances.Select(balance => balance.Type).ToList());
+        var position = BankConnectionRules.FindPreferredBalance(usableBalances.Select(usable => usable.Type).ToList());
 
         if (position < 0)
         {
             return null;
         }
 
-        return (int)usableBalances[position].AmountInCents!.Value;
+        return (int)usableBalances[position].AmountInCents;
     }
 }

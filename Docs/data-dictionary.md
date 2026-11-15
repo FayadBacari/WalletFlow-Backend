@@ -58,7 +58,7 @@ Les données sont regroupées par domaine. Chaque groupe correspond à une entit
 | 6       | Catégories et classement          | CATEGORIE, REGLE_CLASSEMENT                                |
 | 7       | Sacs                              | SAC, MOUVEMENT_SAC                                         |
 | 8       | Suggestions d'épargne             | SUGGESTION                                                 |
-| 9       | Notifications                     | TYPE_ALERTE                                                |
+| 9       | Notifications                     | TYPE_ALERTE, ALERTE, DEMANDE_EMAIL                         |
 | 10      | Support                           | DEMANDE_SUPPORT, REPONSE_SUPPORT                           |
 
 Les sections 11 à 13 complètent le dictionnaire : données calculées, paramètres et données volontairement non collectées.
@@ -105,7 +105,7 @@ Les sections 11 à 13 complètent le dictionnaire : données calculées, paramè
 
 ## 4. Sécurité du compte
 
-Ces données sont techniques. Selon le niveau de détail attendu, elles figurent dans le MCD ou ne sont ajoutées qu'au moment du MPD.
+Ces données sont techniques. Elles figurent dans le MCD comme les autres entités.
 
 ### 4.1 Codes de secours
 
@@ -152,7 +152,7 @@ Ces données sont techniques. Selon le niveau de détail attendu, elles figurent
 **Contraintes**
 
 - `id_appareil` : UUID.
-- `jeton_appareil` : aléatoire et durable, enregistré à la première connexion, dans un cookie sur le web et dans le stockage sécurisé du téléphone dans l'application mobile. Seule son empreinte SHA-256 est stockée. Le cookie dure 1 an, renouvelé à chaque connexion. Une connexion sans ce jeton déclenche l'alerte « nouvel appareil ».
+- `jeton_appareil` : aléatoire et durable, enregistré à la première connexion, dans un cookie sur le web et dans le stockage sécurisé du téléphone dans l'application mobile. Seule son empreinte SHA-256 est stockée. Le cookie dure 1 an, renouvelé à chaque connexion. Une connexion sans ce jeton déclenche l'alerte « nouvel appareil », sauf la toute première connexion du compte (GR Notif).
 - `jeton_push` : fourni par l'application mobile quand l'utilisateur accepte les notifications sur son téléphone. Vide sinon.
 
 ### 4.4 Sessions
@@ -182,7 +182,7 @@ Ces données sont techniques. Selon le niveau de détail attendu, elles figurent
 - `id_evenement` : UUID.
 - `type_evenement` : `connexion`, `blocage`, `deblocage`, `recuperation_mdp`, `changement_mdp`, `changement_email`, `activation_double_auth`, `desactivation_double_auth`, `connexion_banque`, `deconnexion_banque`, `export_donnees`, `demande_suppression`, `action_admin`, `changement_role` ou `acces_refuse`. `connexion_banque` sert aussi au renouvellement de l'autorisation bancaire.
 - `resultat_evenement` : `succes` ou `echec`.
-- `date_evenement` : conservé de 6 mois à 1 an.
+- `date_evenement` : conservé 1 an, puis effacé (SS §11).
 - `adresse_ip_evenement` : IPv4 ou IPv6. Effacée quand le compte de l'utilisateur est supprimé.
 
 Un événement n'est pas toujours rattaché à un utilisateur : une connexion échouée avec une adresse inconnue est enregistrée quand même. Quand un compte est supprimé, ses événements restent, mais sans lien vers l'utilisateur ni adresse IP.
@@ -248,7 +248,7 @@ Une connexion regroupe les comptes d'une même banque. La déconnecter supprime 
 - `montant_transaction` : fourni par la banque, en centimes, non nul. Négatif pour une dépense, positif pour un revenu. Au plus 1 000 000 000 en valeur absolue.
 - `est_transfert_interne` : faux par défaut. C'est l'utilisateur qui marque une transaction comme transfert entre deux de ses comptes. Si vrai, la transaction n'est comptée ni en dépense ni en revenu.
 
-Une transaction appartient à un seul compte et à une seule catégorie (GR Dépenses). Ces liens deviendront des associations dans le MCD.
+Une transaction appartient à un seul compte et à une seule catégorie (GR Dépenses). Ces liens sont les associations CONTENIR et CLASSER du MCD.
 
 
 ## 6. Catégories et classement
@@ -322,7 +322,7 @@ Si le solde total passe sous le total des sacs, l'application prévient l'utilis
 - `montant_mouvement` : en centimes, supérieur à 0. Ne doit ni rendre le sac de départ négatif, ni porter le total des sacs au-dessus du solde total.
 - `date_mouvement` : renseignée automatiquement.
 
-Un mouvement part de l'argent disponible ou d'un sac, et arrive dans un sac ou dans l'argent disponible : au moins l'un des deux est un sac, et ils sont différents (GR Sacs). Un mouvement créé en acceptant une suggestion est lié à cette suggestion. Ces liens deviendront des associations dans le MCD.
+Un mouvement part de l'argent disponible ou d'un sac, et arrive dans un sac ou dans l'argent disponible : au moins l'un des deux est un sac, et ils sont différents (GR Sacs). Un mouvement créé en acceptant une suggestion est lié à cette suggestion. Ces liens sont les associations DEBITER, CREDITER et GENERER du MCD.
 
 Quand un sac est supprimé, ses mouvements avec l'argent disponible disparaissent. Ceux avec un autre sac restent dans l'historique de cet autre sac, comme des mouvements avec l'argent disponible : le solde de l'autre sac ne change pas (GR Sacs).
 
@@ -387,7 +387,57 @@ Une suggestion proposée est effacée au calcul du mois suivant, ou quand sa cat
 
 - `alerte_activee` : vrai par défaut. Toujours vrai si le type d'alerte n'est pas désactivable.
 
-Cette donnée dépend à la fois de l'utilisateur et du type d'alerte : elle sera portée par l'association entre UTILISATEUR et TYPE_ALERTE dans le MCD.
+Cette donnée dépend à la fois de l'utilisateur et du type d'alerte : elle est portée par l'association PARAMETRER, entre UTILISATEUR et TYPE_ALERTE, dans le MCD. Sans réglage enregistré, une alerte est activée.
+
+### 9.3 Alerte
+
+| Code         | Désignation                | Type | Taille | Oblig. | Source               |
+|--------------|----------------------------|------|--------|--------|----------------------|
+| id_alerte    | Identifiant de l'alerte    | AN   | 36     | Oui    | SS §4                |
+| date_alerte  | Date de l'alerte           | DH   | —      | Oui    | GR Notif             |
+| mois_alerte  | Mois concerné par l'alerte | D    | —      | Non    | GR Dépenses, GR Sacs |
+| seuil_alerte | Seuil de budget atteint    | N    | 3      | Non    | GR Dépenses          |
+
+**Contraintes**
+
+- `id_alerte` : UUID.
+- `date_alerte` : renseignée automatiquement, à la création de l'alerte.
+- `mois_alerte` : premier jour d'un mois, seulement pour `budget_atteint` (le mois des dépenses) et `nouvelle_suggestion` (le mois des suggestions).
+- `seuil_alerte` : 80 ou 100, seulement pour `budget_atteint`.
+
+Une alerte est gardée pour les quatre types désactivables, pour ne jamais envoyer deux fois la même : une par catégorie, par mois et par seuil pour `budget_atteint` ; une par mois pour `nouvelle_suggestion` ; une par sac pour `objectif_sac_atteint` ; une par connexion pour `autorisation_bancaire`. Changer l'objectif d'un sac efface son alerte, comme renouveler l'autorisation d'une connexion : le nouvel objectif ou la nouvelle autorisation peut en déclencher une autre (GR Sacs, GR Comptes).
+
+Une alerte que l'utilisateur a désactivée n'est pas créée. Les alertes de sécurité ne sont pas gardées ici : elles partent directement par la file d'e-mails (§9.4).
+
+Une alerte de budget ou de suggestion est effacée deux mois après son mois. Une alerte de budget part aussi avec sa catégorie, une alerte de sac avec son sac, une alerte d'autorisation avec sa connexion (SS §7).
+
+Une alerte est liée à son utilisateur et à son type, et selon son type à une catégorie, à un sac ou à une connexion bancaire. Ces liens sont les associations PREVENIR, CORRESPONDRE, SURVEILLER, ATTEINDRE et RAPPELER du MCD.
+
+### 9.4 Demande d'e-mail
+
+| Code                  | Désignation               | Type | Taille | Oblig. | Source            |
+|-----------------------|---------------------------|------|--------|--------|-------------------|
+| id_demande_email      | Identifiant de la demande | AN   | 36     | Oui    | SS §4             |
+| type_demande_email    | E-mail à envoyer          | AN   | 30     | Oui    | GR Auth, GR Notif |
+| adresse_email_demande | Adresse visée             | AN   | 254    | Non    | GR Auth, GR Perso |
+| adresse_ip_demande    | Adresse IP de la requête  | AN   | 45     | Non    | SS §11            |
+| date_demande_email    | Date de la demande        | DH   | —      | Oui    | SS §9             |
+| nb_essais_envoi       | Essais d'envoi déjà faits | N    | 1      | Oui    | SS §9             |
+| date_prochain_essai   | Date du prochain essai    | DH   | —      | Oui    | SS §9             |
+
+**Contraintes**
+
+- `id_demande_email` : UUID.
+- `type_demande_email` : `recuperation_mdp`, `deblocage`, `changement_email`, `avis_ancienne_adresse`, `nouvel_appareil`, `changement_mdp` ou `alerte`.
+- `adresse_email_demande` : seulement quand l'e-mail ne part pas à l'adresse actuelle du compte : l'adresse saisie pour une récupération, la nouvelle adresse à confirmer, ou l'ancienne adresse prévenue.
+- `adresse_ip_demande` : IPv4 ou IPv6, celle de la requête qui a demandé l'e-mail, pour le journal de sécurité.
+- `date_demande_email` : renseignée automatiquement.
+- `nb_essais_envoi` : de 0 à 5, 0 par défaut.
+- `date_prochain_essai` : la date de la demande pour le premier essai ; après un échec, 1 min, 5 min, 30 min, puis 2 h plus tard.
+
+La file d'e-mails est gardée en base : un redémarrage du serveur ne perd aucune demande. Elle ne contient aucun secret : chaque lien est créé au moment de l'envoi. Une demande est effacée dès que l'e-mail est parti, ou après son 5e échec, noté dans le journal technique (SS §9).
+
+Une demande peut ne viser aucun compte : une récupération est mise dans la file avec l'adresse saisie, avant de savoir si un compte l'utilise. Une demande de type `alerte` est liée à son alerte (§9.3). Ces liens sont les associations ATTENDRE et ANNONCER du MCD.
 
 
 ## 10. Support
@@ -480,7 +530,12 @@ Ces valeurs sont les mêmes pour tous les utilisateurs. Elles relèvent de la co
 | Seuil d'épargne mensuelle                    | 20 % des revenus                 | GR Sacs        |
 | Pause après une suggestion ignorée           | 30 jours                         | GR Sacs        |
 | Calcul des suggestions d'un mois             | À partir du 5 du mois suivant    | GR Sacs        |
-| Seuils d'alerte de budget                    | 80 % et 100 %                    | GR Dépenses    |
+| Seuils d'alerte de budget                    | 80 % et 100 %, une fois par mois | GR Dépenses    |
+| Alertes envoyées tant que le mobile n'existe | Par e-mail                       | GR Notif       |
+| Essais d'envoi d'un e-mail                   | 5 au plus                        | SS §9          |
+| Attente entre deux essais d'envoi            | 1 min, 5 min, 30 min, 2 h        | SS §9          |
+| Conservation d'une alerte de budget          | 2 mois après son mois            | SS §7          |
+| Conservation d'une alerte de suggestion      | 2 mois après son mois            | SS §7          |
 | Durée d'une période de graphique             | 10 ans au plus                   | SS §6          |
 | Délai avant effacement d'un compte           | 30 jours                         | GR Suppression |
 | Effacement d'un compte non confirmé          | À l'expiration de son lien       | GR Auth        |

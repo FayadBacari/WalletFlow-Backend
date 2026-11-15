@@ -32,6 +32,9 @@ public class FakeCategoryRepository : ICategoryRepository, ITransactionalFakeRep
     // Simule une autre requête qui supprime la catégorie entre sa lecture et sa suppression.
     public bool CategoryDisappearsBeforeDeletion { get; set; } = false;
 
+    // Simule des interblocages avec d'autres requêtes : chacun annule une suppression, qui ne change alors rien.
+    public int DeadlocksBeforeDeletion { get; set; } = 0;
+
     // Simule d'autres requêtes qui écrivent les mêmes catégories juste avant chaque enregistrement : un conflit chacune.
     public int Conflicts { get; set; } = 0;
 
@@ -144,6 +147,12 @@ public class FakeCategoryRepository : ICategoryRepository, ITransactionalFakeRep
     {
         lock (pendingChangesLock)
         {
+            if (DeadlocksBeforeDeletion > 0)
+            {
+                DeadlocksBeforeDeletion = DeadlocksBeforeDeletion - 1;
+                return Task.FromResult(false);
+            }
+
             if (CategoryDisappearsBeforeDeletion)
             {
                 SavedCategories.RemoveAll(category => category.Id == categoryId);

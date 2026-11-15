@@ -104,7 +104,7 @@ public class TwoFactorRealChainTests
     }
 
     // Active la double authentification comme le feraient deux requêtes. Renvoie le secret du téléphone et les codes de secours.
-    private async Task<(string SecretOfThePhone, List<string> BackupCodesOfTheUser)> ActivateTwoFactorAsync(WalletFlowDatabaseContext databaseContext, Guid accountId)
+    private async Task<(string PhoneSecret, List<string> BackupCodes)> ActivateTwoFactorAsync(WalletFlowDatabaseContext databaseContext, Guid accountId)
     {
         var startResult = await CreateActivationService(databaseContext).StartAsync(accountId, ValidPassword, IpAddress);
         databaseContext.ChangeTracker.Clear();

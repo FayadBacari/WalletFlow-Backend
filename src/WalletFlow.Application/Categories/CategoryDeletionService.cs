@@ -5,6 +5,9 @@ namespace WalletFlow.Application.Categories;
 // et ses suggestions acceptées restent sans catégorie, pour que les économies réalisées restent comptées (GR Sacs, MPD §1.3).
 public class CategoryDeletionService
 {
+    // Un interblocage veut dire qu'une autre requête a réussi à écrire : quelques essais suffisent largement.
+    public const int MaximumTries = 5;
+
     private readonly ICategoryRepository categoryRepository;
 
     // Reçoit l'accès aux catégories.
@@ -16,24 +19,28 @@ public class CategoryDeletionService
     // Supprime la catégorie si elle est à l'utilisateur et n'est pas « Autres ».
     public async Task<CategoryDeletionResult> DeleteAsync(Guid userId, Guid categoryId)
     {
-        var category = await categoryRepository.FindAsync(userId, categoryId);
-
-        if (category == null)
+        for (var tryNumber = 1; tryNumber <= MaximumTries; tryNumber++)
         {
-            return new CategoryDeletionResult.NotFound();
+            var category = await categoryRepository.FindAsync(userId, categoryId);
+
+            if (category == null)
+            {
+                return new CategoryDeletionResult.NotFound();
+            }
+
+            if (category.IsOtherCategory)
+            {
+                return new CategoryDeletionResult.OtherCategoryIsFixed();
+            }
+
+            // Une autre requête peut l'avoir supprimée juste après la lecture, ou un interblocage peut avoir tout annulé :
+            // la suppression ne supprime alors rien, et le passage suivant relit la catégorie.
+            if (await categoryRepository.DeleteAsync(userId, categoryId))
+            {
+                return new CategoryDeletionResult.Deleted();
+            }
         }
 
-        if (category.IsOtherCategory)
-        {
-            return new CategoryDeletionResult.OtherCategoryIsFixed();
-        }
-
-        // Une autre requête peut l'avoir supprimée juste après la lecture : la suppression ne trouve alors plus rien.
-        if (!await categoryRepository.DeleteAsync(userId, categoryId))
-        {
-            return new CategoryDeletionResult.NotFound();
-        }
-
-        return new CategoryDeletionResult.Deleted();
+        return new CategoryDeletionResult.NotSaved();
     }
 }

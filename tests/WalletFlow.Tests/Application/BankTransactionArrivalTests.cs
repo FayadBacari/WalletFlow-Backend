@@ -215,7 +215,7 @@ public class BankTransactionArrivalTests
         services.Provider.ChangeBalance(StableId, 42_000);
         services.Provider.AddTransaction(StableId, services.Today, -3000, "CB NETFLIX");
         var received = TransactionReception.Receive(services.Provider.TransactionsByStableId[StableId]).Single();
-        var addedByTheOtherRequest = new BankTransaction
+        var addedByOtherRequest = new BankTransaction
         {
             ExternalTransactionId = received.ExternalId,
             TransactionDate = received.Date,
@@ -224,11 +224,11 @@ public class BankTransactionArrivalTests
             BankAccountId = account.Id,
             CategoryId = services.CategoryNamed("Shopping").Id
         };
-        services.Transactions.TransactionsAddedBeforeSave = new List<BankTransaction> { addedByTheOtherRequest };
+        services.Transactions.TransactionsAddedBeforeSave = new List<BankTransaction> { addedByOtherRequest };
 
         await UpdateLaterAsync();
 
-        Assert.Same(addedByTheOtherRequest, Assert.Single(services.TransactionsOf(account)));
+        Assert.Same(addedByOtherRequest, Assert.Single(services.TransactionsOf(account)));
         Assert.Equal(42_000, account.BalanceInCents);
     }
 

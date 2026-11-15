@@ -168,11 +168,11 @@ public class BagMovementServiceTests
         var movement = services.CreateMovement();
 
         var oneCentTooMuch = await movement.MoveAsync(services.UserId, null, savings.Id, 30_001);
-        var exactlyTheRest = await movement.MoveAsync(services.UserId, null, savings.Id, 30_000);
+        var exactRest = await movement.MoveAsync(services.UserId, null, savings.Id, 30_000);
         var oneMoreCent = await movement.MoveAsync(services.UserId, null, holidays.Id, 1);
 
         Assert.IsType<BagMovementResult.AvailableMoneyTooLow>(oneCentTooMuch);
-        Assert.IsType<BagMovementResult.Moved>(exactlyTheRest);
+        Assert.IsType<BagMovementResult.Moved>(exactRest);
         Assert.IsType<BagMovementResult.AvailableMoneyTooLow>(oneMoreCent);
         Assert.Equal(100_000, services.BalanceOf(holidays) + services.BalanceOf(savings));
     }

@@ -311,14 +311,14 @@ public class SuggestionListServiceTests
         early.User.NoteSuggestionMonth(September);
         var september = early.SaveSuggestion(SuggestionRule.UnallocatedMoney, September, 4_000);
 
-        var onTheFourth = await early.CreateList().ListAsync(early.UserId);
+        var onFourth = await early.CreateList().ListAsync(early.UserId);
         early.Bank.Clock.Advance(TimeSpan.FromDays(1));
-        var onTheFifth = await early.CreateList().ListAsync(early.UserId);
+        var onFifth = await early.CreateList().ListAsync(early.UserId);
 
-        Assert.Equal(September, onTheFourth.Month);
-        Assert.Equal(september.Id, Assert.Single(onTheFourth.Suggestions).Id);
-        Assert.Equal(October, onTheFifth.Month);
-        Assert.Equal(SuggestionRule.UnallocatedMoney, Assert.Single(onTheFifth.Suggestions).Rule);
+        Assert.Equal(September, onFourth.Month);
+        Assert.Equal(september.Id, Assert.Single(onFourth.Suggestions).Id);
+        Assert.Equal(October, onFifth.Month);
+        Assert.Equal(SuggestionRule.UnallocatedMoney, Assert.Single(onFifth.Suggestions).Rule);
         Assert.Equal(October, Assert.Single(early.SavedSuggestionsOfUser()).Month);
         Assert.Equal(October, early.User.LastSuggestionMonth);
     }

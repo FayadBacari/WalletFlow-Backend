@@ -155,7 +155,7 @@ Toute donnée est validée **côté serveur**, même si l'interface la valide d�
   - Les infobulles des graphiques sont configurées en texte et non en HTML : beaucoup de bibliothèques de graphiques acceptent le HTML par défaut.
 
 ### Intégrité des montants
-- Les règles sur les sacs (jamais négatif, total ≤ solde total) sont appliquées **par le serveur**, dans une transaction de base de données qui verrouille les lignes concernées. Deux déplacements lancés en même temps ne doivent pas pouvoir contourner la règle.
+- Les règles sur les sacs (jamais négatif, total ≤ solde total) sont appliquées **par le serveur**, dans la transaction de base de données du déplacement. Elle réécrit la ligne de l'utilisateur en vérifiant sa version : de deux déplacements lancés en même temps, le second échoue et refait ses contrôles. Deux déplacements ne peuvent donc pas contourner la règle.
 - Accepter une suggestion ne crée qu'un seul mouvement, même en cas de double clic.
 
 ### Export de données
@@ -224,11 +224,13 @@ Aucun script tiers (publicité, traceur, outil d'analyse externe) sur les pages 
 ### Minimisation
 - WalletFlow n'enregistre **ni IBAN ni numéro de compte**, même si le prestataire les fournit : un compte n'a besoin que de son nom et de son solde. Une donnée qu'on ne stocke pas ne peut pas fuiter.
 - WalletFlow ne voit jamais les identifiants ni le mot de passe de la banque : l'utilisateur s'identifie sur la page de sa banque (règle de gestion).
+- Une alerte envoyée n'est gardée que pour ne pas l'envoyer deux fois : une alerte de budget ou de suggestion est effacée deux mois après son mois, une alerte de sac ou de connexion bancaire part avec eux.
+- Une demande de la file d'e-mails est effacée dès que l'e-mail est parti, ou après son dernier essai raté.
 
 ### Connexion bancaire
 - Le prestataire est agréé pour lire les comptes (DSP2), hébergé dans l'Union européenne, et lié à WalletFlow par un contrat de sous-traitance (article 28 du RGPD).
 - Seul l'accès en lecture est demandé : WalletFlow ne peut lancer ni virement ni paiement (règle de gestion).
-- La connexion se lance toujours depuis WalletFlow. Au retour de la banque, un paramètre `state` aléatoire, lié à la session, est vérifié, et l'adresse de retour est fixe.
+- La connexion se lance toujours depuis WalletFlow. Au retour de la banque, un paramètre `state` aléatoire, à usage unique et lié au compte qui a lancé la connexion, est vérifié, et l'adresse de retour est fixe.
 - La clé d'API du prestataire reste sur le serveur, avec les autres secrets. Elle n'est jamais intégrée à l'application mobile.
 - Si le prestataire fournit un jeton d'accès pour chaque utilisateur, ce jeton est chiffré en base, comme le secret de double authentification.
 - Les notifications du prestataire (webhooks) ne sont acceptées qu'en HTTPS, avec une signature valide.
@@ -258,7 +260,7 @@ Aucun script tiers (publicité, traceur, outil d'analyse externe) sur les pages 
 ### Suppression de compte
 - Pendant les 30 jours de délai (règle de gestion), le compte est inaccessible, sauf pour annuler la suppression.
 - Dès la demande, l'autorisation donnée à la banque est révoquée chez le prestataire (règle de gestion).
-- Passé ce délai, sont effacés : l'utilisateur, ses connexions bancaires, ses comptes bancaires et leurs transactions, ses catégories et ses règles de classement, ses sacs et leurs mouvements, ses suggestions, ses préférences d'alerte, ses demandes de support et leurs réponses, ses appareils, ses sessions, ses jetons et ses codes de secours. Dans le journal de sécurité, ses événements restent, mais sans son identifiant ni son adresse IP.
+- Passé ce délai, sont effacés : l'utilisateur, ses connexions bancaires, ses comptes bancaires et leurs transactions, ses catégories et ses règles de classement, ses sacs et leurs mouvements, ses suggestions, ses préférences d'alerte, ses alertes envoyées, ses e-mails en attente, ses demandes de support et leurs réponses, ses appareils, ses sessions, ses jetons et ses codes de secours. Dans le journal de sécurité, ses événements restent, mais sans son identifiant ni son adresse IP.
 - Les données disparaissent des sauvegardes au plus tard 30 jours plus tard, quand la dernière sauvegarde qui les contient expire. C'est à indiquer dans la politique de confidentialité.
 
 ### Journaux
@@ -287,6 +289,9 @@ Les journaux techniques ne contiennent jamais de mot de passe, de jeton, de code
 - Chaque e-mail de sécurité (connexion depuis un nouvel appareil, changement de mot de passe ou d'e-mail, blocage) indique quoi faire si ce n'est pas l'utilisateur qui a agi.
 - L'e-mail qui prévient l'ancienne adresse ne cite pas la nouvelle, et invite à écrire au support si ce n'est pas l'utilisateur qui a agi.
 - Le contenu des notifications sur téléphone reste général (par exemple « Ton budget Loisirs est presque atteint ») : il peut s'afficher sur un écran verrouillé.
+- Une alerte ne cite aucun montant, par e-mail comme sur le téléphone (règle de gestion).
+- Tant que l'application mobile n'existe pas, toutes les alertes partent par e-mail (règle de gestion).
+- La file d'e-mails est gardée en base, pour qu'un redémarrage du serveur ne perde rien. Elle ne contient aucun secret : chaque lien est créé au moment de l'envoi. Un e-mail part en 5 essais au plus : après un échec, l'essai suivant attend 1 min, 5 min, 30 min, puis 2 h. Le dernier échec est noté dans le journal technique. Les limites du §6 bornent ce qu'un visiteur peut y mettre.
 
 
 ## 10. Développement et dépendances

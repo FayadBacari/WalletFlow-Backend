@@ -17,7 +17,7 @@ public class ConcurrentCategoryRequestsTests
     private const int SimultaneousRequestCount = 20;
     private const int MaximumImportsPerTask = 1000;
     private const string Added = "ajoutée";
-    private const string RefusedByTheForeignKey = "refusée par la clé étrangère";
+    private const string RefusedByForeignKey = "refusée par la clé étrangère";
     private const string Deleted = "supprimée";
     private const string NotDeleted = "pas supprimée";
 
@@ -115,7 +115,7 @@ public class ConcurrentCategoryRequestsTests
         }
         catch (Exception exception) when (IsForeignKeyViolation(exception))
         {
-            return RefusedByTheForeignKey;
+            return RefusedByForeignKey;
         }
     }
 
@@ -189,7 +189,7 @@ public class ConcurrentCategoryRequestsTests
     {
         for (var addedCount = 0; addedCount < MaximumImportsPerTask; addedCount++)
         {
-            if (await AddTransactionAsync(bankAccountId, categoryId) == RefusedByTheForeignKey)
+            if (await AddTransactionAsync(bankAccountId, categoryId) == RefusedByForeignKey)
             {
                 return addedCount;
             }

@@ -133,7 +133,6 @@ public class ChartsController : ControllerBase
         return ValidationProblem();
     }
 
-
     // Note au journal si la ressource visée est à un autre utilisateur (SS §11). La réponse reste la même dans tous les cas.
     private async Task RecordForeignAccessAsync(OwnedResource resource, Guid? resourceId)
     {
@@ -143,6 +142,7 @@ public class ChartsController : ControllerBase
             resource,
             resourceId);
     }
+
     // Refuse une période à l'envers, ou trop longue, sur le champ To.
     private ActionResult AnswerPeriodRefused(bool areDatesReversed)
     {

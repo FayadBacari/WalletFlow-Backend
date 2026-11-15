@@ -14,6 +14,7 @@ using WalletFlow.Tests.EndToEnd;
 using WalletFlow.Tests.Fakes;
 using static WalletFlow.Tests.Infrastructure.BankTestRows;
 using static WalletFlow.Tests.Infrastructure.LocalTestDatabase;
+using static WalletFlow.Tests.Infrastructure.RealDeadlocks;
 
 namespace WalletFlow.Tests.Infrastructure;
 
@@ -23,7 +24,6 @@ namespace WalletFlow.Tests.Infrastructure;
 public class BankConnectionRepositoryTests
 {
     private static readonly DateTime Now = BankTestRows.Now;
-    private static readonly TimeSpan MaximumWait = TimeSpan.FromSeconds(30);
 
     // SS §4 : chaque recherche d'un utilisateur filtre sur l'utilisateur de la session.
     [Fact]
@@ -258,48 +258,6 @@ public class BankConnectionRepositoryTests
         {
             await TestAccountCleanup.DeleteAccountAsync(email);
         }
-    }
-
-    // Verrouille une ligne dans l'autre transaction, en attendant si une autre transaction la tient déjà.
-    private static async Task LockRowAsync(NpgsqlTransaction otherTransaction, string lockQuery, Guid rowId)
-    {
-        await using var command = new NpgsqlCommand(lockQuery, otherTransaction.Connection, otherTransaction);
-        command.Parameters.AddWithValue("id", rowId);
-        await command.ExecuteScalarAsync();
-    }
-
-    // Lit le délai d'attente après lequel PostgreSQL vérifie les interblocages (deadlock_timeout, une seconde par défaut).
-    private static async Task<TimeSpan> ReadDeadlockDetectionDelayAsync(NpgsqlTransaction otherTransaction)
-    {
-        await using var command = new NpgsqlCommand(
-            "SELECT setting::int FROM pg_settings WHERE name = 'deadlock_timeout' AND unit = 'ms'",
-            otherTransaction.Connection,
-            otherTransaction);
-        var milliseconds = (int)(await command.ExecuteScalarAsync())!;
-
-        return TimeSpan.FromMilliseconds(milliseconds);
-    }
-
-    // Attend que PostgreSQL montre l'enregistrement bloqué par l'autre transaction.
-    private static async Task WaitUntilBlockedAsync(NpgsqlTransaction otherTransaction, int savingProcessId)
-    {
-        var deadline = DateTime.UtcNow + MaximumWait;
-
-        while (DateTime.UtcNow < deadline)
-        {
-            await using var command = new NpgsqlCommand("SELECT @other = ANY(pg_blocking_pids(@saving))", otherTransaction.Connection, otherTransaction);
-            command.Parameters.AddWithValue("other", otherTransaction.Connection!.ProcessID);
-            command.Parameters.AddWithValue("saving", savingProcessId);
-
-            if ((bool)(await command.ExecuteScalarAsync())!)
-            {
-                return;
-            }
-
-            await Task.Delay(20);
-        }
-
-        throw new TimeoutException("L'enregistrement n'a jamais attendu l'autre transaction.");
     }
 
     // Chaîne réelle : connexion, mise à jour et déconnexion avec le vrai dépôt, la vraie unité de travail, le vrai journal

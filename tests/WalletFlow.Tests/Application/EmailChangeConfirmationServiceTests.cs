@@ -162,7 +162,7 @@ public class EmailChangeConfirmationServiceTests
     {
         var account = tools.AddAccountWithoutTwoFactor();
         var linkToken = AddEmailChangeLink(account);
-        tools.AccountRepository.AccountTakingTheNewEmailBeforeSave = new User
+        tools.AccountRepository.AccountTakingNewEmailBeforeSave = new User
         {
             Email = NewEmail,
             PasswordHash = "empreinte-de-l-autre-compte",

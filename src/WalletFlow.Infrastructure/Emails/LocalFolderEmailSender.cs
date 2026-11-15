@@ -1,3 +1,4 @@
+using System.Globalization;
 using WalletFlow.Application.Emails;
 
 namespace WalletFlow.Infrastructure.Emails;
@@ -7,11 +8,13 @@ namespace WalletFlow.Infrastructure.Emails;
 public class LocalFolderEmailSender : IEmailSender
 {
     private readonly string folderPath;
+    private readonly TimeProvider clock;
 
-    // Reçoit le chemin du dossier où écrire les e-mails.
-    public LocalFolderEmailSender(string folderPath)
+    // Reçoit le chemin du dossier où écrire les e-mails, et l'horloge qui date chaque fichier.
+    public LocalFolderEmailSender(string folderPath, TimeProvider clock)
     {
         this.folderPath = folderPath;
+        this.clock = clock;
     }
 
     // Écrit l'e-mail dans un nouveau fichier, dont le nom commence par sa date.
@@ -36,7 +39,7 @@ public class LocalFolderEmailSender : IEmailSender
     {
         Directory.CreateDirectory(folderPath);
 
-        var fileName = DateTime.UtcNow.ToString("yyyyMMdd-HHmmss-fff") + "-" + Guid.NewGuid() + ".txt";
+        var fileName = clock.GetUtcNow().ToString("yyyyMMdd-HHmmss-fff", CultureInfo.InvariantCulture) + "-" + Guid.NewGuid() + ".txt";
         var filePath = Path.Combine(folderPath, fileName);
 
         var content =

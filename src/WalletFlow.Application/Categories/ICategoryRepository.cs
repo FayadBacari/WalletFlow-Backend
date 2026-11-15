@@ -31,6 +31,7 @@ public interface ICategoryRepository
     void PrepareUnchangedCheck(Category category);
 
     // Supprime la catégorie de l'utilisateur et déplace ses transactions dans sa catégorie « Autres », en une seule transaction SQL.
-    // Cette écriture est immédiate. Renvoie faux, sans rien changer, si la catégorie n'existe plus, est à un autre, ou est « Autres ».
+    // Cette écriture est immédiate. Renvoie faux, sans rien changer, si la catégorie n'existe plus, est à un autre, ou est « Autres »,
+    // et aussi quand un interblocage avec une autre requête fait tout annuler : l'appelant relit alors la catégorie et recommence.
     Task<bool> DeleteAsync(Guid userId, Guid categoryId);
 }

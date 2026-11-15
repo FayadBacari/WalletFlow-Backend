@@ -22,4 +22,9 @@ public abstract class CategoryDeletionResult
     public sealed class OtherCategoryIsFixed : CategoryDeletionResult
     {
     }
+
+    // D'autres requêtes ont arrêté la suppression à chaque essai : rien n'a changé, et l'utilisateur peut réessayer.
+    public sealed class NotSaved : CategoryDeletionResult
+    {
+    }
 }
