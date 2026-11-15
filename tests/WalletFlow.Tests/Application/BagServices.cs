@@ -1,5 +1,6 @@
 using WalletFlow.Application.Bags;
 using WalletFlow.Application.BankConnections;
+using WalletFlow.Application.Notifications;
 using WalletFlow.Application.Persistence;
 using WalletFlow.Domain.AccountsAndCategories;
 using WalletFlow.Domain.BagsAndSuggestions;
@@ -9,20 +10,24 @@ using WalletFlow.Tests.Fakes;
 namespace WalletFlow.Tests.Application;
 
 // Crée les cas d'utilisation des sacs avec une fausse base et une fausse horloge, pour un utilisateur sans sac.
-// Son solde total est la somme des comptes bancaires que le test lui donne.
+// Son solde total est la somme des comptes bancaires que le test lui donne. Les alertes et leurs e-mails partent dans
+// les mêmes fausses transactions que les sacs.
 public class BagServices
 {
     public User User { get; } = new User { Email = "sacs@exemple.test", PasswordHash = "empreinte-de-test", IsEmailConfirmed = true };
     public FakeTimeProvider Clock { get; } = new FakeTimeProvider();
     public FakeBagRepository Repository { get; } = new FakeBagRepository();
     public FakeBankConnectionRepository Bank { get; } = new FakeBankConnectionRepository();
+    public FakeAlertRepository Alerts { get; } = new FakeAlertRepository();
+    public FakeEmailRequestRepository EmailRequests { get; } = new FakeEmailRequestRepository();
     public FakeDatabaseUnitOfWork UnitOfWork { get; }
 
-    // Garde le compte de l'utilisateur dans la fausse base, et relie la fausse base à la fausse unité de travail.
+    // Garde le compte de l'utilisateur dans la fausse base, et relie les fausses bases à la fausse unité de travail.
     public BagServices()
     {
         Repository.SavedUsers.Add(User);
-        UnitOfWork = new FakeDatabaseUnitOfWork(Repository);
+        Alerts.Bags = Repository;
+        UnitOfWork = new FakeDatabaseUnitOfWork(Repository, Alerts, EmailRequests);
     }
 
     // L'identifiant de l'utilisateur des tests.
@@ -55,7 +60,7 @@ public class BagServices
     // Crée le service qui fixe l'objectif d'un sac.
     public BagGoalService CreateGoal()
     {
-        return new BagGoalService(Repository, new DatabaseChangesSavingService(UnitOfWork), Clock);
+        return new BagGoalService(Repository, CreateGoalAlerts(), new DatabaseChangesSavingService(UnitOfWork), Clock);
     }
 
     // Crée le service qui supprime un sac.
@@ -67,7 +72,18 @@ public class BagServices
     // Crée le service qui déplace de l'argent.
     public BagMovementService CreateMovement()
     {
-        return new BagMovementService(Repository, new BagMovementChecks(Repository, new BankBalanceTotalService(Bank)), new DatabaseChangesSavingService(UnitOfWork), Clock);
+        return new BagMovementService(
+            Repository,
+            new BagMovementChecks(Repository, new BankBalanceTotalService(Bank)),
+            CreateGoalAlerts(),
+            new DatabaseChangesSavingService(UnitOfWork),
+            Clock);
+    }
+
+    // Crée l'alerte d'objectif, sur les fausses bases.
+    public BagGoalAlerts CreateGoalAlerts()
+    {
+        return new BagGoalAlerts(Repository, Alerts, new AlertPreparation(Alerts, EmailRequests));
     }
 
     // Crée le service qui lit l'historique d'un sac.

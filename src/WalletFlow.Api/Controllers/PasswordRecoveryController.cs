@@ -34,9 +34,9 @@ public class PasswordRecoveryController : ControllerBase
     [HttpPost("forgot-password")]
     [EnableRateLimiting(RateLimitingConfiguration.PasswordRecoveryPolicy)]
     [RequestSizeLimit(RequestSizeConfiguration.MaximumAccountRequestBytes)]
-    public IActionResult RequestRecovery(ForgotPasswordRequest request)
+    public async Task<IActionResult> RequestRecovery(ForgotPasswordRequest request)
     {
-        var result = recoveryRequestService.Request(
+        var result = await recoveryRequestService.RequestAsync(
             request.Email,
             HttpContext.Connection.RemoteIpAddress);
 

@@ -17,6 +17,7 @@ public class User
     private short lockoutCount = 0;
     private DateTime? lockoutEndsAt = null;
     private DateOnly? lastSuggestionMonth = null;
+    private NotificationChannel notificationChannel = NotificationChannel.Email;
 
     // id_utilisateur
     public Guid Id { get; init; } = Guid.NewGuid();
@@ -74,7 +75,11 @@ public class User
     }
 
     // canal_notification : e-mail par défaut.
-    public NotificationChannel NotificationChannel { get; init; } = NotificationChannel.Email;
+    public NotificationChannel NotificationChannel
+    {
+        get => notificationChannel;
+        init => notificationChannel = value;
+    }
 
     // nb_tentatives_echouees : de 0 à 5.
     public short FailedLoginAttemptCount
@@ -168,6 +173,18 @@ public class User
         }
 
         lastSuggestionMonth = month;
+    }
+
+    // Garde le canal choisi pour recevoir les alertes (GR Notif). Tant que l'application mobile n'existe pas, toutes les alertes
+    // partent quand même par e-mail : le choix du téléphone est gardé pour plus tard. Une valeur hors de la liste est refusée.
+    public void ChangeNotificationChannel(NotificationChannel newChannel)
+    {
+        if (!Enum.IsDefined(newChannel))
+        {
+            throw new ArgumentOutOfRangeException(nameof(newChannel), "Ce canal n'est pas dans la liste.");
+        }
+
+        notificationChannel = newChannel;
     }
 
     // Note que le propriétaire a ouvert le lien de confirmation : le compte devient actif (GR Auth).

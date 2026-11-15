@@ -5,7 +5,7 @@ namespace WalletFlow.Domain.NotificationsAndSupport;
 public class AlertType
 {
     // code_type_alerte : par exemple budget_atteint.
-    public string Code { get; init; } = string.Empty;
+    public AlertKind Kind { get; init; }
 
     // libelle_type_alerte : nom affiché à l'utilisateur.
     public string Label { get; init; } = string.Empty;

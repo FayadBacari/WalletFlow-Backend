@@ -4,6 +4,7 @@ using WalletFlow.Application.BankConnections;
 using WalletFlow.Application.Suggestions;
 using WalletFlow.Domain.AccountsAndCategories;
 using WalletFlow.Domain.BagsAndSuggestions;
+using WalletFlow.Domain.NotificationsAndSupport;
 using WalletFlow.Domain.UsersAndSecurity;
 using WalletFlow.Infrastructure.Persistence;
 using WalletFlow.Infrastructure.Persistence.Repositories;
@@ -203,11 +204,13 @@ public class SuggestionRepositoryTests
         var bagRepository = new BagRepository(databaseContext);
         var suggestionRepository = new SuggestionRepository(databaseContext);
         var balanceTotal = new BankBalanceTotalService(new BankConnectionRepository(databaseContext));
-        var list = new SuggestionListService(
-            bagRepository, suggestionRepository, new TransactionRepository(databaseContext), new CategoryRepository(databaseContext),
-            balanceTotal, CreateSavingService(databaseContext), clock);
+        var calculation = new SuggestionCalculationService(
+            bagRepository, suggestionRepository, new TransactionRepository(databaseContext),
+            CreateAlertPreparation(databaseContext), balanceTotal, CreateSavingService(databaseContext), clock);
+        var list = new SuggestionListService(calculation, suggestionRepository, new CategoryRepository(databaseContext));
         var acceptance = new SuggestionAcceptanceService(
-            bagRepository, suggestionRepository, new BagMovementChecks(bagRepository, balanceTotal), CreateSavingService(databaseContext), clock);
+            bagRepository, suggestionRepository, new BagMovementChecks(bagRepository, balanceTotal), CreateBagGoalAlerts(databaseContext),
+            CreateSavingService(databaseContext), clock);
         var dismissal = new SuggestionDismissalService(bagRepository, suggestionRepository, CreateSavingService(databaseContext), clock);
 
         var first = await list.ListAsync(user.Id);
@@ -219,6 +222,9 @@ public class SuggestionRepositoryTests
         Assert.Equal(October, (await databaseContext.Users.AsNoTracking().SingleAsync(row => row.Id == user.Id)).LastSuggestionMonth);
         Assert.Equal(new List<int> { 100_000, 15_000, 5_000 }, first.Suggestions.Select(view => view.MonthlySavingsInCents).ToList());
         Assert.Equal("Alimentation", first.Suggestions.Single(view => view.Rule == SuggestionRule.CategoryOverrun).CategoryName);
+        var monthAlert = await databaseContext.Alerts.AsNoTracking().SingleAsync(row => row.UserId == user.Id);
+        Assert.Equal((AlertKind.NewSuggestion, (DateOnly?)October), (monthAlert.Kind, monthAlert.Month));
+        Assert.Equal(monthAlert.Id, (await databaseContext.EmailRequests.AsNoTracking().SingleAsync(row => row.UserId == user.Id)).AlertId);
 
         var unallocated = first.Suggestions.Single(view => view.Rule == SuggestionRule.UnallocatedMoney);
         var overrun = first.Suggestions.Single(view => view.Rule == SuggestionRule.CategoryOverrun);
@@ -233,5 +239,57 @@ public class SuggestionRepositoryTests
         Assert.Equal(SuggestionStatus.Accepted, answered.Single(row => row.Id == unallocated.Id).Status);
         Assert.Equal(SuggestionStatus.Ignored, answered.Single(row => row.Id == overrun.Id).Status);
         Assert.Equal(unallocated.Id, (await databaseContext.BagMovements.AsNoTracking().SingleAsync(row => row.DestinationBagId == bag.Id)).SavingsSuggestionId);
+    }
+
+    // La tâche de fond trouve les comptes confirmés qui ont au moins une opération et dont le mois attend son calcul,
+    // dans l'ordre de leur uuid, à partir de celui qui suit le dernier lu. La base compare les uuid elle-même.
+    [Fact]
+    public async Task UsersToCalculateAreFoundInUuidOrderAfterTheLastOneRead()
+    {
+        await using var databaseContext = CreateDatabaseContext();
+        await using var transaction = await databaseContext.Database.BeginTransactionAsync();
+        var first = await SaveUserWithTransactionAsync(databaseContext, "test-suggestions-tache-1@exemple.test", true);
+        var second = await SaveUserWithTransactionAsync(databaseContext, "test-suggestions-tache-2@exemple.test", true);
+        var unconfirmed = await SaveUserWithTransactionAsync(databaseContext, "test-suggestions-tache-3@exemple.test", false);
+        var calculated = await SaveUserWithTransactionAsync(databaseContext, "test-suggestions-tache-4@exemple.test", true);
+        await databaseContext.Users.Where(row => row.Id == calculated.Id)
+            .ExecuteUpdateAsync(setters => setters.SetProperty(row => row.LastSuggestionMonth, October));
+        var withoutTransaction = await SaveAccountAsync(databaseContext, "test-suggestions-tache-5@exemple.test");
+        await SaveConnectionAsync(databaseContext, withoutTransaction.Id, "compte-sans-operation-" + Guid.NewGuid().ToString("N"));
+        var repository = new SuggestionRepository(databaseContext);
+        var ordered = new List<Guid> { first.Id, second.Id }.OrderBy(id => id.ToString(), StringComparer.Ordinal).ToList();
+
+        var dueUsers = await repository.FindUsersToCalculateAsync(October, null, 100_000);
+        var afterFirst = await repository.FindUsersToCalculateAsync(October, ordered[0], 100_000);
+        var afterSecond = await repository.FindUsersToCalculateAsync(October, ordered[1], 100_000);
+        var nextMonth = await repository.FindUsersToCalculateAsync(October.AddMonths(1), null, 100_000);
+
+        Assert.Equal(ordered, dueUsers.Where(ordered.Contains).ToList());
+        Assert.DoesNotContain(unconfirmed.Id, dueUsers);
+        Assert.DoesNotContain(calculated.Id, dueUsers);
+        Assert.DoesNotContain(withoutTransaction.Id, dueUsers);
+        Assert.DoesNotContain(ordered[0], afterFirst);
+        Assert.Contains(ordered[1], afterFirst);
+        Assert.DoesNotContain(ordered[1], afterSecond);
+        Assert.Contains(calculated.Id, nextMonth);
+        Assert.Equal(dueUsers.OrderBy(id => id.ToString(), StringComparer.Ordinal).ToList(), dueUsers);
+    }
+
+    // Enregistre un compte, confirmé ou non, avec une connexion et une opération d'octobre.
+    private static async Task<User> SaveUserWithTransactionAsync(WalletFlowDatabaseContext databaseContext, string email, bool isEmailConfirmed)
+    {
+        var user = await SaveAccountAsync(databaseContext, email);
+
+        if (!isEmailConfirmed)
+        {
+            await databaseContext.Users.Where(row => row.Id == user.Id)
+                .ExecuteUpdateAsync(setters => setters.SetProperty(row => row.IsEmailConfirmed, false));
+        }
+
+        var (_, account) = await SaveConnectionAsync(databaseContext, user.Id, "compte-" + Guid.NewGuid().ToString("N"));
+        var food = await ReadCategoryAsync(databaseContext, user.Id, "Alimentation");
+        await SaveTransactionsAsync(databaseContext, CreateTransaction(account.Id, food.Id, "octobre-" + Guid.NewGuid().ToString("N"), date: October.AddDays(2)));
+
+        return user;
     }
 }

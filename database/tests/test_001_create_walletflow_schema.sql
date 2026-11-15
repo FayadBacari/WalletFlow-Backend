@@ -528,6 +528,14 @@ BEGIN
     VALUES ('argent_disponible', DATE '2026-10-01', 3000, identifiant_de_l_utilisateur_a_effacer);
     INSERT INTO parametrer (id_utilisateur, code_type_alerte, alerte_activee)
     VALUES (identifiant_de_l_utilisateur_a_effacer, 'budget_atteint', FALSE);
+    WITH alerte_envoyee_a_l_utilisateur AS (
+        INSERT INTO alerte (code_type_alerte, mois_alerte, id_utilisateur)
+        VALUES ('nouvelle_suggestion', DATE '2026-10-01', identifiant_de_l_utilisateur_a_effacer)
+        RETURNING id_alerte)
+    INSERT INTO demande_email (type_demande_email, id_utilisateur, id_alerte)
+    SELECT 'alerte', identifiant_de_l_utilisateur_a_effacer, id_alerte FROM alerte_envoyee_a_l_utilisateur;
+    INSERT INTO demande_email (type_demande_email, adresse_email_demande, id_utilisateur)
+    VALUES ('avis_ancienne_adresse', 'ancienne-adresse@exemple.test', identifiant_de_l_utilisateur_a_effacer);
     INSERT INTO demande_support (message_demande, id_utilisateur)
     VALUES ('Question sur mes sacs', identifiant_de_l_utilisateur_a_effacer)
     RETURNING id_demande INTO identifiant_de_la_demande_de_l_utilisateur;
@@ -563,6 +571,8 @@ BEGIN
          + (SELECT count(*) FROM sac WHERE id_utilisateur = identifiant_de_l_utilisateur_a_effacer)
          + (SELECT count(*) FROM suggestion WHERE id_utilisateur = identifiant_de_l_utilisateur_a_effacer)
          + (SELECT count(*) FROM parametrer WHERE id_utilisateur = identifiant_de_l_utilisateur_a_effacer)
+         + (SELECT count(*) FROM alerte WHERE id_utilisateur = identifiant_de_l_utilisateur_a_effacer)
+         + (SELECT count(*) FROM demande_email WHERE id_utilisateur = identifiant_de_l_utilisateur_a_effacer)
          + (SELECT count(*) FROM demande_support WHERE id_utilisateur = identifiant_de_l_utilisateur_a_effacer)
          + (SELECT count(*) FROM reponse_support WHERE id_demande = identifiant_de_la_demande_de_l_utilisateur)
          + (SELECT count(*) FROM jeton WHERE id_utilisateur = identifiant_de_l_utilisateur_a_effacer)
@@ -715,6 +725,180 @@ BEGIN
             WHERE id_utilisateur = utilisateur_id AND regle_suggestion = 'depassement_categorie' AND id_categorie IS NULL) = 2,
         'ÉCHEC : les suggestions acceptées des catégories supprimées devaient rester, sans catégorie';
     RAISE NOTICE 'OK : supprimer deux catégories garde leurs suggestions acceptées du même mois';
+END;
+$$;
+
+
+-- 13. GR Notif et DD §9.3 : une alerte vise exactement ce que son type demande, et ne part qu'une fois :
+--     par catégorie, mois et seuil ; par utilisateur et par mois ; par sac ; par connexion.
+DO $$
+DECLARE
+    utilisateur_id uuid;
+    categorie_id uuid;
+    sac_id uuid;
+    sac_sans_alerte_id uuid;
+    connexion_id uuid;
+BEGIN
+    INSERT INTO utilisateur (email_utilisateur, mot_de_passe_hash)
+    VALUES ('test-alertes-envoyees@exemple.test', 'empreinte-de-test')
+    RETURNING id_utilisateur INTO utilisateur_id;
+    INSERT INTO categorie (nom_categorie, id_utilisateur) VALUES ('Loisirs', utilisateur_id)
+    RETURNING id_categorie INTO categorie_id;
+    INSERT INTO sac (nom_sac, montant_objectif, id_utilisateur) VALUES ('Vacances', 50000, utilisateur_id)
+    RETURNING id_sac INTO sac_id;
+    INSERT INTO sac (nom_sac, montant_objectif, id_utilisateur) VALUES ('Voiture', 90000, utilisateur_id)
+    RETURNING id_sac INTO sac_sans_alerte_id;
+    INSERT INTO connexion_bancaire (id_connexion_externe, nom_banque, date_expiration_autorisation, id_utilisateur)
+    VALUES ('connexion-alertes', 'Banque de test', now() + interval '5 days', utilisateur_id)
+    RETURNING id_connexion INTO connexion_id;
+    INSERT INTO donnees_communes_aux_tests_de_contraintes VALUES
+        ('utilisateur_des_alertes', utilisateur_id), ('categorie_des_alertes', categorie_id),
+        ('sac_des_alertes', sac_id), ('sac_sans_alerte', sac_sans_alerte_id), ('connexion_des_alertes', connexion_id);
+
+    -- Chaque type avec ce qu'il vise, les deux seuils d'un même mois et le même seuil un autre mois : tout est permis ensemble.
+    INSERT INTO alerte (code_type_alerte, mois_alerte, seuil_alerte, id_utilisateur, id_categorie)
+    VALUES ('budget_atteint', DATE '2026-11-01', 80, utilisateur_id, categorie_id),
+           ('budget_atteint', DATE '2026-11-01', 100, utilisateur_id, categorie_id),
+           ('budget_atteint', DATE '2026-12-01', 80, utilisateur_id, categorie_id);
+    INSERT INTO alerte (code_type_alerte, mois_alerte, id_utilisateur)
+    VALUES ('nouvelle_suggestion', DATE '2026-10-01', utilisateur_id);
+    INSERT INTO alerte (code_type_alerte, id_utilisateur, id_sac) VALUES ('objectif_sac_atteint', utilisateur_id, sac_id);
+    INSERT INTO alerte (code_type_alerte, id_utilisateur, id_connexion)
+    VALUES ('autorisation_bancaire', utilisateur_id, connexion_id);
+    RAISE NOTICE 'OK : chaque type d''alerte s''enregistre avec ce qu''il vise, et chaque seuil a sa propre alerte';
+
+    PERFORM pg_temp.verifier_que_la_base_refuse_cette_instruction(
+        $sql$INSERT INTO alerte (code_type_alerte, mois_alerte, seuil_alerte, id_utilisateur)
+             SELECT 'budget_atteint', DATE '2026-11-01', 80, identifiant
+             FROM donnees_communes_aux_tests_de_contraintes WHERE nom = 'utilisateur_des_alertes'$sql$,
+        '23514', 'une alerte de budget vise une catégorie');
+    PERFORM pg_temp.verifier_que_la_base_refuse_cette_instruction(
+        $sql$INSERT INTO alerte (code_type_alerte, id_utilisateur, id_sac, id_connexion)
+             SELECT 'objectif_sac_atteint',
+                    (SELECT identifiant FROM donnees_communes_aux_tests_de_contraintes WHERE nom = 'utilisateur_des_alertes'),
+                    (SELECT identifiant FROM donnees_communes_aux_tests_de_contraintes WHERE nom = 'sac_sans_alerte'),
+                    (SELECT identifiant FROM donnees_communes_aux_tests_de_contraintes WHERE nom = 'connexion_des_alertes')$sql$,
+        '23514', 'une alerte ne vise rien d''autre que ce que son type demande');
+    PERFORM pg_temp.verifier_que_la_base_refuse_cette_instruction(
+        $sql$INSERT INTO alerte (code_type_alerte, mois_alerte, seuil_alerte, id_utilisateur, id_categorie)
+             SELECT 'budget_atteint', DATE '2027-01-01', 90,
+                    (SELECT identifiant FROM donnees_communes_aux_tests_de_contraintes WHERE nom = 'utilisateur_des_alertes'),
+                    (SELECT identifiant FROM donnees_communes_aux_tests_de_contraintes WHERE nom = 'categorie_des_alertes')$sql$,
+        '23514', 'un seuil d''alerte de budget vaut 80 ou 100');
+    PERFORM pg_temp.verifier_que_la_base_refuse_cette_instruction(
+        $sql$INSERT INTO alerte (code_type_alerte, mois_alerte, id_utilisateur)
+             SELECT 'nouvelle_suggestion', DATE '2027-01-15', identifiant
+             FROM donnees_communes_aux_tests_de_contraintes WHERE nom = 'utilisateur_des_alertes'$sql$,
+        '23514', 'le mois d''une alerte est le premier jour d''un mois');
+    PERFORM pg_temp.verifier_que_la_base_refuse_cette_instruction(
+        $sql$INSERT INTO alerte (code_type_alerte, mois_alerte, seuil_alerte, id_utilisateur, id_categorie)
+             SELECT 'budget_atteint', DATE '2026-11-01', 100,
+                    (SELECT identifiant FROM donnees_communes_aux_tests_de_contraintes WHERE nom = 'utilisateur_des_alertes'),
+                    (SELECT identifiant FROM donnees_communes_aux_tests_de_contraintes WHERE nom = 'categorie_des_alertes')$sql$,
+        '23505', 'une alerte de budget ne part qu''une fois par catégorie, mois et seuil');
+    PERFORM pg_temp.verifier_que_la_base_refuse_cette_instruction(
+        $sql$INSERT INTO alerte (code_type_alerte, mois_alerte, id_utilisateur)
+             SELECT 'nouvelle_suggestion', DATE '2026-10-01', identifiant
+             FROM donnees_communes_aux_tests_de_contraintes WHERE nom = 'utilisateur_des_alertes'$sql$,
+        '23505', 'une alerte de suggestion ne part qu''une fois par mois');
+    PERFORM pg_temp.verifier_que_la_base_refuse_cette_instruction(
+        $sql$INSERT INTO alerte (code_type_alerte, id_utilisateur, id_sac)
+             SELECT 'objectif_sac_atteint',
+                    (SELECT identifiant FROM donnees_communes_aux_tests_de_contraintes WHERE nom = 'utilisateur_des_alertes'),
+                    (SELECT identifiant FROM donnees_communes_aux_tests_de_contraintes WHERE nom = 'sac_des_alertes')$sql$,
+        '23505', 'une alerte d''objectif ne part qu''une fois par sac');
+    PERFORM pg_temp.verifier_que_la_base_refuse_cette_instruction(
+        $sql$INSERT INTO alerte (code_type_alerte, id_utilisateur, id_connexion)
+             SELECT 'autorisation_bancaire',
+                    (SELECT identifiant FROM donnees_communes_aux_tests_de_contraintes WHERE nom = 'utilisateur_des_alertes'),
+                    (SELECT identifiant FROM donnees_communes_aux_tests_de_contraintes WHERE nom = 'connexion_des_alertes')$sql$,
+        '23505', 'une alerte d''autorisation ne part qu''une fois par connexion');
+END;
+$$;
+
+
+-- 14. SS §9 et DD §9.4 : la file d'e-mails. Une récupération ne vise aucun compte, tout autre e-mail en vise un.
+--     Seuls trois e-mails gardent une adresse, en minuscules. Un e-mail d'alerte, et lui seul, est lié à son alerte,
+--     une seule fois, et disparaît avec elle. Une alerte disparaît avec ce qu'elle vise (SS §7).
+DO $$
+DECLARE
+    utilisateur_id uuid;
+    alerte_du_sac_id uuid;
+BEGIN
+    SELECT identifiant INTO utilisateur_id FROM donnees_communes_aux_tests_de_contraintes WHERE nom = 'utilisateur_des_alertes';
+    SELECT id_alerte INTO alerte_du_sac_id FROM alerte WHERE code_type_alerte = 'objectif_sac_atteint' AND id_utilisateur = utilisateur_id;
+
+    INSERT INTO demande_email (type_demande_email, adresse_email_demande, adresse_ip_demande)
+    VALUES ('recuperation_mdp', 'visiteur@exemple.test', '192.0.2.20');
+    INSERT INTO demande_email (type_demande_email, id_utilisateur)
+    VALUES ('deblocage', utilisateur_id), ('nouvel_appareil', utilisateur_id), ('changement_mdp', utilisateur_id);
+    INSERT INTO demande_email (type_demande_email, adresse_email_demande, id_utilisateur)
+    VALUES ('changement_email', 'nouvelle-adresse@exemple.test', utilisateur_id),
+           ('avis_ancienne_adresse', 'ancienne-adresse@exemple.test', utilisateur_id);
+    INSERT INTO demande_email (type_demande_email, id_utilisateur, id_alerte) VALUES ('alerte', utilisateur_id, alerte_du_sac_id);
+    RAISE NOTICE 'OK : chaque type d''e-mail entre dans la file avec ce qu''il demande';
+
+    PERFORM pg_temp.verifier_que_la_base_refuse_cette_instruction(
+        $sql$INSERT INTO demande_email (type_demande_email, adresse_email_demande, id_utilisateur)
+             SELECT 'recuperation_mdp', 'visiteur@exemple.test', identifiant
+             FROM donnees_communes_aux_tests_de_contraintes WHERE nom = 'utilisateur_des_alertes'$sql$,
+        '23514', 'une demande de récupération ne vise aucun compte');
+    PERFORM pg_temp.verifier_que_la_base_refuse_cette_instruction(
+        $sql$INSERT INTO demande_email (type_demande_email) VALUES ('nouvel_appareil')$sql$,
+        '23514', 'tout autre e-mail que la récupération vise un compte');
+    PERFORM pg_temp.verifier_que_la_base_refuse_cette_instruction(
+        $sql$INSERT INTO demande_email (type_demande_email) VALUES ('recuperation_mdp')$sql$,
+        '23514', 'une demande de récupération garde l''adresse saisie');
+    PERFORM pg_temp.verifier_que_la_base_refuse_cette_instruction(
+        $sql$INSERT INTO demande_email (type_demande_email, adresse_email_demande, id_utilisateur)
+             SELECT 'changement_mdp', 'autre-adresse@exemple.test', identifiant
+             FROM donnees_communes_aux_tests_de_contraintes WHERE nom = 'utilisateur_des_alertes'$sql$,
+        '23514', 'un e-mail qui part à l''adresse du compte ne garde aucune adresse');
+    PERFORM pg_temp.verifier_que_la_base_refuse_cette_instruction(
+        $sql$INSERT INTO demande_email (type_demande_email, adresse_email_demande)
+             VALUES ('recuperation_mdp', 'Visiteur@Exemple.test')$sql$,
+        '23514', 'une adresse de la file d''e-mails est en minuscules');
+    PERFORM pg_temp.verifier_que_la_base_refuse_cette_instruction(
+        $sql$INSERT INTO demande_email (type_demande_email, adresse_email_demande, nb_essais_envoi)
+             VALUES ('recuperation_mdp', 'visiteur@exemple.test', 6)$sql$,
+        '23514', 'un e-mail a au plus 5 essais d''envoi');
+    PERFORM pg_temp.verifier_que_la_base_refuse_cette_instruction(
+        $sql$INSERT INTO demande_email (type_demande_email, id_utilisateur)
+             SELECT 'type_inconnu', identifiant
+             FROM donnees_communes_aux_tests_de_contraintes WHERE nom = 'utilisateur_des_alertes'$sql$,
+        '23514', 'la file refuse un type d''e-mail inconnu');
+    PERFORM pg_temp.verifier_que_la_base_refuse_cette_instruction(
+        $sql$INSERT INTO demande_email (type_demande_email, id_utilisateur)
+             SELECT 'alerte', identifiant
+             FROM donnees_communes_aux_tests_de_contraintes WHERE nom = 'utilisateur_des_alertes'$sql$,
+        '23514', 'un e-mail d''alerte est lié à son alerte');
+    PERFORM pg_temp.verifier_que_la_base_refuse_cette_instruction(
+        $sql$INSERT INTO demande_email (type_demande_email, id_utilisateur, id_alerte)
+             SELECT 'deblocage', id_utilisateur, id_alerte FROM alerte WHERE code_type_alerte = 'nouvelle_suggestion'
+               AND id_utilisateur = (SELECT identifiant FROM donnees_communes_aux_tests_de_contraintes
+                                     WHERE nom = 'utilisateur_des_alertes')$sql$,
+        '23514', 'seul un e-mail d''alerte est lié à une alerte');
+    PERFORM pg_temp.verifier_que_la_base_refuse_cette_instruction(
+        $sql$INSERT INTO demande_email (type_demande_email, id_utilisateur, id_alerte)
+             SELECT 'alerte', id_utilisateur, id_alerte FROM alerte WHERE code_type_alerte = 'objectif_sac_atteint'
+               AND id_utilisateur = (SELECT identifiant FROM donnees_communes_aux_tests_de_contraintes
+                                     WHERE nom = 'utilisateur_des_alertes')$sql$,
+        '23505', 'une alerte n''a qu''un seul e-mail');
+
+    -- Supprimer la catégorie, le sac et la connexion efface leurs alertes, et l'e-mail de l'alerte du sac avec elle.
+    DELETE FROM categorie WHERE id_categorie = (SELECT identifiant FROM donnees_communes_aux_tests_de_contraintes
+                                                WHERE nom = 'categorie_des_alertes');
+    DELETE FROM sac WHERE id_sac = (SELECT identifiant FROM donnees_communes_aux_tests_de_contraintes
+                                    WHERE nom = 'sac_des_alertes');
+    DELETE FROM connexion_bancaire WHERE id_connexion = (SELECT identifiant FROM donnees_communes_aux_tests_de_contraintes
+                                                         WHERE nom = 'connexion_des_alertes');
+    ASSERT (SELECT array_agg(code_type_alerte) FROM alerte WHERE id_utilisateur = utilisateur_id) = ARRAY['nouvelle_suggestion']::varchar[],
+        'ÉCHEC : seule l''alerte de suggestion devait rester';
+    ASSERT NOT EXISTS (SELECT 1 FROM demande_email WHERE id_alerte = alerte_du_sac_id),
+        'ÉCHEC : l''e-mail de l''alerte du sac devait disparaître avec elle';
+    ASSERT (SELECT count(*) FROM demande_email WHERE id_utilisateur = utilisateur_id) = 5,
+        'ÉCHEC : les autres e-mails de l''utilisateur devaient rester';
+    RAISE NOTICE 'OK : une alerte disparaît avec ce qu''elle vise, et son e-mail avec elle';
 END;
 $$;
 

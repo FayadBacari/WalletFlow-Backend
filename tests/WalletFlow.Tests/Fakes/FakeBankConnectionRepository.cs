@@ -13,6 +13,7 @@ public class FakeBankConnectionRepository : IBankConnectionRepository, ITransact
     private readonly List<BankAccount> preparedAccounts = new List<BankAccount>();
     private readonly ReadCopies<BankConnection> readConnections = new ReadCopies<BankConnection>();
     private readonly ReadCopies<BankAccount> readAccounts = new ReadCopies<BankAccount>();
+    private readonly List<BankConnection> checkedConnections = new List<BankConnection>();
     private Action? concurrentChanges = null;
 
     // Ce que la fausse base contient.
@@ -30,6 +31,16 @@ public class FakeBankConnectionRepository : IBankConnectionRepository, ITransact
 
     // Simule des suppressions arrêtées par PostgreSQL pour débloquer un interblocage : une chacune, rien n'est supprimé.
     public int StoppedDeletions { get; set; } = 0;
+
+    // Simule une autre requête qui écrit une connexion contrôlée juste avant l'enregistrement, par exemple un renouvellement :
+    // comme la version de la vraie ligne, l'enregistrement échoue, et le passage suivant relit ce que l'autre a écrit.
+    public Action<BankConnection>? OtherRequestBeforeCheckedSave { get; set; } = null;
+
+    // Les connexions réécrites avec leur version par un enregistrement réussi.
+    public List<BankConnection> CommittedChecks { get; } = new List<BankConnection>();
+
+    // Simule une panne de la base pour cette connexion : la lire par son identifiant échoue.
+    public Guid? FailingConnectionId { get; set; } = null;
 
     // Donne les connexions gardées pour cet utilisateur.
     public Task<List<BankConnection>> FindConnectionsAsync(Guid userId)
@@ -56,6 +67,11 @@ public class FakeBankConnectionRepository : IBankConnectionRepository, ITransact
     // Cherche la connexion par son seul identifiant.
     public Task<BankConnection?> FindConnectionByIdAsync(Guid connectionId)
     {
+        if (connectionId == FailingConnectionId)
+        {
+            throw new InvalidOperationException("Panne simulée de cette connexion.");
+        }
+
         lock (pendingChangesLock)
         {
             var connection = SavedConnections.SingleOrDefault(saved => saved.Id == connectionId);
@@ -129,6 +145,15 @@ public class FakeBankConnectionRepository : IBankConnectionRepository, ITransact
         }
     }
 
+    // Note la connexion dont la ligne sera réécrite avec sa version.
+    public void PrepareUnchangedCheck(BankConnection connection)
+    {
+        lock (pendingChangesLock)
+        {
+            checkedConnections.Add(connection);
+        }
+    }
+
     // Supprime la connexion et ses comptes si sa session est toujours celle-ci, comme la vraie base.
     public Task<bool> DeleteAsync(Guid userId, Guid connectionId, string externalConnectionId)
     {
@@ -177,7 +202,17 @@ public class FakeBankConnectionRepository : IBankConnectionRepository, ITransact
                 copy.BalanceInCents != current.BalanceInCents
                 || copy.BalanceUpdatedAt != current.BalanceUpdatedAt
                 || copy.Name != current.Name);
-            var isWriting = preparedConnections.Count > 0 || preparedAccounts.Count > 0 || changedConnection != null || changedAccount != null;
+            var isWriting = preparedConnections.Count > 0 || preparedAccounts.Count > 0 || changedConnection != null || changedAccount != null
+                || checkedConnections.Count > 0;
+
+            var otherRequest = OtherRequestBeforeCheckedSave;
+            if (otherRequest != null && checkedConnections.Count > 0)
+            {
+                OtherRequestBeforeCheckedSave = null;
+                var checkedConnection = checkedConnections[0];
+                concurrentChanges = () => otherRequest(checkedConnection);
+                return true;
+            }
 
             if (DeleteReadConnectionBeforeSave && changedConnection != null)
             {
@@ -239,6 +274,7 @@ public class FakeBankConnectionRepository : IBankConnectionRepository, ITransact
         {
             SavedConnections.AddRange(preparedConnections);
             SavedAccounts.AddRange(preparedAccounts);
+            CommittedChecks.AddRange(checkedConnections);
             ClearTracking();
         }
     }
@@ -257,6 +293,7 @@ public class FakeBankConnectionRepository : IBankConnectionRepository, ITransact
     {
         preparedConnections.Clear();
         preparedAccounts.Clear();
+        checkedConnections.Clear();
         readConnections.Clear();
         readAccounts.Clear();
     }

@@ -1,8 +1,10 @@
 using System.Net;
+using WalletFlow.Application.Emails;
 using WalletFlow.Application.Persistence;
 using WalletFlow.Application.Security;
 using WalletFlow.Application.UserAccounts;
 using WalletFlow.Application.UserSessions;
+using WalletFlow.Domain.NotificationsAndSupport;
 using WalletFlow.Domain.UsersAndSecurity;
 
 namespace WalletFlow.Application.AccountSettings;
@@ -14,6 +16,7 @@ public class PasswordChangeService
 {
     private readonly IUserAccountRepository accountRepository;
     private readonly IUserSessionRepository sessionRepository;
+    private readonly IEmailRequestRepository emailRequests;
     private readonly DatabaseChangesSavingService savingService;
     private readonly SecurityJournalService securityJournal;
     private readonly AccountIdentityCheckingService identityChecking;
@@ -25,6 +28,7 @@ public class PasswordChangeService
     public PasswordChangeService(
         IUserAccountRepository accountRepository,
         IUserSessionRepository sessionRepository,
+        IEmailRequestRepository emailRequests,
         DatabaseChangesSavingService savingService,
         SecurityJournalService securityJournal,
         AccountIdentityCheckingService identityChecking,
@@ -34,6 +38,7 @@ public class PasswordChangeService
     {
         this.accountRepository = accountRepository;
         this.sessionRepository = sessionRepository;
+        this.emailRequests = emailRequests;
         this.savingService = savingService;
         this.securityJournal = securityJournal;
         this.identityChecking = identityChecking;
@@ -91,7 +96,8 @@ public class PasswordChangeService
 
     // Un passage : lit le compte, vérifie que ce qui vient d'être contrôlé est toujours valable, puis prépare en une fois
     // le nouveau mot de passe, le code de secours utilisé s'il y en a un, la fermeture de toutes les sessions,
-    // la nouvelle session en cours et l'événement du journal. Donne faux si une récupération ou un autre changement est passé.
+    // la nouvelle session en cours, l'événement du journal et l'alerte du changement (GR Notif).
+    // Donne faux si une récupération ou un autre changement est passé.
     private async Task<PreparedChanges<bool>> PrepareNewPasswordAsync(NewPasswordToSave change)
     {
         var account = await accountRepository.FindByIdAsync(change.UserId);
@@ -107,15 +113,18 @@ public class PasswordChangeService
             return PreparedChanges<bool>.NothingToSave(false);
         }
 
+        var now = clock.GetUtcNow().UtcDateTime;
+
         account.ReplacePasswordHash(change.NewPasswordHash);
         await sessionRepository.PrepareAllSessionsRemovalAsync(change.UserId);
         sessionRepository.PrepareSession(new UserSession
         {
             Id = change.NewSessionTokenHash,
-            LastActivityAt = clock.GetUtcNow().UtcDateTime,
+            LastActivityAt = now,
             UserId = change.UserId
         });
         securityJournal.PrepareEvent(SecurityEventType.PasswordChange, SecurityEventResult.Success, change.UserId, change.IpAddress);
+        emailRequests.PrepareRequest(EmailRequest.ForPasswordChange(change.UserId, change.IpAddress, now));
 
         return PreparedChanges<bool>.SaveThenReturn(true);
     }

@@ -1,4 +1,5 @@
 using WalletFlow.Application.Bags;
+using WalletFlow.Application.Notifications;
 using WalletFlow.Application.Persistence;
 using WalletFlow.Domain.BagsAndSuggestions;
 
@@ -7,25 +8,30 @@ namespace WalletFlow.Application.Suggestions;
 // Cas d'utilisation : l'utilisateur connecté accepte une suggestion (GR Sacs). Son montant, ou un montant plus petit,
 // part de l'argent disponible vers un sac qu'il choisit, et la suggestion devient acceptée : les deux ensemble, ou rien.
 // Toutes les règles d'un déplacement s'appliquent. Une suggestion ne crée qu'un seul mouvement, même après un double clic (SS §5).
+// Un sac qui atteint son objectif grâce à ce montant envoie son alerte avec lui.
 public class SuggestionAcceptanceService
 {
     private readonly IBagRepository bagRepository;
     private readonly ISuggestionRepository suggestionRepository;
     private readonly BagMovementChecks movementChecks;
+    private readonly BagGoalAlerts goalAlerts;
     private readonly DatabaseChangesSavingService savingService;
     private readonly TimeProvider clock;
 
-    // Reçoit l'accès aux sacs et aux suggestions, les contrôles d'un déplacement, l'enregistrement avec réessai, et l'horloge.
+    // Reçoit l'accès aux sacs et aux suggestions, les contrôles d'un déplacement, l'alerte d'objectif, l'enregistrement
+    // avec réessai, et l'horloge.
     public SuggestionAcceptanceService(
         IBagRepository bagRepository,
         ISuggestionRepository suggestionRepository,
         BagMovementChecks movementChecks,
+        BagGoalAlerts goalAlerts,
         DatabaseChangesSavingService savingService,
         TimeProvider clock)
     {
         this.bagRepository = bagRepository;
         this.suggestionRepository = suggestionRepository;
         this.movementChecks = movementChecks;
+        this.goalAlerts = goalAlerts;
         this.savingService = savingService;
         this.clock = clock;
     }
@@ -93,6 +99,7 @@ public class SuggestionAcceptanceService
         };
 
         bagRepository.PrepareMovement(movement);
+        await goalAlerts.PrepareAfterArrivalAsync(userId, bagId, amountInCents, now);
         suggestion.Accept(now);
         bagRepository.PrepareUserCheck(user);
 

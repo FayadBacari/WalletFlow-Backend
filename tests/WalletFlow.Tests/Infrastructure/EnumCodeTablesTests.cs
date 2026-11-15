@@ -126,6 +126,24 @@ public class EnumCodeTablesTests
     }
 
     [Theory]
+    [InlineData(AlertKind.BudgetReached, "budget_atteint")]
+    [InlineData(AlertKind.NewSuggestion, "nouvelle_suggestion")]
+    [InlineData(AlertKind.BagGoalReached, "objectif_sac_atteint")]
+    [InlineData(AlertKind.BankAuthorizationToRenew, "autorisation_bancaire")]
+    [InlineData(AlertKind.NewDevice, "nouvel_appareil")]
+    [InlineData(AlertKind.AccountLocked, "compte_bloque")]
+    [InlineData(AlertKind.PasswordChange, "changement_mdp")]
+    [InlineData(AlertKind.EmailChange, "changement_email")]
+    public void AlertKindIsConvertedIntoItsDatabaseCodeAndBack(
+        AlertKind alertKind, string databaseCode)
+    {
+        Assert.Equal(databaseCode,
+            AlertKindDatabaseCodes.Table.ToCode(alertKind));
+        Assert.Equal(alertKind,
+            AlertKindDatabaseCodes.Table.ToValue(databaseCode));
+    }
+
+    [Theory]
     [InlineData(SupportRequestStatus.Sent, "envoyee")]
     [InlineData(SupportRequestStatus.InProgress, "en_cours")]
     [InlineData(SupportRequestStatus.Resolved, "resolue")]

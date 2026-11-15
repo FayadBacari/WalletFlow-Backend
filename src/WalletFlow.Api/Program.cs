@@ -14,6 +14,8 @@ using WalletFlow.Application.BankConnections;
 using WalletFlow.Application.Categories;
 using WalletFlow.Application.Charts;
 using WalletFlow.Application.Configuration;
+using WalletFlow.Application.Emails;
+using WalletFlow.Application.Notifications;
 using WalletFlow.Application.Persistence;
 using WalletFlow.Application.Security;
 using WalletFlow.Application.Suggestions;
@@ -133,7 +135,7 @@ builder.Services.AddScoped<AccountLoginService>();
 builder.Services.AddScoped<UserSessionService>();
 builder.Services.AddScoped<ExpiredUserSessionsCleanupService>();
 builder.Services.AddScoped<PasswordRecoveryRequestService>();
-builder.Services.AddScoped<BackgroundEmailRequestProcessingService>();
+builder.Services.AddScoped<EmailRequestProcessingService>();
 builder.Services.AddScoped<PasswordResetService>();
 builder.Services.AddScoped<AccountUnlockService>();
 builder.Services.AddScoped<TwoFactorCodeCheckingService>();
@@ -175,18 +177,29 @@ builder.Services.AddScoped<BagDeletionService>();
 builder.Services.AddScoped<BagMovementChecks>();
 builder.Services.AddScoped<BagMovementService>();
 builder.Services.AddScoped<BagHistoryService>();
+builder.Services.AddScoped<SuggestionCalculationService>();
 builder.Services.AddScoped<SuggestionListService>();
 builder.Services.AddScoped<SuggestionAcceptanceService>();
 builder.Services.AddScoped<SuggestionDismissalService>();
+builder.Services.AddScoped<AlertPreparation>();
+builder.Services.AddScoped<BudgetAlertService>();
+builder.Services.AddScoped<BagGoalAlerts>();
+builder.Services.AddScoped<BankAuthorizationAlertService>();
+builder.Services.AddScoped<AlertCleanupService>();
+builder.Services.AddScoped<AlertSettingsService>();
 
 // Tâches de fond : effacent chaque jour les comptes non confirmés dont le lien a expiré (GR Auth), les sessions expirées
 // et les événements du journal de sécurité de plus d'un an (SS §11),
-// préparent les e-mails de récupération et de déblocage, et mettent à jour les soldes jusqu'à 4 fois par jour (GR Comptes).
+// envoient les e-mails de la file (SS §9), mettent à jour les soldes jusqu'à 4 fois par jour (GR Comptes),
+// et, toutes les heures, calculent les suggestions du mois (GR Sacs), préviennent 7 jours avant la fin d'une autorisation
+// bancaire (GR Comptes) et effacent les vieilles alertes (SS §7).
 builder.Services.AddHostedService<UnconfirmedAccountsCleanupBackgroundService>();
 builder.Services.AddHostedService<ExpiredUserSessionsCleanupBackgroundService>();
 builder.Services.AddHostedService<SecurityJournalCleanupBackgroundService>();
-builder.Services.AddHostedService<BackgroundEmailRequestsBackgroundService>();
+builder.Services.AddHostedService<EmailRequestsBackgroundService>();
 builder.Services.AddHostedService<BankBalancesBackgroundService>();
+builder.Services.AddHostedService<SuggestionsBackgroundService>();
+builder.Services.AddHostedService<AlertsBackgroundService>();
 
 // Limites de débit des points d'entrée sensibles (SS §6).
 builder.Services.AddWalletFlowRateLimiting();

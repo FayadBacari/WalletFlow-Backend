@@ -32,6 +32,34 @@ public class SuggestionRepository : ISuggestionRepository
             && suggestion.UserId == userId);
     }
 
+    // Cherche les utilisateurs en SQL, par paquets, dans l'ordre de leur identifiant : un utilisateur dont le calcul échoue
+    // ne bloque pas les suivants, puisque le paquet suivant commence après lui. Une opération existe dès qu'un compte d'une
+    // de ses connexions en a une : chaque EXISTS s'arrête à la première ligne trouvée par l'index de sa table.
+    public async Task<List<Guid>> FindUsersToCalculateAsync(DateOnly month, Guid? afterUserId, int count)
+    {
+        var users = databaseContext.Users
+            .AsNoTracking()
+            .Where(user =>
+                user.IsEmailConfirmed
+                && (user.LastSuggestionMonth == null || user.LastSuggestionMonth < month)
+                && databaseContext.BankConnections.Any(connection =>
+                    connection.UserId == user.Id
+                    && databaseContext.BankAccounts.Any(account =>
+                        account.BankConnectionId == connection.Id
+                        && databaseContext.BankTransactions.Any(transaction => transaction.BankAccountId == account.Id))));
+
+        if (afterUserId is Guid lastUserId)
+        {
+            users = users.Where(user => user.Id.CompareTo(lastUserId) > 0);
+        }
+
+        return await users
+            .OrderBy(user => user.Id)
+            .Select(user => user.Id)
+            .Take(count)
+            .ToListAsync();
+    }
+
     // Additionne en SQL, en bigint, les mouvements liés aux suggestions de l'utilisateur. Seule une suggestion acceptée crée
     // un mouvement. Les suggestions de l'utilisateur sont lues d'abord : la somme passe alors par l'index unique du lien
     // id_suggestion, sans parcourir les mouvements de tous les utilisateurs.

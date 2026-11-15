@@ -1,7 +1,9 @@
+using WalletFlow.Application.Emails;
 using WalletFlow.Application.Persistence;
 using WalletFlow.Application.Security;
 using WalletFlow.Application.TwoFactorAuthentication;
 using WalletFlow.Application.UserAccounts;
+using WalletFlow.Domain.NotificationsAndSupport;
 using WalletFlow.Domain.UsersAndSecurity;
 
 namespace WalletFlow.Application.UserSessions;
@@ -12,6 +14,7 @@ public class UserSessionOpeningService
     private readonly IUserAccountRepository accountRepository;
     private readonly IUserSessionRepository sessionRepository;
     private readonly ITwoFactorAuthenticationRepository twoFactorRepository;
+    private readonly IEmailRequestRepository emailRequests;
     private readonly DatabaseChangesSavingService savingService;
     private readonly SecurityJournalService securityJournal;
     private readonly ISecureTokenGenerator tokenGenerator;
@@ -22,6 +25,7 @@ public class UserSessionOpeningService
         IUserAccountRepository accountRepository,
         IUserSessionRepository sessionRepository,
         ITwoFactorAuthenticationRepository twoFactorRepository,
+        IEmailRequestRepository emailRequests,
         DatabaseChangesSavingService savingService,
         SecurityJournalService securityJournal,
         ISecureTokenGenerator tokenGenerator,
@@ -30,6 +34,7 @@ public class UserSessionOpeningService
         this.accountRepository = accountRepository;
         this.sessionRepository = sessionRepository;
         this.twoFactorRepository = twoFactorRepository;
+        this.emailRequests = emailRequests;
         this.savingService = savingService;
         this.securityJournal = securityJournal;
         this.tokenGenerator = tokenGenerator;
@@ -72,8 +77,9 @@ public class UserSessionOpeningService
     }
 
     // Un passage : lit le compte, vérifie que ce qui vient d'être contrôlé est toujours valable, puis prépare en une fois
-    // les compteurs remis à zéro, la nouvelle session, le nouvel appareil s'il y en a un, le code de secours utilisé s'il y en a un,
-    // et l'événement du journal. Donne faux si le compte a disparu ou si ce qui vient d'être vérifié n'est plus valable.
+    // les compteurs remis à zéro, la nouvelle session, le nouvel appareil s'il y en a un avec son alerte, le code de secours
+    // utilisé s'il y en a un, et l'événement du journal. Donne faux si le compte a disparu ou si ce qui vient d'être vérifié
+    // n'est plus valable.
     private async Task<PreparedChanges<bool>> PrepareLoginAsync(
         SuccessfulLogin login,
         UserSession session,
@@ -106,7 +112,7 @@ public class UserSessionOpeningService
 
         if (device != null)
         {
-            sessionRepository.PrepareDevice(device);
+            await PrepareNewDeviceAsync(device, login, session.LastActivityAt);
         }
 
         securityJournal.PrepareEvent(
@@ -116,6 +122,20 @@ public class UserSessionOpeningService
             login.IpAddress);
 
         return PreparedChanges<bool>.SaveThenReturn(true);
+    }
+
+    // Prépare le nouvel appareil, et l'alerte « nouvel appareil » s'il n'est pas le premier du compte : la toute première
+    // connexion d'un compte ne la déclenche pas (GR Notif). Deux premières connexions simultanées ne se croient pas
+    // toutes les deux la première : le compte, contrôlé à l'enregistrement, fait passer la seconde après la première,
+    // et elle relit alors l'appareil de la première.
+    private async Task PrepareNewDeviceAsync(Device device, SuccessfulLogin login, DateTime now)
+    {
+        if (await sessionRepository.HasDeviceAsync(login.AccountId))
+        {
+            emailRequests.PrepareRequest(EmailRequest.ForNewDevice(login.AccountId, login.IpAddress, now));
+        }
+
+        sessionRepository.PrepareDevice(device);
     }
 
     // Une récupération du mot de passe (SS §3), une activation ou une désactivation a pu passer pendant les vérifications.

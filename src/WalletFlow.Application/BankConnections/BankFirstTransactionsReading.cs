@@ -1,3 +1,4 @@
+using WalletFlow.Application.Notifications;
 using WalletFlow.Application.Persistence;
 using WalletFlow.Application.Transactions;
 using WalletFlow.Domain.AccountsAndCategories;
@@ -5,26 +6,31 @@ using WalletFlow.Domain.AccountsAndCategories;
 namespace WalletFlow.Application.BankConnections;
 
 // La première lecture des opérations d'une connexion, juste après son autorisation ou son renouvellement (GR Comptes) :
-// la fin de la connexion (BankConnectionFinishService) s'en sert, une fois la connexion enregistrée.
+// la fin de la connexion (BankConnectionFinishService) s'en sert, une fois la connexion enregistrée. Quand des opérations arrivent,
+// les seuils de budget de l'utilisateur sont vérifiés juste après : seules celles du mois en cours peuvent en déclencher un.
 public class BankFirstTransactionsReading
 {
     private readonly IBankDataProvider bankProvider;
     private readonly IBankConnectionRepository connectionRepository;
     private readonly BankTransactionArrival transactionArrival;
+    private readonly BudgetAlertService budgetAlerts;
     private readonly DatabaseChangesSavingService savingService;
     private readonly TimeProvider clock;
 
-    // Reçoit le prestataire, l'accès aux connexions, l'arrivée des opérations, l'enregistrement avec réessai et l'horloge.
+    // Reçoit le prestataire, l'accès aux connexions, l'arrivée des opérations, la vérification des budgets,
+    // l'enregistrement avec réessai et l'horloge.
     public BankFirstTransactionsReading(
         IBankDataProvider bankProvider,
         IBankConnectionRepository connectionRepository,
         BankTransactionArrival transactionArrival,
+        BudgetAlertService budgetAlerts,
         DatabaseChangesSavingService savingService,
         TimeProvider clock)
     {
         this.bankProvider = bankProvider;
         this.connectionRepository = connectionRepository;
         this.transactionArrival = transactionArrival;
+        this.budgetAlerts = budgetAlerts;
         this.savingService = savingService;
         this.clock = clock;
     }
@@ -64,9 +70,14 @@ public class BankFirstTransactionsReading
             return;
         }
 
-        await savingService.SaveWithRetriesAsync(
+        var addedCount = await savingService.SaveWithRetriesAsync(
             () => PrepareFirstTransactionsAsync(userId, connectionId, transactionsByAccount),
             0);
+
+        if (addedCount > 0)
+        {
+            await budgetAlerts.CheckAsync(userId);
+        }
     }
 
     // Un passage : vérifie que la connexion est toujours là, puis prépare les opérations nouvelles de chacun de ses comptes.

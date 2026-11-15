@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata.Builders;
 using WalletFlow.Domain.NotificationsAndSupport;
 using WalletFlow.Domain.UsersAndSecurity;
+using WalletFlow.Infrastructure.Persistence.DatabaseCodes;
 
 namespace WalletFlow.Infrastructure.Persistence.TableConfigurations.NotificationsAndSupport;
 
@@ -14,10 +15,11 @@ public class AlertPreferenceTableConfiguration : IEntityTypeConfiguration<AlertP
         builder.ToTable("parametrer");
 
         // La clé primaire réunit l'utilisateur et le type d'alerte.
-        builder.HasKey(nameof(AlertPreference.UserId), nameof(AlertPreference.AlertTypeCode));
+        builder.HasKey(nameof(AlertPreference.UserId), nameof(AlertPreference.Kind));
 
         builder.Property(nameof(AlertPreference.UserId)).HasColumnName("id_utilisateur");
-        builder.Property(nameof(AlertPreference.AlertTypeCode)).HasColumnName("code_type_alerte");
+        builder.Property(nameof(AlertPreference.Kind)).HasColumnName("code_type_alerte")
+            .HasConversion(AlertKindDatabaseCodes.Table.Converter);
         builder.Property(nameof(AlertPreference.IsEnabled)).HasColumnName("alerte_activee");
 
         // Un choix d'alerte appartient à un utilisateur et disparaît avec lui (ON DELETE CASCADE).
@@ -27,7 +29,7 @@ public class AlertPreferenceTableConfiguration : IEntityTypeConfiguration<AlertP
 
         // Les types d'alerte forment une liste fixe, qu'on ne supprime pas (NO ACTION).
         builder.HasOne<AlertType>().WithMany()
-            .HasForeignKey(nameof(AlertPreference.AlertTypeCode))
+            .HasForeignKey(nameof(AlertPreference.Kind))
             .OnDelete(DeleteBehavior.NoAction);
     }
 }

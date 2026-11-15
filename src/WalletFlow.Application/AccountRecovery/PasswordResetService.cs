@@ -1,8 +1,10 @@
 using System.Net;
+using WalletFlow.Application.Emails;
 using WalletFlow.Application.Persistence;
 using WalletFlow.Application.Security;
 using WalletFlow.Application.UserAccounts;
 using WalletFlow.Application.UserSessions;
+using WalletFlow.Domain.NotificationsAndSupport;
 using WalletFlow.Domain.UsersAndSecurity;
 
 namespace WalletFlow.Application.AccountRecovery;
@@ -13,6 +15,7 @@ public class PasswordResetService
 {
     private readonly IUserAccountRepository accountRepository;
     private readonly IUserSessionRepository sessionRepository;
+    private readonly IEmailRequestRepository emailRequests;
     private readonly DatabaseChangesSavingService savingService;
     private readonly SecurityJournalService securityJournal;
     private readonly IPasswordHasher passwordHasher;
@@ -23,6 +26,7 @@ public class PasswordResetService
     public PasswordResetService(
         IUserAccountRepository accountRepository,
         IUserSessionRepository sessionRepository,
+        IEmailRequestRepository emailRequests,
         DatabaseChangesSavingService savingService,
         SecurityJournalService securityJournal,
         IPasswordHasher passwordHasher,
@@ -31,6 +35,7 @@ public class PasswordResetService
     {
         this.accountRepository = accountRepository;
         this.sessionRepository = sessionRepository;
+        this.emailRequests = emailRequests;
         this.savingService = savingService;
         this.securityJournal = securityJournal;
         this.passwordHasher = passwordHasher;
@@ -81,7 +86,8 @@ public class PasswordResetService
     }
 
     // Un passage : lit le lien et son compte, les vérifie, puis prépare le nouveau mot de passe, le compte débloqué,
-    // le lien utilisé et l'événement du journal. Donne l'identifiant du compte, ou null si le lien ne vaut plus.
+    // le lien utilisé, l'événement du journal et l'alerte du changement (GR Notif).
+    // Donne l'identifiant du compte, ou null si le lien ne vaut plus.
     private async Task<PreparedChanges<Guid?>> PrepareNewPasswordAsync(string tokenHash, string newPasswordHash, IPAddress? ipAddress)
     {
         var token = await FindUsableTokenAsync(tokenHash);
@@ -96,10 +102,13 @@ public class PasswordResetService
             return PreparedChanges<Guid?>.NothingToSave(null);
         }
 
+        var now = clock.GetUtcNow().UtcDateTime;
+
         account.ReplacePasswordHash(newPasswordHash);
         account.Unlock();
-        token.MarkAsUsed(clock.GetUtcNow().UtcDateTime);
+        token.MarkAsUsed(now);
         securityJournal.PrepareEvent(SecurityEventType.PasswordChange, SecurityEventResult.Success, account.Id, ipAddress);
+        emailRequests.PrepareRequest(EmailRequest.ForPasswordChange(account.Id, ipAddress, now));
 
         return PreparedChanges<Guid?>.SaveThenReturn(account.Id);
     }

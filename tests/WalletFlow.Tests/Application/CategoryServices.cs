@@ -1,4 +1,5 @@
 using WalletFlow.Application.Categories;
+using WalletFlow.Application.Notifications;
 using WalletFlow.Application.Persistence;
 using WalletFlow.Domain.AccountsAndCategories;
 using WalletFlow.Tests.Fakes;
@@ -10,12 +11,19 @@ public class CategoryServices
 {
     public Guid UserId { get; } = Guid.NewGuid();
     public FakeCategoryRepository Repository { get; } = new FakeCategoryRepository();
+    public FakeBankConnectionRepository Bank { get; } = new FakeBankConnectionRepository();
+    public FakeTransactionRepository Transactions { get; }
+    public FakeAlertRepository Alerts { get; } = new FakeAlertRepository();
+    public FakeEmailRequestRepository EmailRequests { get; } = new FakeEmailRequestRepository();
+    public FakeTimeProvider Clock { get; } = new FakeTimeProvider();
     public FakeDatabaseUnitOfWork UnitOfWork { get; }
 
-    // Relie la fausse base à la fausse unité de travail, et donne à l'utilisateur ses catégories par défaut.
+    // Relie les fausses bases à la fausse unité de travail, et donne à l'utilisateur ses catégories par défaut.
     public CategoryServices()
     {
-        UnitOfWork = new FakeDatabaseUnitOfWork(Repository);
+        Transactions = new FakeTransactionRepository(Bank, Repository);
+        Alerts.Categories = Repository;
+        UnitOfWork = new FakeDatabaseUnitOfWork(Repository, Transactions, Alerts, EmailRequests);
         Repository.SavedCategories.AddRange(DefaultCategories.CreateForUser(UserId));
     }
 
@@ -40,13 +48,25 @@ public class CategoryServices
     // Crée le service qui fixe le budget d'une catégorie.
     public CategoryBudgetService CreateBudget()
     {
-        return new CategoryBudgetService(Repository, new DatabaseChangesSavingService(UnitOfWork));
+        return new CategoryBudgetService(Repository, CreateBudgetAlerts(), new DatabaseChangesSavingService(UnitOfWork));
     }
 
     // Crée le service qui supprime une catégorie.
     public CategoryDeletionService CreateDeletion()
     {
-        return new CategoryDeletionService(Repository);
+        return new CategoryDeletionService(Repository, CreateBudgetAlerts());
+    }
+
+    // Crée la vérification des budgets, sur les fausses bases.
+    public BudgetAlertService CreateBudgetAlerts()
+    {
+        return new BudgetAlertService(
+            Repository,
+            Transactions,
+            Alerts,
+            new AlertPreparation(Alerts, EmailRequests),
+            new DatabaseChangesSavingService(UnitOfWork),
+            Clock);
     }
 
     // Donne la catégorie de l'utilisateur qui porte ce nom.

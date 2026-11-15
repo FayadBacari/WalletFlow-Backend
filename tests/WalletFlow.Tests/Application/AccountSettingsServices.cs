@@ -23,6 +23,7 @@ public static class AccountSettingsServices
         return new PasswordChangeService(
             tools.AccountRepository,
             tools.SessionRepository,
+            tools.EmailRequests,
             tools.CreateSavingService(),
             tools.CreateSecurityJournal(),
             CreateIdentityChecking(tools),
@@ -40,7 +41,8 @@ public static class AccountSettingsServices
             tools.CreateSecurityJournal(),
             CreateIdentityChecking(tools),
             limiter,
-            tools.EmailQueue);
+            tools.EmailRequests,
+            tools.Clock);
     }
 
     // Crée le service qui confirme une nouvelle adresse.
@@ -52,7 +54,7 @@ public static class AccountSettingsServices
             tools.CreateSecurityJournal(),
             tools.PasswordHasher,
             tools.TokenGenerator,
-            tools.EmailQueue,
+            tools.EmailRequests,
             tools.Clock);
     }
 

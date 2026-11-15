@@ -280,18 +280,20 @@ public class BankConnectionRepositoryTests
         await new BankAuthorizationStartService(provider, repository, store, tokens, new PublicWebsiteSettings("https://walletflow.test"), clock)
             .StartNewAsync(user.Id, FakeBankDataProvider.BankName);
         provider.AddSession("code-1", new TestBankAccount("stable-1", "Compte courant", "EUR", 10_000));
-        var firstReading = new BankFirstTransactionsReading(provider, repository, arrival, CreateSavingService(databaseContext), clock);
-        var finished = await new BankConnectionFinishService(provider, repository, store, tokens, firstReading, CreateSavingService(databaseContext), journal, clock)
+        var budgetAlerts = CreateBudgetAlerts(databaseContext, clock);
+        var firstReading = new BankFirstTransactionsReading(provider, repository, arrival, budgetAlerts, CreateSavingService(databaseContext), clock);
+        var finished = await new BankConnectionFinishService(
+                provider, repository, new AlertRepository(databaseContext), store, tokens, firstReading, CreateSavingService(databaseContext), journal, clock)
             .FinishAsync(user.Id, "code-1", provider.AuthorizationRequests.Single().State, presence);
         var connectionId = Assert.IsType<BankConnectionFinishResult.Connected>(finished).ConnectionId;
 
         provider.ChangeBalance("stable-1", 42_000);
         clock.Advance(TimeSpan.FromHours(1));
-        await new BankBalanceUpdateService(provider, repository, new InMemoryBankUpdateLimiter(clock), arrival, CreateSavingService(databaseContext), clock)
+        await new BankBalanceUpdateService(provider, repository, new InMemoryBankUpdateLimiter(clock), arrival, budgetAlerts, CreateSavingService(databaseContext), clock)
             .UpdateForUserAsync(user.Id, presence);
         var updatedAccount = await databaseContext.BankAccounts.AsNoTracking().SingleAsync(row => row.BankConnectionId == connectionId);
 
-        var disconnected = await new BankDisconnectionService(provider, repository, journal)
+        var disconnected = await new BankDisconnectionService(provider, repository, budgetAlerts, journal)
             .DisconnectAsync(user.Id, connectionId, presence.IpAddress);
 
         Assert.Equal(42_000, updatedAccount.BalanceInCents);

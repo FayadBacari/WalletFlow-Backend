@@ -15,6 +15,10 @@ public interface ISuggestionRepository
     // Cherche cette suggestion parmi celles de l'utilisateur. Renvoie null si elle n'existe pas, ou si elle est à un autre.
     Task<SavingsSuggestion?> FindAsync(Guid userId, Guid suggestionId);
 
+    // Donne, dans l'ordre de leur identifiant, au plus ce nombre d'utilisateurs après celui-ci (tous si null) dont ce mois
+    // attend son calcul : compte confirmé, au moins une opération, et un dernier mois calculé vide ou plus ancien. Rien n'est suivi.
+    Task<List<Guid>> FindUsersToCalculateAsync(DateOnly month, Guid? afterUserId, int count);
+
     // Additionne les mouvements créés en acceptant les suggestions de l'utilisateur (DD §11, economies_realisees).
     // Un mouvement effacé avec son sac n'y est plus : son argent est revenu dans l'argent disponible.
     Task<long> SumSavedAsync(Guid userId);

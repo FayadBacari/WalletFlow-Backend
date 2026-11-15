@@ -75,7 +75,7 @@
 - L'utilisateur peut déplacer de l'argent disponible vers un sac, d'un sac à un autre, ou d'un sac vers l'argent disponible.
 - L'utilisateur peut donner un objectif à un sac : un montant à atteindre et, s'il le souhaite, une date. Il peut le changer ou l'enlever.
 - L'utilisateur peut voir la progression de chaque sac vers son objectif.
-- L'utilisateur est alerté quand un sac atteint son objectif, une seule fois par objectif : un nouvel objectif peut déclencher une nouvelle alerte.
+- L'utilisateur est alerté quand un sac atteint son objectif, une seule fois par objectif : un nouveau montant à atteindre peut déclencher une nouvelle alerte, pas un simple changement de date.
 - L'utilisateur peut voir l'historique des mouvements d'un sac.
 - L'argent qui n'est dans aucun sac est affiché comme « argent disponible ».
 - Un déplacement d'argent ne peut pas porter le total des sacs au-dessus du solde total.
@@ -94,6 +94,7 @@
 - Les suggestions basées sur des moyennes n'apparaissent qu'à partir de 3 mois d'historique.
 - Une suggestion ignorée ne réapparaît pas. Pendant 30 jours, aucune suggestion de la même règle, ni de la même catégorie, n'est proposée.
 - Les suggestions portent sur le dernier mois complet, heure de Paris. Elles sont calculées une seule fois, à partir du 5 du mois suivant, pour laisser à la banque le temps de transmettre les dernières opérations.
+- Une opération que la banque transmet après ce calcul ne change plus les suggestions de son mois.
 - L'argent disponible en fin de mois est celui du moment du calcul.
 - Le montant à économiser par mois est, selon la règle : ce que la catégorie a dépensé au-dessus de sa moyenne, l'argent disponible, ou ce qui manque à l'épargne du mois pour atteindre 20 % des revenus.
 - Le dépassement ne concerne qu'une catégorie de dépenses. La règle sur l'épargne du mois ne s'applique qu'à un mois qui a des revenus et dont tout l'historique est connu.
@@ -131,6 +132,8 @@
 - Supprimer une catégorie déplace ses transactions dans « Autres ».
 - Les catégories par défaut se renomment et se suppriment comme les autres, sauf « Autres », qui ne peut être ni renommée ni supprimée.
 - L'utilisateur est alerté quand il atteint 80 %, puis 100 % du budget d'une catégorie. Chaque seuil ne déclenche qu'une alerte par catégorie et par mois.
+- Seules les dépenses du mois en cours déclenchent une alerte de budget : une opération d'un mois passé n'en déclenche aucune.
+- Si une opération fait passer les deux seuils d'un coup, seule l'alerte de 100 % est envoyée.
 
 
 ## Compte et données personnelles

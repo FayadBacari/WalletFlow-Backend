@@ -9,6 +9,8 @@ using WalletFlow.Api.Authentication;
 using WalletFlow.Api.Configuration;
 using WalletFlow.Api.Controllers;
 using WalletFlow.Application.AccountRecovery;
+using WalletFlow.Application.Emails;
+using WalletFlow.Application.Notifications;
 using WalletFlow.Application.Security;
 using WalletFlow.Application.TwoFactorAuthentication;
 using WalletFlow.Application.UserSessions;
@@ -441,8 +443,9 @@ public class UserSessionEndpointTests
         Assert.NotNull(scope.ServiceProvider.GetRequiredService<PasswordRecoveryRequestService>());
         Assert.NotNull(scope.ServiceProvider.GetRequiredService<PasswordResetService>());
         Assert.NotNull(scope.ServiceProvider.GetRequiredService<AccountUnlockService>());
-        Assert.NotNull(scope.ServiceProvider.GetRequiredService<BackgroundEmailRequestProcessingService>());
-        Assert.IsType<InMemoryBackgroundEmailRequestQueue>(scope.ServiceProvider.GetRequiredService<IBackgroundEmailRequestQueue>());
+        Assert.NotNull(scope.ServiceProvider.GetRequiredService<EmailRequestProcessingService>());
+        Assert.IsType<EmailRequestRepository>(scope.ServiceProvider.GetRequiredService<IEmailRequestRepository>());
+        Assert.IsType<FrenchSecurityAlertEmails>(scope.ServiceProvider.GetRequiredService<ISecurityAlertEmails>());
         Assert.IsType<InMemoryPasswordRecoveryRequestLimiter>(scope.ServiceProvider.GetRequiredService<IPasswordRecoveryRequestLimiter>());
     }
 

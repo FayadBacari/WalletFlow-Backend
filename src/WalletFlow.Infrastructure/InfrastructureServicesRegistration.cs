@@ -8,6 +8,7 @@ using WalletFlow.Application.Suggestions;
 using WalletFlow.Application.BankConnections;
 using WalletFlow.Application.Categories;
 using WalletFlow.Application.Emails;
+using WalletFlow.Application.Notifications;
 using WalletFlow.Application.Persistence;
 using WalletFlow.Application.Security;
 using WalletFlow.Application.Transactions;
@@ -46,6 +47,8 @@ public static class InfrastructureServicesRegistration
         services.AddScoped<IBagRepository, BagRepository>();
         services.AddScoped<ISuggestionRepository, SuggestionRepository>();
         services.AddScoped<IResourceOwnershipRepository, ResourceOwnershipRepository>();
+        services.AddScoped<IEmailRequestRepository, EmailRequestRepository>();
+        services.AddScoped<IAlertRepository, AlertRepository>();
 
         return services;
     }
@@ -80,10 +83,10 @@ public static class InfrastructureServicesRegistration
         return services;
     }
 
-    // Ajoute la file des e-mails préparés en arrière-plan.
+    // Ajoute le réveil de la tâche de fond des e-mails : la file elle-même est gardée en base (voir AddWalletFlowDatabase).
     public static IServiceCollection AddEmailQueue(this IServiceCollection services)
     {
-        services.AddSingleton<IBackgroundEmailRequestQueue, InMemoryBackgroundEmailRequestQueue>();
+        services.AddSingleton<EmailRequestWakeUp>();
 
         return services;
     }
@@ -94,6 +97,8 @@ public static class InfrastructureServicesRegistration
         services.AddSingleton<IAccountRegistrationEmails, FrenchAccountRegistrationEmails>();
         services.AddSingleton<IAccountRecoveryEmails, FrenchAccountRecoveryEmails>();
         services.AddSingleton<IAccountChangeEmails, FrenchAccountChangeEmails>();
+        services.AddSingleton<ISecurityAlertEmails, FrenchSecurityAlertEmails>();
+        services.AddSingleton<IAlertEmails, FrenchAlertEmails>();
         return services;
     }
 

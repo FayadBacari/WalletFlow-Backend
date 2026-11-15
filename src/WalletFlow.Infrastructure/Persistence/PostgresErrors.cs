@@ -25,6 +25,17 @@ public static class PostgresErrors
     // sur « accepter » bute donc sur cette contrainte avant le contrôle de la ligne : c'est le même conflit, à rejouer.
     public const string MovementSuggestionUniqueConstraint = "mouvement_sac_id_suggestion_key";
 
+    // Noms des index uniques du script SQL : une alerte ne part qu'une fois (DD §9.3). Deux vérifications simultanées
+    // peuvent préparer la même : la seconde bute sur l'index, relit, et trouve l'alerte déjà partie.
+    public const string BudgetAlertUniqueIndex = "ux_alerte_budget";
+    public const string SuggestionAlertUniqueIndex = "ux_alerte_suggestion";
+    public const string BagAlertUniqueIndex = "ux_alerte_sac";
+    public const string AuthorizationAlertUniqueIndex = "ux_alerte_autorisation";
+
+    // Nom donné par PostgreSQL à la clé primaire de parametrer : de deux premiers choix simultanés pour le même type d'alerte,
+    // le second bute sur elle, relit, et change le premier.
+    public const string AlertPreferencePrimaryKey = "parametrer_pkey";
+
     // Noms donnés par PostgreSQL aux clés étrangères vers une ligne qu'une autre requête peut supprimer au même instant :
     // la connexion d'un nouveau compte, le compte d'une nouvelle opération, la catégorie d'une opération ou d'une règle,
     // les deux sacs d'un nouveau mouvement, et la catégorie dépassée d'une nouvelle suggestion.
@@ -36,6 +47,12 @@ public static class PostgresErrors
     public const string MovementDestinationBagForeignKey = "mouvement_sac_id_sac_arrivee_fkey";
     public const string SuggestionCategoryForeignKey = "suggestion_id_categorie_fkey";
 
+    // Noms donnés par PostgreSQL aux clés étrangères d'une nouvelle alerte vers la catégorie, le sac ou la connexion
+    // qu'une autre requête peut supprimer au même instant.
+    public const string AlertCategoryForeignKey = "alerte_id_categorie_fkey";
+    public const string AlertBagForeignKey = "alerte_id_sac_fkey";
+    public const string AlertConnectionForeignKey = "alerte_id_connexion_fkey";
+
     // Nom de la contrainte du script SQL : un mouvement garde au moins un sac. L'application ne crée jamais un mouvement
     // sans sac : cette contrainte refuse seulement deux suppressions simultanées de deux sacs reliés par un mouvement,
     // qui viderait chacune un côté de ce mouvement. La seconde suppression recommence, et le déclencheur efface alors ce mouvement.
@@ -43,17 +60,21 @@ public static class PostgresErrors
 
     // Les contraintes d'unicité qu'une autre requête peut prendre au même instant : l'adresse e-mail, le nom de catégorie,
     // l'opération qu'une autre mise à jour vient d'ajouter, la suggestion qu'un autre calcul du même mois vient d'enregistrer,
-    // ou le mouvement qu'une autre acceptation de la même suggestion vient de créer.
+    // le mouvement qu'une autre acceptation de la même suggestion vient de créer, l'alerte qu'une autre vérification vient
+    // d'envoyer, ou le choix d'alerte qu'une autre requête vient de créer.
     private static readonly List<string> ConflictUniqueConstraints = new List<string>
     {
         EmailUniqueConstraint, CategoryNameUniqueIndex, TransactionExternalIdUniqueConstraint,
-        SuggestionCategoryMonthUniqueIndex, SuggestionRuleMonthUniqueIndex, MovementSuggestionUniqueConstraint
+        SuggestionCategoryMonthUniqueIndex, SuggestionRuleMonthUniqueIndex, MovementSuggestionUniqueConstraint,
+        BudgetAlertUniqueIndex, SuggestionAlertUniqueIndex, BagAlertUniqueIndex, AuthorizationAlertUniqueIndex,
+        AlertPreferencePrimaryKey
     };
 
     private static readonly List<string> ConflictForeignKeys = new List<string>
     {
         BankAccountConnectionForeignKey, TransactionAccountForeignKey, TransactionCategoryForeignKey, RuleCategoryForeignKey,
-        MovementSourceBagForeignKey, MovementDestinationBagForeignKey, SuggestionCategoryForeignKey
+        MovementSourceBagForeignKey, MovementDestinationBagForeignKey, SuggestionCategoryForeignKey,
+        AlertCategoryForeignKey, AlertBagForeignKey, AlertConnectionForeignKey
     };
 
     // Renvoie vrai si l'erreur vient de l'unicité de l'adresse e-mail : un autre compte utilise déjà cette adresse.

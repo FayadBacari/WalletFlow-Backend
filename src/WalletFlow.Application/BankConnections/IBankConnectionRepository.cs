@@ -36,6 +36,10 @@ public interface IBankConnectionRepository
     // Garde de côté un nouveau compte : il ne sera enregistré qu'avec les autres changements.
     void PrepareAccount(BankAccount account);
 
+    // La connexion sera écrite même si rien n'y a changé : l'enregistrement échoue alors si une autre requête l'a écrite
+    // depuis sa lecture. L'alerte d'une autorisation à renouveler et le renouvellement passent ainsi un par un.
+    void PrepareUnchangedCheck(BankConnection connection);
+
     // Supprime la connexion de l'utilisateur, avec ses comptes et leurs transactions (GR Comptes), si son identifiant
     // chez le prestataire est toujours celui-ci. Écriture immédiate. Renvoie faux si rien n'a été supprimé.
     Task<bool> DeleteAsync(Guid userId, Guid connectionId, string externalConnectionId);

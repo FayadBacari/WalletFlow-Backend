@@ -97,6 +97,13 @@ public class BankConnectionRepository : IBankConnectionRepository
         databaseContext.BankAccounts.Add(account);
     }
 
+    // Marque l'état de la connexion comme changé : EF Core écrit alors la ligne en vérifiant sa version (xmin),
+    // et l'enregistrement échoue si une autre requête l'a écrite entre-temps.
+    public void PrepareUnchangedCheck(BankConnection connection)
+    {
+        databaseContext.Entry(connection).Property(nameof(BankConnection.Status)).IsModified = true;
+    }
+
     // Une seule instruction : la connexion part avec ses comptes et leurs transactions (ON DELETE CASCADE).
     // Cette écriture est immédiate : elle refuse de partir si des changements attendent l'unité de travail.
     // Un renouvellement simultané verrouille le compte puis la connexion, cette suppression la connexion puis le compte :

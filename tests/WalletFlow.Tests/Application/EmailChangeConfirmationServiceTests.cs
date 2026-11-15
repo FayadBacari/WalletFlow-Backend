@@ -1,5 +1,5 @@
-using WalletFlow.Application.AccountRecovery;
 using WalletFlow.Application.AccountSettings;
+using WalletFlow.Domain.NotificationsAndSupport;
 using WalletFlow.Domain.UsersAndSecurity;
 using WalletFlow.Tests.Fakes;
 
@@ -69,9 +69,11 @@ public class EmailChangeConfirmationServiceTests
         Assert.Equal(new List<EmailTokenType> { EmailTokenType.EmailChange }, tools.AccountRepository.SavedEmailTokens.Where(token => token.UserId == account.Id).Select(token => token.Type).ToList());
         Assert.Single(tools.AccountRepository.SavedEmailTokens, token => token.UserId == otherAccount.Id);
         Assert.Equal(1, tools.CountSecurityEvents(SecurityEventType.EmailChange, SecurityEventResult.Success));
-        var notice = Assert.IsType<BackgroundEmailRequest.EmailChangedNotice>(Assert.Single(tools.EmailQueue.AddedRequests));
-        Assert.Equal(TwoFactorServicesWithFakeTools.AccountEmail, notice.OldEmailAddress);
-        Assert.Equal(account.Id, notice.AccountId);
+        var notice = Assert.Single(tools.EmailRequests.SavedRequests);
+        Assert.Equal(EmailRequestType.EmailChangedNotice, notice.Type);
+        Assert.Equal(TwoFactorServicesWithFakeTools.AccountEmail, notice.EmailAddress);
+        Assert.Equal(account.Id, notice.UserId);
+        Assert.Equal(TwoFactorServicesWithFakeTools.IpAddress, notice.IpAddress);
     }
 
     // Un mauvais mot de passe ne consomme pas le lien : l'adresse ne change pas, et l'ancienne n'est pas prévenue.
@@ -86,7 +88,7 @@ public class EmailChangeConfirmationServiceTests
         Assert.IsType<EmailChangeConfirmationResult.WrongPassword>(result);
         Assert.Equal(TwoFactorServicesWithFakeTools.AccountEmail, account.Email);
         Assert.Null(FindEmailChangeLinkOf(account).UsedAt);
-        Assert.Empty(tools.EmailQueue.AddedRequests);
+        Assert.Empty(tools.EmailRequests.SavedRequests);
         Assert.Equal(1, tools.CountSecurityEvents(SecurityEventType.EmailChange, SecurityEventResult.Failure));
     }
 
@@ -153,7 +155,7 @@ public class EmailChangeConfirmationServiceTests
         Assert.IsType<EmailChangeConfirmationResult.EmailAlreadyUsed>(result);
         Assert.Equal(TwoFactorServicesWithFakeTools.AccountEmail, account.Email);
         Assert.Null(FindEmailChangeLinkOf(account).UsedAt);
-        Assert.Empty(tools.EmailQueue.AddedRequests);
+        Assert.Empty(tools.EmailRequests.SavedRequests);
     }
 
     // Un autre compte prend l'adresse au tout dernier moment : la base refuse le double, tout est relu, et le refus est clair.

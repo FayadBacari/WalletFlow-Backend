@@ -1,5 +1,6 @@
 using WalletFlow.Application.Bags;
 using WalletFlow.Application.BankConnections;
+using WalletFlow.Application.Notifications;
 using WalletFlow.Application.Persistence;
 using WalletFlow.Application.Suggestions;
 using WalletFlow.Domain.AccountsAndCategories;
@@ -31,9 +32,14 @@ public class SuggestionServices
         Bank.Clock.Advance(TimeSpan.FromDays(daysAfterNovember4));
         User = new User { Id = Bank.UserId, Email = "suggestions@exemple.test", PasswordHash = "empreinte-de-test", IsEmailConfirmed = true };
         Bags.SavedUsers.Add(User);
-        Suggestions = new FakeSuggestionRepository(Bags);
-        UnitOfWork = new FakeDatabaseUnitOfWork(Bags, Suggestions);
+        Suggestions = new FakeSuggestionRepository(Bags) { Transactions = Bank.Transactions };
+        Bank.Alerts.Bags = Bags;
+        UnitOfWork = new FakeDatabaseUnitOfWork(Bags, Suggestions, Bank.Alerts, Bank.EmailRequests);
     }
+
+    // Les fausses alertes et la fausse file d'e-mails, les mêmes que celles des connexions bancaires.
+    public FakeAlertRepository Alerts => Bank.Alerts;
+    public FakeEmailRequestRepository EmailRequests => Bank.EmailRequests;
 
     // L'identifiant de l'utilisateur des tests.
     public Guid UserId => User.Id;
@@ -41,17 +47,23 @@ public class SuggestionServices
     // L'heure de l'horloge des tests.
     public DateTime Now => Bank.Now;
 
-    // Crée le service qui calcule et liste les suggestions.
-    public SuggestionListService CreateList()
+    // Crée le service qui calcule les suggestions.
+    public SuggestionCalculationService CreateCalculation()
     {
-        return new SuggestionListService(
+        return new SuggestionCalculationService(
             Bags,
             Suggestions,
             Bank.Transactions,
-            Bank.Categories,
+            new AlertPreparation(Alerts, EmailRequests),
             new BankBalanceTotalService(Bank.Repository),
             new DatabaseChangesSavingService(UnitOfWork),
             Bank.Clock);
+    }
+
+    // Crée le service qui calcule et liste les suggestions.
+    public SuggestionListService CreateList()
+    {
+        return new SuggestionListService(CreateCalculation(), Suggestions, Bank.Categories);
     }
 
     // Crée le service qui accepte une suggestion.
@@ -61,6 +73,7 @@ public class SuggestionServices
             Bags,
             Suggestions,
             new BagMovementChecks(Bags, new BankBalanceTotalService(Bank.Repository)),
+            new BagGoalAlerts(Bags, Alerts, new AlertPreparation(Alerts, EmailRequests)),
             new DatabaseChangesSavingService(UnitOfWork),
             Bank.Clock);
     }

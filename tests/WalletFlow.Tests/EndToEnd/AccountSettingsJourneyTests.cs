@@ -13,7 +13,7 @@ using static WalletFlow.Tests.EndToEnd.TestAccountCleanup;
 
 namespace WalletFlow.Tests.EndToEnd;
 
-// Parcourt le compte et les données personnelles comme un utilisateur, sur la vraie base de test (GR Compte, SS §2 et §3) :
+// Parcourt le compte et les données personnelles comme un utilisateur, sur la vraie base de test (GR Compte, GR Notif, SS §2 et §3) :
 // les droits de la base sur chaque colonne, la file des e-mails et les transactions sont les vrais.
 [Collection(RealDatabaseCollection.Name)]
 public class AccountSettingsJourneyTests
@@ -42,7 +42,12 @@ public class AccountSettingsJourneyTests
         {
             await RegisterThenConfirmAsync(api, currentBrowser, oldEmail);
             var csrfToken = await LogInThenGetCsrfTokenAsync(currentBrowser, oldEmail);
+            Assert.Equal(1, api.EmailSender.CountSentEmailsTo(oldEmail));
+
+            // L'autre navigateur est un appareil que le compte ne connaît pas : l'alerte part, la première connexion n'en a pas eu.
             await LogInThenGetCsrfTokenAsync(otherBrowser, oldEmail);
+            await WaitUntilAsync(() => api.EmailSender.CountSentEmailsTo(oldEmail) == 2);
+            Assert.Equal("Nouvelle connexion à ton compte WalletFlow", api.EmailSender.FindLastSentEmailTo(oldEmail).Subject);
 
             // Le nom et le prénom, sans mot de passe.
             var nameResponse = await SendSettingsRequestAsync(currentBrowser, "/api/account/name", new { lastName = "Dupont", firstName = "Élise" }, csrfToken);
@@ -58,6 +63,8 @@ public class AccountSettingsJourneyTests
             Assert.Equal(HttpStatusCode.OK, passwordResponse.StatusCode);
             await ReadProfileAsync(currentBrowser);
             Assert.Equal(HttpStatusCode.Unauthorized, (await otherBrowser.GetAsync("/api/account/profile")).StatusCode);
+            await WaitUntilAsync(() => api.EmailSender.CountSentEmailsTo(oldEmail) == 3);
+            Assert.Equal("Le mot de passe de ton compte WalletFlow a changé", api.EmailSender.FindLastSentEmailTo(oldEmail).Subject);
 
             // L'adresse : la demande, le lien parti en arrière-plan, puis la confirmation depuis un autre navigateur, sans session.
             var emailResponse = await SendSettingsRequestAsync(currentBrowser, "/api/account/email", new { password = ChangedPassword, newEmail = newEmail }, csrfToken);
@@ -68,7 +75,8 @@ public class AccountSettingsJourneyTests
                 "/api/account/confirm-email-change",
                 new { token = ReadConfirmationToken(linkEmail.Body), password = ChangedPassword });
             Assert.Equal(HttpStatusCode.OK, confirmationResponse.StatusCode);
-            await WaitUntilAsync(() => api.EmailSender.CountSentEmailsTo(oldEmail) == 2);
+            await WaitUntilAsync(() => api.EmailSender.CountSentEmailsTo(oldEmail) == 4);
+            Assert.Equal("L'adresse e-mail de ton compte WalletFlow a changé", api.EmailSender.FindLastSentEmailTo(oldEmail).Subject);
 
             Assert.Equal(newEmail, (await ReadProfileAsync(currentBrowser)).GetProperty("email").GetString());
             Assert.Equal(HttpStatusCode.Unauthorized, (await SendLoginRequestAsync(api.CreateClient(), oldEmail, ChangedPassword)).StatusCode);

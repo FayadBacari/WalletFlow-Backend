@@ -1,4 +1,5 @@
 using WalletFlow.Application.AccountSettings;
+using WalletFlow.Domain.NotificationsAndSupport;
 using WalletFlow.Domain.UsersAndSecurity;
 using WalletFlow.Tests.Fakes;
 
@@ -256,5 +257,35 @@ public class PasswordChangeServiceTests
         Assert.Equal(oldHash, account.PasswordHash);
         Assert.Equal(session, Assert.Single(FindSessionsOf(account)));
         Assert.Equal(0, tools.UnitOfWork.CommittedTransactionCount);
+        Assert.Empty(tools.EmailRequests.SavedRequests);
+    }
+
+    // --- Alerte « changement de mot de passe » (GR Notif)
+
+    // Le nouveau mot de passe et son alerte partent ensemble, une seule fois, même après des conflits.
+    [Fact]
+    public async Task ChangeQueuesThePasswordChangeAlertOnce()
+    {
+        var account = tools.AddAccountWithoutTwoFactor();
+        tools.SessionRepository.LoginConflicts = 2;
+
+        await ChangePasswordAsync(account.Id, TwoFactorServicesWithFakeTools.AccountPassword);
+
+        var alert = Assert.Single(tools.EmailRequests.SavedRequests);
+        Assert.Equal(EmailRequestType.PasswordChange, alert.Type);
+        Assert.Equal(account.Id, alert.UserId);
+        Assert.Equal(TwoFactorServicesWithFakeTools.IpAddress, alert.IpAddress);
+        Assert.Null(alert.EmailAddress);
+    }
+
+    [Fact]
+    public async Task RefusedChangeQueuesNoAlert()
+    {
+        var account = tools.AddAccountWithoutTwoFactor();
+
+        await ChangePasswordAsync(account.Id, TwoFactorServicesWithFakeTools.WrongPassword);
+        await ChangePasswordAsync(account.Id, TwoFactorServicesWithFakeTools.AccountPassword, newPassword: "court");
+
+        Assert.Empty(tools.EmailRequests.SavedRequests);
     }
 }
