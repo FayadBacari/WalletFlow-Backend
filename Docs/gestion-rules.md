@@ -75,6 +75,7 @@
 - L'utilisateur peut déplacer de l'argent disponible vers un sac, d'un sac à un autre, ou d'un sac vers l'argent disponible.
 - L'utilisateur peut donner un objectif à un sac : un montant à atteindre et, s'il le souhaite, une date. Il peut le changer ou l'enlever.
 - L'utilisateur peut voir la progression de chaque sac vers son objectif.
+- L'utilisateur est alerté quand un sac atteint son objectif, une seule fois par objectif : un nouvel objectif peut déclencher une nouvelle alerte.
 - L'utilisateur peut voir l'historique des mouvements d'un sac.
 - L'argent qui n'est dans aucun sac est affiché comme « argent disponible ».
 - Un déplacement d'argent ne peut pas porter le total des sacs au-dessus du solde total.
@@ -100,6 +101,7 @@
 - Une suggestion acceptée ou ignorée ne change plus.
 - Une suggestion restée sans réponse est remplacée par celles du mois suivant.
 - Supprimer une catégorie retire ses suggestions sans réponse. Les économies déjà réalisées restent comptées.
+- Une seule alerte « nouvelle suggestion » est envoyée par mois, quand le calcul du mois en propose au moins une.
 - L'application ne recommande aucun produit financier (livret, placement, crédit). 
 
 
@@ -128,7 +130,7 @@
 - Catégories par défaut : Logement, Alimentation, Transport, Loisirs, Santé, Shopping, Revenus, Autres.
 - Supprimer une catégorie déplace ses transactions dans « Autres ».
 - Les catégories par défaut se renomment et se suppriment comme les autres, sauf « Autres », qui ne peut être ni renommée ni supprimée.
-- L'utilisateur est alerté quand il atteint 80 %, puis 100 % du budget d'une catégorie.
+- L'utilisateur est alerté quand il atteint 80 %, puis 100 % du budget d'une catégorie. Chaque seuil ne déclenche qu'une alerte par catégorie et par mois.
 
 
 ## Compte et données personnelles
@@ -166,6 +168,10 @@
 - L'utilisateur peut activer ou désactiver chaque type d'alerte.
 - Types d'alertes : budget d'une catégorie atteint, nouvelle suggestion d'épargne, objectif d'un sac atteint, autorisation bancaire à renouveler, et les alertes de sécurité : connexion depuis un nouvel appareil, compte bloqué, changement de mot de passe ou d'adresse e-mail.
 - Les alertes de sécurité (connexion depuis un nouvel appareil, compte bloqué, changement de mot de passe ou d'adresse e-mail) ne peuvent pas être désactivées.
+- Tant que l'application mobile n'existe pas, toutes les alertes partent par e-mail. Le choix du téléphone est gardé pour plus tard.
+- Les alertes restent générales : elles ne contiennent aucun montant.
+- La toute première connexion d'un compte ne déclenche pas l'alerte de nouvel appareil.
+- L'alerte de compte bloqué est l'e-mail qui contient le lien de déblocage.
 
 
 ## Suppression

@@ -102,7 +102,8 @@ public static class InfrastructureServicesRegistration
         this IServiceCollection services,
         string folderPath)
     {
-        services.AddSingleton<IEmailSender>(new LocalFolderEmailSender(folderPath));
+        services.AddSingleton<IEmailSender>(serviceProvider =>
+            new LocalFolderEmailSender(folderPath, serviceProvider.GetRequiredService<TimeProvider>()));
 
         return services;
     }

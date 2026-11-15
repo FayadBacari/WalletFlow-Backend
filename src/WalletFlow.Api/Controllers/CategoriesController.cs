@@ -170,6 +170,11 @@ public class CategoriesController : ControllerBase
             return Problem(statusCode: StatusCodes.Status404NotFound);
         }
 
+        if (result is CategoryDeletionResult.NotSaved)
+        {
+            return Problem(statusCode: StatusCodes.Status409Conflict, title: ErrorMessages.CategoriesChangedMeanwhile);
+        }
+
         return Problem(statusCode: StatusCodes.Status409Conflict, title: ErrorMessages.OtherCategoryIsFixed);
     }
 

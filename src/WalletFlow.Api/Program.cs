@@ -95,17 +95,16 @@ builder.Services.AddSingleton(
 // Le prestataire bancaire Enable Banking : l'identifiant de l'application et le chemin de sa clé privée viennent des secrets
 // (user-secrets en développement, variables d'environnement en production), jamais du code ni de Git (SS §7).
 // En production, l'API refuse de démarrer sans eux. En développement, les routes des banques répondent 503 en attendant.
-var bankApplicationId = builder.Configuration["EnableBanking:ApplicationId"];
-var bankPrivateKeyPath = builder.Configuration["EnableBanking:PrivateKeyPath"];
-var isBankProviderConfigured = !string.IsNullOrWhiteSpace(bankApplicationId) && !string.IsNullOrWhiteSpace(bankPrivateKeyPath);
-if (isBankProviderConfigured)
+var bankProviderSettings = BankProviderSettings.Read(builder.Configuration);
+if (bankProviderSettings != null)
 {
-    if (!File.Exists(bankPrivateKeyPath))
+    if (!File.Exists(bankProviderSettings.PrivateKeyPath))
     {
-        throw new InvalidOperationException("La clé privée d'Enable Banking est introuvable au chemin donné par « EnableBanking:PrivateKeyPath ».");
+        throw new InvalidOperationException(
+            "La clé privée d'Enable Banking est introuvable au chemin donné par « " + BankProviderSettings.PrivateKeyPathSetting + " ».");
     }
 
-    builder.Services.AddEnableBanking(bankApplicationId!, File.ReadAllText(bankPrivateKeyPath!));
+    builder.Services.AddEnableBanking(bankProviderSettings.ApplicationId, File.ReadAllText(bankProviderSettings.PrivateKeyPath));
 }
 else if (builder.Environment.IsDevelopment())
 {
@@ -114,7 +113,8 @@ else if (builder.Environment.IsDevelopment())
 else
 {
     throw new InvalidOperationException(
-        "Les réglages « EnableBanking:ApplicationId » et « EnableBanking:PrivateKeyPath » sont absents : la connexion bancaire n'est pas configurée.");
+        "Le réglage « " + BankProviderSettings.ApplicationIdSetting + " » ou « " + BankProviderSettings.PrivateKeyPathSetting
+        + " » manque : la connexion bancaire n'est pas configurée.");
 }
 builder.Services.AddBankConnectionTools();
 
@@ -250,10 +250,11 @@ var app = builder.Build();
 TimeZoneInfo.FindSystemTimeZoneById(UsersCalendar.TimeZoneId);
 
 // En développement, sans application Enable Banking configurée, le journal technique le dit dès le démarrage.
-if (!isBankProviderConfigured)
+if (bankProviderSettings == null)
 {
     app.Logger.LogWarning(
-        "Enable Banking n'est pas configuré : les routes des banques répondent 503. Ajoute « EnableBanking:ApplicationId » et « EnableBanking:PrivateKeyPath » avec dotnet user-secrets.");
+        "Enable Banking n'est pas configuré : les routes des banques répondent 503. Ajoute « " + BankProviderSettings.ApplicationIdSetting
+        + " » et « " + BankProviderSettings.PrivateKeyPathSetting + " » avec dotnet user-secrets.");
 }
 
 if (app.Environment.IsDevelopment())

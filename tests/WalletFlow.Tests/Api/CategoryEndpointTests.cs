@@ -5,6 +5,7 @@ using System.Text.Json;
 using WalletFlow.Api.Configuration;
 using WalletFlow.Api.Contracts;
 using WalletFlow.Api.Controllers;
+using WalletFlow.Application.Categories;
 using WalletFlow.Domain.AccountsAndCategories;
 using WalletFlow.Domain.UsersAndSecurity;
 using static WalletFlow.Tests.Api.LoginRequestTestValues;
@@ -287,6 +288,21 @@ public class CategoryEndpointTests
         await AssertProblemTitleAsync(deletion, HttpStatusCode.Conflict, ErrorMessages.OtherCategoryIsFixed);
         Assert.Contains(otherCategory, api.CategoryRepository.SavedCategories);
         Assert.Equal("Autres", otherCategory.Name);
+    }
+
+    // Une suppression que d'autres requêtes arrêtent à chaque essai répond 409 : rien n'a changé, l'utilisateur peut réessayer.
+    [Fact]
+    public async Task DeletionThatNeverPassesAsksToRetry()
+    {
+        using var api = new ApiFactoryWithFakes();
+        var user = await LogInWithCategoriesAsync(api);
+        var leisure = FindCategory(api, user.Account, "Loisirs");
+        api.CategoryRepository.DeadlocksBeforeDeletion = CategoryDeletionService.MaximumTries;
+
+        var deletion = await SendAsync(user.Client, HttpMethod.Delete, CategoryAddress(leisure.Id), null, user.CsrfToken);
+
+        await AssertProblemTitleAsync(deletion, HttpStatusCode.Conflict, ErrorMessages.CategoriesChangedMeanwhile);
+        Assert.Contains(leisure, api.CategoryRepository.SavedCategories);
     }
 
     // --- Budget

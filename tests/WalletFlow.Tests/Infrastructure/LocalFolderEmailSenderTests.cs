@@ -1,5 +1,6 @@
 using WalletFlow.Application.Emails;
 using WalletFlow.Infrastructure.Emails;
+using WalletFlow.Tests.Fakes;
 
 namespace WalletFlow.Tests.Infrastructure;
 
@@ -10,7 +11,7 @@ public class LocalFolderEmailSenderTests
     public async Task EmailIsWrittenInNewFileWithItsRecipientSubjectAndBody()
     {
         var temporaryFolder = Path.Combine(Path.GetTempPath(), "walletflow-test-" + Guid.NewGuid());
-        var sender = new LocalFolderEmailSender(temporaryFolder);
+        var sender = new LocalFolderEmailSender(temporaryFolder, new FakeTimeProvider());
 
         try
         {
@@ -24,6 +25,9 @@ public class LocalFolderEmailSenderTests
             Assert.Contains("destinataire@exemple.test", content);
             Assert.Contains("Objet du test", content);
             Assert.Contains("Texte du test", content);
+
+            // Le nom du fichier commence par la date de l'horloge de l'application, ici le 4 novembre 2026 à midi.
+            Assert.StartsWith("20261104-120000-000-", Path.GetFileName(file));
         }
         finally
         {
@@ -37,7 +41,7 @@ public class LocalFolderEmailSenderTests
     {
         var blockingFilePath = Path.Combine(Path.GetTempPath(), "walletflow-test-" + Guid.NewGuid());
         await File.WriteAllTextAsync(blockingFilePath, "ce fichier prend la place du dossier");
-        var sender = new LocalFolderEmailSender(blockingFilePath);
+        var sender = new LocalFolderEmailSender(blockingFilePath, new FakeTimeProvider());
 
         try
         {
@@ -67,7 +71,7 @@ public class LocalFolderEmailSenderTests
         var temporaryFolder = Path.Combine(Path.GetTempPath(), "walletflow-test-" + Guid.NewGuid());
         Directory.CreateDirectory(temporaryFolder);
         File.SetUnixFileMode(temporaryFolder, UnixFileMode.UserRead | UnixFileMode.UserExecute);
-        var sender = new LocalFolderEmailSender(temporaryFolder);
+        var sender = new LocalFolderEmailSender(temporaryFolder, new FakeTimeProvider());
 
         try
         {

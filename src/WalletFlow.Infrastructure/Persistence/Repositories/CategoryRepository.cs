@@ -91,11 +91,21 @@ public class CategoryRepository : ICategoryRepository
             return await DeleteThenMoveTransactionsAsync(userId, categoryId);
         }
 
-        await using var transaction = await databaseContext.Database.BeginTransactionAsync();
-        var isDeleted = await DeleteThenMoveTransactionsAsync(userId, categoryId);
-        await transaction.CommitAsync();
+        // Un interblocage avec une autre requête fait annuler toute la transaction par PostgreSQL : rien n'est supprimé ni déplacé,
+        // et le service relit la catégorie avant de rejouer la suppression (voir CategoryDeletionService). Dans la transaction
+        // d'un appelant, au-dessus, l'interblocage annule aussi ses autres écritures : lui seul peut la rejouer.
+        try
+        {
+            await using var transaction = await databaseContext.Database.BeginTransactionAsync();
+            var isDeleted = await DeleteThenMoveTransactionsAsync(userId, categoryId);
+            await transaction.CommitAsync();
 
-        return isDeleted;
+            return isDeleted;
+        }
+        catch (Exception exception) when (PostgresErrors.IsDeadlock(exception))
+        {
+            return false;
+        }
     }
 
     // Supprime d'abord la catégorie : sa ligne reste verrouillée jusqu'à la fin de la transaction, et une transaction bancaire

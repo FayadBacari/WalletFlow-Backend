@@ -77,7 +77,7 @@ public class TwoFactorSettingsEndpointTests
         Assert.Matches("^[A-Z2-7]{32}$", secret);
         Assert.Equal(
             "otpauth://totp/WalletFlow:utilisateur%40exemple.test?secret=" + secret + "&issuer=WalletFlow&algorithm=SHA1&digits=6&period=30",
-            jsonDocument.RootElement.GetProperty("linkForTheAuthenticatorApplication").GetString());
+            jsonDocument.RootElement.GetProperty("setupLink").GetString());
         Assert.Contains("no-store", response.Headers.GetValues("Cache-Control").Single());
         SecurityHeadersAssertions.AssertExactSecurityHeaders(response);
         Assert.False(account.IsTwoFactorEnabled);
@@ -182,7 +182,7 @@ public class TwoFactorSettingsEndpointTests
         var response = await SendSettingsRequestAsync(attackerClient, ActivationStartEndpoint, new { password = ValidPassword, userId = victimAccount.Id, id = victimAccount.Id, email = victimAccount.Email }, csrfToken);
         var jsonDocument = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
         var secret = jsonDocument.RootElement.GetProperty("secret").GetString()!;
-        Assert.Contains("utilisateur%40exemple.test", jsonDocument.RootElement.GetProperty("linkForTheAuthenticatorApplication").GetString());
+        Assert.Contains("utilisateur%40exemple.test", jsonDocument.RootElement.GetProperty("setupLink").GetString());
 
         await SendSettingsRequestAsync(attackerClient, ActivationFinishEndpoint, new { code = CalculateCurrentCode(api, secret), userId = victimAccount.Id }, csrfToken);
 

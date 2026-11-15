@@ -9,18 +9,18 @@ Le choix de PostgreSQL ne vient pas des règles de gestion : il a été fait au 
 
 ### 1.1 Types
 
-| Dictionnaire              | PostgreSQL         | Utilisation                                         |
-|---------------------------|--------------------|-----------------------------------------------------|
-| AN 36 (UUID)              | UUID               | Identifiants, générés par `gen_random_uuid()`       |
-| AN n                      | VARCHAR(n)         | Textes                                              |
-| AN 64 (empreinte SHA-256) | CHAR(64)           | `empreinte_jeton`, `jeton_appareil`, `id_session`   |
-| AN 45 (adresse IP)        | INET               | `adresse_ip_evenement`, format IPv4 ou IPv6 vérifié |
-| N (montant, 10 chiffres)  | INTEGER            | Montants en centimes                                |
-| N 1                       | SMALLINT           | `nb_tentatives_echouees`, `nb_blocages`             |
-| D                         | DATE               | `date_transaction`, `date_objectif`                 |
-| DH                        | TIMESTAMPTZ        | Dates et heures, avec fuseau horaire                |
-| B                         | BOOLEAN            | Booléens                                            |
-| Liste de valeurs          | VARCHAR(n) + CHECK | Codes courts (`role_utilisateur`, statuts…)         |
+| Dictionnaire              | PostgreSQL         | Utilisation                                                                |
+|---------------------------|--------------------|----------------------------------------------------------------------------|
+| AN 36 (UUID)              | UUID               | Identifiants, générés par `gen_random_uuid()`                              |
+| AN n                      | VARCHAR(n)         | Textes                                                                     |
+| AN 64 (empreinte SHA-256) | CHAR(64)           | `empreinte_jeton`, `jeton_appareil`, `id_session`                          |
+| AN 45 (adresse IP)        | INET               | `adresse_ip_evenement`, `adresse_ip_demande`, format IPv4 ou IPv6 vérifié  |
+| N (montant, 10 chiffres)  | INTEGER            | Montants en centimes                                                       |
+| N 1, N 3                  | SMALLINT           | `nb_tentatives_echouees`, `nb_blocages`, `nb_essais_envoi`, `seuil_alerte` |
+| D                         | DATE               | `date_transaction`, `date_objectif`                                        |
+| DH                        | TIMESTAMPTZ        | Dates et heures, avec fuseau horaire                                       |
+| B                         | BOOLEAN            | Booléens                                                                   |
+| Liste de valeurs          | VARCHAR(n) + CHECK | Codes courts (`role_utilisateur`, statuts…)                                |
 
 Les montants tiennent dans un INTEGER : le dictionnaire les limite à 1 000 000 000 centimes en valeur absolue. Les sommes (solde total, totaux des sacs) sont calculées par PostgreSQL en BIGINT, sans risque de dépassement.
 
@@ -31,19 +31,22 @@ Les montants tiennent dans un INTEGER : le dictionnaire les limite à 1 000 000 
 
 ### 1.3 Suppressions
 
-| Clé étrangère                     | ON DELETE           | Raison                                        |
-|-----------------------------------|---------------------|-----------------------------------------------|
-| Vers utilisateur, sauf le journal | CASCADE             | Effacement définitif du compte                |
-| evenement_securite.id_utilisateur | SET NULL            | Événements gardés, sans identifiant           |
-| compte_bancaire.id_connexion      | CASCADE             | Comptes supprimés avec leur connexion         |
-| transaction.id_compte             | CASCADE             | Transactions supprimées avec leur compte      |
-| transaction.id_categorie          | NO ACTION, différée | Transactions déplacées dans « Autres » avant  |
-| regle_classement.id_categorie     | CASCADE             | Une règle n'a plus d'objet sans sa catégorie  |
-| suggestion.id_categorie           | SET NULL            | Les économies déjà réalisées restent comptées |
-| mouvement_sac (les deux sacs)     | SET NULL            | L'autre sac garde son solde                   |
-| mouvement_sac.id_suggestion       | SET NULL            | Le mouvement reste dans l'historique du sac   |
-| reponse_support.id_demande        | CASCADE             | Les réponses suivent leur demande             |
-| parametrer.code_type_alerte       | NO ACTION           | Les types d'alerte forment une liste fixe     |
+| Clé étrangère                      | ON DELETE           | Raison                                           |
+|------------------------------------|---------------------|--------------------------------------------------|
+| Vers utilisateur, sauf le journal  | CASCADE             | Effacement définitif du compte                   |
+| evenement_securite.id_utilisateur  | SET NULL            | Événements gardés, sans identifiant              |
+| compte_bancaire.id_connexion       | CASCADE             | Comptes supprimés avec leur connexion            |
+| transaction.id_compte              | CASCADE             | Transactions supprimées avec leur compte         |
+| transaction.id_categorie           | NO ACTION, différée | Transactions déplacées dans « Autres » avant     |
+| regle_classement.id_categorie      | CASCADE             | Une règle n'a plus d'objet sans sa catégorie     |
+| suggestion.id_categorie            | SET NULL            | Les économies déjà réalisées restent comptées    |
+| mouvement_sac (les deux sacs)      | SET NULL            | L'autre sac garde son solde                      |
+| mouvement_sac.id_suggestion        | SET NULL            | Le mouvement reste dans l'historique du sac      |
+| reponse_support.id_demande         | CASCADE             | Les réponses suivent leur demande                |
+| parametrer.code_type_alerte        | NO ACTION           | Les types d'alerte forment une liste fixe        |
+| alerte.code_type_alerte            | NO ACTION           | Les types d'alerte forment une liste fixe        |
+| alerte (catégorie, sac, connexion) | CASCADE             | Une alerte n'a plus d'objet sans ce qu'elle vise |
+| demande_email.id_alerte            | CASCADE             | L'e-mail d'une alerte effacée ne part plus       |
 
 Ces choix appliquent les règles de gestion sur la suppression d'un compte, la déconnexion d'une banque, la suppression d'une catégorie et celle d'un sac (GR Suppression, GR Comptes, GR Dépenses, GR Sacs), ainsi que la liste des données effacées de la stratégie de sécurité (SS §7).
 
@@ -287,6 +290,76 @@ CREATE TABLE parametrer (
     PRIMARY KEY (id_utilisateur, code_type_alerte)
 );
 
+-- Les alertes envoyées des quatre types désactivables (DD §9.3). Chaque type porte exactement ce dont il a besoin :
+-- une catégorie, un mois et un seuil pour le budget ; un mois pour les suggestions ; un sac ; une connexion.
+CREATE TABLE alerte (
+    id_alerte        UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    date_alerte      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    mois_alerte      DATE,
+    seuil_alerte     SMALLINT,
+    id_utilisateur   UUID        NOT NULL
+        REFERENCES utilisateur (id_utilisateur) ON DELETE CASCADE,
+    code_type_alerte VARCHAR(30) NOT NULL
+        REFERENCES type_alerte (code_type_alerte),
+    id_categorie     UUID
+        REFERENCES categorie (id_categorie) ON DELETE CASCADE,
+    id_sac           UUID
+        REFERENCES sac (id_sac) ON DELETE CASCADE,
+    id_connexion     UUID
+        REFERENCES connexion_bancaire (id_connexion) ON DELETE CASCADE,
+    CONSTRAINT ck_alerte_mois CHECK (EXTRACT(DAY FROM mois_alerte) = 1),
+    CONSTRAINT ck_alerte_seuil CHECK (seuil_alerte IN (80, 100)),
+    CONSTRAINT ck_alerte_contenu CHECK (
+        (code_type_alerte = 'budget_atteint'
+            AND id_categorie IS NOT NULL AND mois_alerte IS NOT NULL AND seuil_alerte IS NOT NULL
+            AND id_sac IS NULL AND id_connexion IS NULL)
+        OR (code_type_alerte = 'nouvelle_suggestion'
+            AND mois_alerte IS NOT NULL
+            AND id_categorie IS NULL AND seuil_alerte IS NULL AND id_sac IS NULL AND id_connexion IS NULL)
+        OR (code_type_alerte = 'objectif_sac_atteint'
+            AND id_sac IS NOT NULL
+            AND id_categorie IS NULL AND mois_alerte IS NULL AND seuil_alerte IS NULL AND id_connexion IS NULL)
+        OR (code_type_alerte = 'autorisation_bancaire'
+            AND id_connexion IS NOT NULL
+            AND id_categorie IS NULL AND mois_alerte IS NULL AND seuil_alerte IS NULL AND id_sac IS NULL))
+);
+
+-- Une alerte ne part qu'une fois : par catégorie, mois et seuil ; par utilisateur et par mois ; par sac ; par connexion.
+CREATE UNIQUE INDEX ux_alerte_budget ON alerte (id_categorie, mois_alerte, seuil_alerte)
+    WHERE code_type_alerte = 'budget_atteint';
+CREATE UNIQUE INDEX ux_alerte_suggestion ON alerte (id_utilisateur, mois_alerte)
+    WHERE code_type_alerte = 'nouvelle_suggestion';
+CREATE UNIQUE INDEX ux_alerte_sac ON alerte (id_sac)
+    WHERE code_type_alerte = 'objectif_sac_atteint';
+CREATE UNIQUE INDEX ux_alerte_autorisation ON alerte (id_connexion)
+    WHERE code_type_alerte = 'autorisation_bancaire';
+
+-- La file d'e-mails (DD §9.4) : aucun secret, chaque lien est créé au moment de l'envoi. Une récupération peut ne viser
+-- aucun compte ; tout autre e-mail vise un compte. Un e-mail d'alerte, et lui seul, est lié à son alerte.
+CREATE TABLE demande_email (
+    id_demande_email      UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
+    type_demande_email    VARCHAR(30)  NOT NULL,
+    adresse_email_demande VARCHAR(254),
+    adresse_ip_demande    INET,
+    date_demande_email    TIMESTAMPTZ  NOT NULL DEFAULT now(),
+    nb_essais_envoi       SMALLINT     NOT NULL DEFAULT 0,
+    date_prochain_essai   TIMESTAMPTZ  NOT NULL DEFAULT now(),
+    id_utilisateur        UUID
+        REFERENCES utilisateur (id_utilisateur) ON DELETE CASCADE,
+    id_alerte             UUID         UNIQUE
+        REFERENCES alerte (id_alerte) ON DELETE CASCADE,
+    CONSTRAINT ck_demande_email_type CHECK (type_demande_email IN (
+        'recuperation_mdp', 'deblocage', 'changement_email', 'avis_ancienne_adresse',
+        'nouvel_appareil', 'changement_mdp', 'alerte')),
+    CONSTRAINT ck_demande_email_essais CHECK (nb_essais_envoi BETWEEN 0 AND 5),
+    CONSTRAINT ck_demande_email_compte CHECK (
+        type_demande_email = 'recuperation_mdp' OR id_utilisateur IS NOT NULL),
+    CONSTRAINT ck_demande_email_adresse CHECK (
+        type_demande_email NOT IN ('recuperation_mdp', 'changement_email', 'avis_ancienne_adresse')
+        OR adresse_email_demande IS NOT NULL),
+    CONSTRAINT ck_demande_email_alerte CHECK ((type_demande_email = 'alerte') = (id_alerte IS NOT NULL))
+);
+
 CREATE TABLE demande_support (
     id_demande      UUID          PRIMARY KEY DEFAULT gen_random_uuid(),
     message_demande VARCHAR(5000) NOT NULL,
@@ -325,6 +398,12 @@ CREATE INDEX ix_suggestion_utilisateur ON suggestion (id_utilisateur);
 CREATE INDEX ix_suggestion_categorie ON suggestion (id_categorie);
 CREATE INDEX ix_mouvement_depart ON mouvement_sac (id_sac_depart);
 CREATE INDEX ix_mouvement_arrivee ON mouvement_sac (id_sac_arrivee);
+CREATE INDEX ix_alerte_utilisateur ON alerte (id_utilisateur);
+CREATE INDEX ix_alerte_categorie ON alerte (id_categorie);
+CREATE INDEX ix_alerte_sac ON alerte (id_sac);
+CREATE INDEX ix_alerte_connexion ON alerte (id_connexion);
+CREATE INDEX ix_demande_email_utilisateur ON demande_email (id_utilisateur);
+CREATE INDEX ix_demande_email_essai ON demande_email (date_prochain_essai);
 CREATE INDEX ix_demande_utilisateur ON demande_support (id_utilisateur);
 CREATE INDEX ix_reponse_demande ON reponse_support (id_demande);
 
@@ -456,6 +535,8 @@ COMMIT;
 - La date d'objectif seulement avec un montant ; un ou deux sacs, différents, pour chaque mouvement.
 - Une seule catégorie « Autres » par utilisateur (`ux_categorie_autres`).
 - Une seule suggestion par règle et par mois, et par catégorie pour le dépassement (`ux_suggestion_categorie_mois`, `ux_suggestion_regle_mois`).
+- Une alerte qui ne part qu'une fois, avec exactement ce que son type demande (`ux_alerte_budget`, `ux_alerte_suggestion`, `ux_alerte_sac`, `ux_alerte_autorisation`, `ck_alerte_contenu`).
+- Une demande d'e-mail qui vise un compte, sauf une récupération, et qui n'est liée à une alerte que pour un e-mail d'alerte (`ck_demande_email_compte`, `ck_demande_email_alerte`).
 - Chaque compte et chaque opération reçus de la banque, enregistrés une seule fois (`ux_compte_externe`, `ux_transaction_externe`).
 - Une alerte non désactivable toujours activée (`tg_parametrer_controle`).
 - La suppression d'un sac et l'effacement d'un compte utilisateur (`tg_sac_avant_suppression`, `tg_utilisateur_avant_suppression` et les règles ON DELETE).
@@ -470,6 +551,8 @@ COMMIT;
 - Le hachage des mots de passe et des codes de secours, et le chiffrement du secret TOTP, avant l'enregistrement (SS §2).
 - Les durées : expiration des jetons, fermeture des sessions après 30 minutes d'inactivité, mise à jour des comptes jusqu'à 4 fois par jour, rappel 7 jours avant la fin d'une autorisation bancaire, effacement des comptes 30 jours après la demande, effacement des comptes non confirmés une fois leur lien expiré, conservation du journal un an (la tâche appelle `fn_effacer_vieux_evenements`). Ce sont des tâches planifiées.
 - Le calcul des suggestions une fois par mois, la pause de 30 jours après une suggestion ignorée, et l'effacement des suggestions dépassées, au moment du calcul (GR Sacs).
+- Les alertes : la préférence de l'utilisateur, le passage des seuils de budget après chaque changement des dépenses du mois ou du budget, l'objectif d'un sac après chaque mouvement ou changement d'objectif, et l'effacement de l'alerte d'un sac ou d'une connexion quand son objectif ou son autorisation change (GR Notif, GR Dépenses, GR Sacs, GR Comptes).
+- La file d'e-mails : les essais d'envoi, 5 au plus (1 min, 5 min, 30 min, puis 2 h d'attente), et l'effacement d'une demande une fois l'e-mail parti. L'effacement des alertes de budget et de suggestion deux mois après leur mois, et le calcul des suggestions de chaque utilisateur à partir du 5, avec son alerte, sont des tâches planifiées (SS §7, §9).
 - La révocation de l'autorisation chez le prestataire, quand l'utilisateur déconnecte une banque ou demande la suppression de son compte (GR Comptes, GR Suppression).
 
 

@@ -86,4 +86,34 @@ public class CategoryDeletionServiceTests
 
         Assert.IsType<CategoryDeletionResult.NotFound>(result);
     }
+
+    // Un interblocage avec une autre requête annule une suppression sans rien changer : elle se rejoue, jusqu'au dernier essai permis.
+    [Fact]
+    public async Task DeadlocksAreReplayedUntilTheLastTry()
+    {
+        var leisure = services.Find("Loisirs");
+        var cinema = services.AddTransaction(leisure, "CINEMA");
+        services.Repository.DeadlocksBeforeDeletion = CategoryDeletionService.MaximumTries - 1;
+
+        var result = await DeleteAsync(leisure.Id);
+
+        Assert.IsType<CategoryDeletionResult.Deleted>(result);
+        Assert.DoesNotContain("Loisirs", services.ListSavedNames());
+        Assert.Equal(services.Find("Autres").Id, cinema.CategoryId);
+    }
+
+    // Arrêtée à chaque essai, la suppression ne change rien et demande de réessayer : la catégorie et ses transactions restent.
+    [Fact]
+    public async Task DeletionStoppedAtEveryTryChangesNothing()
+    {
+        var leisure = services.Find("Loisirs");
+        var cinema = services.AddTransaction(leisure, "CINEMA");
+        services.Repository.DeadlocksBeforeDeletion = CategoryDeletionService.MaximumTries;
+
+        var result = await DeleteAsync(leisure.Id);
+
+        Assert.IsType<CategoryDeletionResult.NotSaved>(result);
+        Assert.Contains("Loisirs", services.ListSavedNames());
+        Assert.Equal(leisure.Id, cinema.CategoryId);
+    }
 }

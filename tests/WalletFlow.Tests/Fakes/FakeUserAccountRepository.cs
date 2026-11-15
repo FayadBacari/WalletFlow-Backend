@@ -61,7 +61,7 @@ public class FakeUserAccountRepository : IUserAccountRepository, ITransactionalF
     public int? SearchesBeforeAccountDisappears { get; set; } = null;
 
     // Un autre compte prend la nouvelle adresse juste avant l'enregistrement d'un changement d'adresse.
-    public User? AccountTakingTheNewEmailBeforeSave { get; set; } = null;
+    public User? AccountTakingNewEmailBeforeSave { get; set; } = null;
 
     // Cherche en mémoire le compte qui utilise cette adresse.
     public Task<User?> FindByEmailAsync(string email)
@@ -246,10 +246,10 @@ public class FakeUserAccountRepository : IUserAccountRepository, ITransactionalF
             }
 
             // Un autre compte prend la nouvelle adresse juste avant l'enregistrement du changement : la base refuserait l'adresse en double.
-            var otherAccount = AccountTakingTheNewEmailBeforeSave;
+            var otherAccount = AccountTakingNewEmailBeforeSave;
             if (otherAccount != null && FindAccountWithNewEmailSinceRead() != null)
             {
-                AccountTakingTheNewEmailBeforeSave = null;
+                AccountTakingNewEmailBeforeSave = null;
                 concurrentChanges = () => SavedUsers.Add(otherAccount);
                 return true;
             }

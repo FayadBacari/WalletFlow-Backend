@@ -118,6 +118,23 @@
 | libelle_type_alerte  |
 | est_desactivable     |
 
+| ALERTE        |
+|---------------|
+| **id_alerte** |
+| date_alerte   |
+| mois_alerte   |
+| seuil_alerte  |
+
+| DEMANDE_EMAIL         |
+|-----------------------|
+| **id_demande_email**  |
+| type_demande_email    |
+| adresse_email_demande |
+| adresse_ip_demande    |
+| date_demande_email    |
+| nb_essais_envoi       |
+| date_prochain_essai   |
+
 | DEMANDE_SUPPORT |
 |-----------------|
 | **id_demande**  |
@@ -220,6 +237,41 @@
 | UTILISATEUR    | 0,n       |
 | TYPE_ALERTE    | 0,n       |
 | alerte_activee | propriété |
+
+| PREVENIR    | Card. |
+|-------------|-------|
+| UTILISATEUR | 0,n   |
+| ALERTE      | 1,1   |
+
+| CORRESPONDRE | Card. |
+|--------------|-------|
+| TYPE_ALERTE  | 0,n   |
+| ALERTE       | 1,1   |
+
+| SURVEILLER | Card. |
+|------------|-------|
+| CATEGORIE  | 0,n   |
+| ALERTE     | 0,1   |
+
+| ATTEINDRE | Card. |
+|-----------|-------|
+| SAC       | 0,1   |
+| ALERTE    | 0,1   |
+
+| RAPPELER           | Card. |
+|--------------------|-------|
+| CONNEXION_BANCAIRE | 0,1   |
+| ALERTE             | 0,1   |
+
+| ATTENDRE      | Card. |
+|---------------|-------|
+| UTILISATEUR   | 0,n   |
+| DEMANDE_EMAIL | 0,1   |
+
+| ANNONCER      | Card. |
+|---------------|-------|
+| ALERTE        | 0,1   |
+| DEMANDE_EMAIL | 0,1   |
 
 | EMETTRE         | Card. |
 |-----------------|-------|

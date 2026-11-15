@@ -288,7 +288,7 @@ public class FakeBagRepository : IBagRepository, ITransactionalFakeRepository
             if (BagDeletedBeforeSave is Guid deletedBagId && isWriting)
             {
                 BagDeletedBeforeSave = null;
-                concurrentChanges = () => DeleteLikeTheDatabase(deletedBagId);
+                concurrentChanges = () => DeleteLikeDatabase(deletedBagId);
                 return true;
             }
 
@@ -344,7 +344,7 @@ public class FakeBagRepository : IBagRepository, ITransactionalFakeRepository
 
             foreach (var deletedBag in preparedDeletions)
             {
-                DeleteLikeTheDatabase(deletedBag.Id);
+                DeleteLikeDatabase(deletedBag.Id);
             }
 
             ClearTracking();
@@ -353,7 +353,7 @@ public class FakeBagRepository : IBagRepository, ITransactionalFakeRepository
 
     // Supprime le sac comme la vraie base : le déclencheur efface ses mouvements avec l'argent disponible,
     // puis ON DELETE SET NULL vide son côté dans les mouvements avec un autre sac.
-    private void DeleteLikeTheDatabase(Guid bagId)
+    private void DeleteLikeDatabase(Guid bagId)
     {
         SavedBags.RemoveAll(bag => bag.Id == bagId);
         SavedMovements.RemoveAll(movement =>

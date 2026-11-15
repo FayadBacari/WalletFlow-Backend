@@ -6,7 +6,9 @@ using WalletFlow.Domain.BagsAndSuggestions;
 using WalletFlow.Domain.UsersAndSecurity;
 using WalletFlow.Infrastructure.Persistence;
 using WalletFlow.Infrastructure.Persistence.Repositories;
+using WalletFlow.Tests.EndToEnd;
 using static WalletFlow.Tests.Infrastructure.LocalTestDatabase;
+using static WalletFlow.Tests.Infrastructure.RealDeadlocks;
 
 namespace WalletFlow.Tests.Infrastructure;
 
@@ -68,7 +70,7 @@ public class CategoryRepositoryTests
     }
 
     // Essaie d'écrire ce nom pour ce compte, dans un point de sauvegarde annulé aussitôt : renvoie vrai si l'index unique le refuse.
-    private static async Task<bool> IsRefusedByTheUniqueIndexAsync(WalletFlowDatabaseContext databaseContext, Guid userId, string name)
+    private static async Task<bool> IsRefusedByUniqueIndexAsync(WalletFlowDatabaseContext databaseContext, Guid userId, string name)
     {
         await databaseContext.Database.ExecuteSqlRawAsync("SAVEPOINT essai_index");
 
@@ -147,7 +149,7 @@ public class CategoryRepositoryTests
         var repository = new CategoryRepository(databaseContext);
 
         var isUsed = await repository.IsNameUsedAsync(account.Id, typedName, null);
-        var isRefused = await IsRefusedByTheUniqueIndexAsync(databaseContext, account.Id, typedName);
+        var isRefused = await IsRefusedByUniqueIndexAsync(databaseContext, account.Id, typedName);
 
         Assert.Equal(isRefused, isUsed);
     }
@@ -378,5 +380,52 @@ public class CategoryRepositoryTests
 
         Assert.IsType<CategoryCreationResult.TooManyCategories>(result);
         Assert.Equal(100, await databaseContext.Categories.CountAsync(row => row.UserId == account.Id));
+    }
+
+    // Un vrai interblocage pendant une suppression : une autre transaction verrouille une opération de la catégorie, la suppression
+    // efface la catégorie puis attend cette opération pour la déplacer dans « Autres », et l'autre transaction demande alors
+    // la catégorie. PostgreSQL arrête la suppression : rien n'est supprimé ni déplacé, et le dépôt répond faux pour que le service
+    // relise la catégorie et recommence. Rejouée ensuite, la suppression passe. Ce test enregistre pour de vrai, car l'autre
+    // transaction doit voir ses lignes : il efface son compte à la fin.
+    [Fact]
+    public async Task DeadlockDuringADeletionChangesNothingAndCanBeReplayed()
+    {
+        var email = TestAccountCleanup.CreateUniqueEmail("test-categories-interblocage");
+
+        try
+        {
+            await using var databaseContext = CreateDatabaseContext();
+            var account = await SaveAccountWithCategoriesAsync(databaseContext, email);
+            var leisure = await ReadCategoryAsync(databaseContext, account.Id, "Loisirs");
+            var other = await ReadCategoryAsync(databaseContext, account.Id, "Autres");
+            var cinema = await SaveTransactionAsync(databaseContext, account, leisure, "CINEMA");
+            var repository = new CategoryRepository(databaseContext);
+
+            await databaseContext.Database.OpenConnectionAsync();
+            var deletingProcessId = ((NpgsqlConnection)databaseContext.Database.GetDbConnection()).ProcessID;
+            await using var otherConnection = new NpgsqlConnection(ReadConnectionString());
+            await otherConnection.OpenAsync();
+            await using var otherTransaction = await otherConnection.BeginTransactionAsync();
+            await LockRowAsync(otherTransaction, "SELECT 1 FROM transaction WHERE id_transaction = @id FOR UPDATE", cinema.Id);
+
+            var detectionDelay = await ReadDeadlockDetectionDelayAsync(otherTransaction);
+            var deleting = repository.DeleteAsync(account.Id, leisure.Id);
+            await WaitUntilBlockedAsync(otherTransaction, deletingProcessId);
+            await Task.Delay(detectionDelay / 2);
+            await LockRowAsync(otherTransaction, "SELECT 1 FROM categorie WHERE id_categorie = @id FOR KEY SHARE", leisure.Id);
+            await otherTransaction.RollbackAsync();
+
+            Assert.False(await deleting.WaitAsync(MaximumWait));
+            Assert.True(await databaseContext.Categories.AnyAsync(row => row.Id == leisure.Id));
+            Assert.Equal(leisure.Id, (await databaseContext.BankTransactions.AsNoTracking().SingleAsync(row => row.Id == cinema.Id)).CategoryId);
+
+            Assert.True(await repository.DeleteAsync(account.Id, leisure.Id));
+            Assert.False(await databaseContext.Categories.AnyAsync(row => row.Id == leisure.Id));
+            Assert.Equal(other.Id, (await databaseContext.BankTransactions.AsNoTracking().SingleAsync(row => row.Id == cinema.Id)).CategoryId);
+        }
+        finally
+        {
+            await TestAccountCleanup.DeleteAccountAsync(email);
+        }
     }
 }

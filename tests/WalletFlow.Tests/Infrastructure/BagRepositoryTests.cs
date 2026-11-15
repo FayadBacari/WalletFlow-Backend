@@ -7,6 +7,7 @@ using WalletFlow.Infrastructure.Persistence;
 using WalletFlow.Infrastructure.Persistence.Repositories;
 using WalletFlow.Tests.EndToEnd;
 using static WalletFlow.Tests.Infrastructure.LocalTestDatabase;
+using static WalletFlow.Tests.Infrastructure.RealDeadlocks;
 
 namespace WalletFlow.Tests.Infrastructure;
 
@@ -15,7 +16,6 @@ namespace WalletFlow.Tests.Infrastructure;
 public class BagRepositoryTests
 {
     private static readonly DateTime Now = new DateTime(2026, 11, 12, 10, 0, 0, DateTimeKind.Utc);
-    private static readonly TimeSpan MaximumWait = TimeSpan.FromSeconds(30);
 
     // Enregistre ces sacs, puis oublie les objets gardés en mémoire.
     private static async Task SaveBagsAsync(WalletFlowDatabaseContext databaseContext, params Bag[] bags)
@@ -391,27 +391,5 @@ public class BagRepositoryTests
         {
             await TestAccountCleanup.DeleteAccountAsync(email);
         }
-    }
-
-    // Attend que PostgreSQL montre l'enregistrement bloqué par l'autre transaction.
-    private static async Task WaitUntilBlockedAsync(NpgsqlTransaction otherTransaction, int savingProcessId)
-    {
-        var deadline = DateTime.UtcNow + MaximumWait;
-
-        while (DateTime.UtcNow < deadline)
-        {
-            await using var command = new NpgsqlCommand("SELECT @other = ANY(pg_blocking_pids(@saving))", otherTransaction.Connection, otherTransaction);
-            command.Parameters.AddWithValue("other", otherTransaction.Connection!.ProcessID);
-            command.Parameters.AddWithValue("saving", savingProcessId);
-
-            if ((bool)(await command.ExecuteScalarAsync())!)
-            {
-                return;
-            }
-
-            await Task.Delay(20);
-        }
-
-        throw new TimeoutException("L'enregistrement n'a jamais attendu l'autre transaction.");
     }
 }
