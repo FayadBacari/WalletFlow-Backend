@@ -35,7 +35,7 @@ public class SuggestionsController : ControllerBase
     }
 
     // GET api/suggestions : les suggestions du dernier mois complet et ce que l'utilisateur a économisé. La première lecture
-    // après la fin d'un mois calcule ses suggestions. Ce sont des données financières : aucun navigateur ni intermédiaire
+    // à partir du 5 calcule les suggestions du mois d'avant. Ce sont des données financières : aucun navigateur ni intermédiaire
     // ne doit les garder.
     [HttpGet]
     [EnableRateLimiting(RateLimitingConfiguration.CostlyReadPolicy)]

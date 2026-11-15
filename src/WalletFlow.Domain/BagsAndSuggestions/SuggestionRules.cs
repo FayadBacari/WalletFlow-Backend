@@ -11,13 +11,19 @@ public static class SuggestionRules
     public const int SavingsRatePercent = 20;
     public const int MaximumSavingsInCents = 1_000_000_000;
 
+    // Le jour du mois à partir duquel le mois d'avant est calculé : la banque a eu le temps de transmettre ses dernières
+    // opérations, même après un week-end et un jour férié comme le 1er novembre (GR Sacs, DD §12).
+    public const int CalculationDay = 5;
+
     // La pause après une suggestion ignorée : 30 jours, comptés à partir de la réponse.
     public static readonly TimeSpan IgnoredPause = TimeSpan.FromDays(30);
 
-    // Le mois évalué : le dernier mois complet, c'est-à-dire le mois d'avant celui de ce jour, à Paris.
+    // Le mois évalué, à Paris : le mois d'avant à partir du 5, celui d'encore avant du 1er au 4 (DD §8).
     public static DateOnly FindEvaluatedMonth(DateOnly today)
     {
-        return new DateOnly(today.Year, today.Month, 1).AddMonths(-1);
+        var monthsBack = today.Day < CalculationDay ? 2 : 1;
+
+        return new DateOnly(today.Year, today.Month, 1).AddMonths(-monthsBack);
     }
 
     // Règle 1 : la catégorie a dépensé ce mois-ci plus de 20 % au-dessus de sa moyenne des 3 mois d'avant.

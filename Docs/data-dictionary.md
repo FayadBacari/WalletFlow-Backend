@@ -342,7 +342,7 @@ Quand un sac est supprimé, ses mouvements avec l'argent disponible disparaissen
 
 - `id_suggestion` : UUID.
 - `regle_suggestion` : `depassement_categorie`, `argent_disponible` ou `epargne_insuffisante`.
-- `mois_suggestion` : premier jour du mois évalué, le dernier mois complet à Paris. Une seule suggestion par règle et par mois, et par catégorie pour `depassement_categorie`.
+- `mois_suggestion` : premier jour du mois évalué, à Paris : le mois d'avant à partir du 5, celui d'encore avant du 1er au 4. Une seule suggestion par règle et par mois, et par catégorie pour `depassement_categorie`.
 - `economie_mensuelle` : en centimes, de 1 à 1 000 000 000. Selon la règle : ce que la catégorie a dépensé au-dessus de sa moyenne, l'argent disponible au moment du calcul, ou ce qui manque à l'épargne du mois pour atteindre 20 % des revenus.
 - `statut_suggestion` : `proposee`, `acceptee` ou `ignoree`, `proposee` par défaut. Une suggestion acceptée ou ignorée ne change plus.
 - `date_statut_suggestion` : pendant 30 jours après une suggestion ignorée, aucune suggestion de la même règle, ni de la même catégorie, n'est proposée.
@@ -479,6 +479,7 @@ Ces valeurs sont les mêmes pour tous les utilisateurs. Elles relèvent de la co
 | Historique minimal (suggestions par moyenne) | 3 mois                           | GR Sacs        |
 | Seuil d'épargne mensuelle                    | 20 % des revenus                 | GR Sacs        |
 | Pause après une suggestion ignorée           | 30 jours                         | GR Sacs        |
+| Calcul des suggestions d'un mois             | À partir du 5 du mois suivant    | GR Sacs        |
 | Seuils d'alerte de budget                    | 80 % et 100 %                    | GR Dépenses    |
 | Durée d'une période de graphique             | 10 ans au plus                   | SS §6          |
 | Délai avant effacement d'un compte           | 30 jours                         | GR Suppression |

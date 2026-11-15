@@ -394,7 +394,7 @@ X-CSRF-TOKEN: colle-ici-le-jeton-anti-csrf
 
 ###
 
-# Suggestions d'épargne du dernier mois complet, et économies réalisées. La première lecture après la fin d'un mois le calcule.
+# Suggestions d'épargne du dernier mois complet, et économies réalisées. La première lecture à partir du 5 calcule le mois d'avant.
 GET {{WalletFlow_Api_SecureAddress}}/api/suggestions
 
 ###

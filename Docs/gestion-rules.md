@@ -92,7 +92,7 @@
 - Une suggestion apparaît quand l'épargne du mois (revenus moins dépenses) est inférieure à 20 % des revenus.
 - Les suggestions basées sur des moyennes n'apparaissent qu'à partir de 3 mois d'historique.
 - Une suggestion ignorée ne réapparaît pas. Pendant 30 jours, aucune suggestion de la même règle, ni de la même catégorie, n'est proposée.
-- Les suggestions portent sur le dernier mois complet, heure de Paris. Elles sont calculées une seule fois, après la fin du mois.
+- Les suggestions portent sur le dernier mois complet, heure de Paris. Elles sont calculées une seule fois, à partir du 5 du mois suivant, pour laisser à la banque le temps de transmettre les dernières opérations.
 - L'argent disponible en fin de mois est celui du moment du calcul.
 - Le montant à économiser par mois est, selon la règle : ce que la catégorie a dépensé au-dessus de sa moyenne, l'argent disponible, ou ce qui manque à l'épargne du mois pour atteindre 20 % des revenus.
 - Le dépassement ne concerne qu'une catégorie de dépenses. La règle sur l'épargne du mois ne s'applique qu'à un mois qui a des revenus et dont tout l'historique est connu.
