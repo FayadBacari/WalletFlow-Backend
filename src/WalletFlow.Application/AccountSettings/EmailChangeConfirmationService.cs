@@ -1,8 +1,9 @@
 using System.Net;
-using WalletFlow.Application.AccountRecovery;
+using WalletFlow.Application.Emails;
 using WalletFlow.Application.Persistence;
 using WalletFlow.Application.Security;
 using WalletFlow.Application.UserAccounts;
+using WalletFlow.Domain.NotificationsAndSupport;
 using WalletFlow.Domain.UsersAndSecurity;
 
 namespace WalletFlow.Application.AccountSettings;
@@ -17,7 +18,7 @@ public class EmailChangeConfirmationService
     private readonly SecurityJournalService securityJournal;
     private readonly IPasswordHasher passwordHasher;
     private readonly ISecureTokenGenerator tokenGenerator;
-    private readonly IBackgroundEmailRequestQueue emailQueue;
+    private readonly IEmailRequestRepository emailRequests;
     private readonly TimeProvider clock;
 
     // Reçoit les outils dont la confirmation a besoin.
@@ -27,7 +28,7 @@ public class EmailChangeConfirmationService
         SecurityJournalService securityJournal,
         IPasswordHasher passwordHasher,
         ISecureTokenGenerator tokenGenerator,
-        IBackgroundEmailRequestQueue emailQueue,
+        IEmailRequestRepository emailRequests,
         TimeProvider clock)
     {
         this.accountRepository = accountRepository;
@@ -35,12 +36,12 @@ public class EmailChangeConfirmationService
         this.securityJournal = securityJournal;
         this.passwordHasher = passwordHasher;
         this.tokenGenerator = tokenGenerator;
-        this.emailQueue = emailQueue;
+        this.emailRequests = emailRequests;
         this.clock = clock;
     }
 
     // Change l'adresse si le lien est encore valable et si le mot de passe est le bon. Un mauvais mot de passe ne consomme pas le lien.
-    // Une fois le changement fait, l'ancienne adresse est prévenue, en arrière-plan (GR Compte).
+    // L'ancienne adresse est prévenue en arrière-plan, par un e-mail qui n'entre dans la file qu'avec le changement (GR Compte).
     public async Task<EmailChangeConfirmationResult> ConfirmAsync(string linkToken, string password, IPAddress? ipAddress)
     {
         var tokenHash = tokenGenerator.HashToken(linkToken);
@@ -66,26 +67,14 @@ public class EmailChangeConfirmationService
             return new EmailChangeConfirmationResult.WrongPassword();
         }
 
-        var oldEmail = account.Email;
-        var result = await savingService.SaveWithRetriesAsync(
+        return await savingService.SaveWithRetriesAsync(
             () => PrepareNewEmailAsync(tokenHash, checkedPasswordHash, ipAddress),
             new EmailChangeConfirmationResult.LinkNoLongerValid());
-
-        if (result is EmailChangeConfirmationResult.EmailChanged)
-        {
-            emailQueue.Add(new BackgroundEmailRequest.EmailChangedNotice
-            {
-                AccountId = account.Id,
-                OldEmailAddress = oldEmail,
-                IpAddress = ipAddress
-            });
-        }
-
-        return result;
     }
 
     // Un passage : relit le lien et son compte, les vérifie, puis prépare la nouvelle adresse, le lien utilisé, l'effacement
-    // des liens de récupération et de déblocage partis vers l'ancienne adresse (SS §2), et l'événement du journal.
+    // des liens de récupération et de déblocage partis vers l'ancienne adresse (SS §2), l'événement du journal,
+    // et l'avis à l'adresse que le compte quitte.
     private async Task<PreparedChanges<EmailChangeConfirmationResult>> PrepareNewEmailAsync(
         string tokenHash,
         string checkedPasswordHash,
@@ -111,10 +100,14 @@ public class EmailChangeConfirmationService
             return PreparedChanges<EmailChangeConfirmationResult>.NothingToSave(new EmailChangeConfirmationResult.EmailAlreadyUsed());
         }
 
+        var now = clock.GetUtcNow().UtcDateTime;
+        var oldEmail = account.Email;
+
         account.ReplaceEmail(token.NewEmail);
-        token.MarkAsUsed(clock.GetUtcNow().UtcDateTime);
+        token.MarkAsUsed(now);
         await accountRepository.PrepareRecoveryAndUnlockLinksRemovalAsync(account.Id);
         securityJournal.PrepareEvent(SecurityEventType.EmailChange, SecurityEventResult.Success, account.Id, ipAddress);
+        emailRequests.PrepareRequest(EmailRequest.ForEmailChangedNotice(account.Id, oldEmail, ipAddress, now));
 
         return PreparedChanges<EmailChangeConfirmationResult>.SaveThenReturn(new EmailChangeConfirmationResult.EmailChanged());
     }

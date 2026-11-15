@@ -1,4 +1,5 @@
 using WalletFlow.Application.Categories;
+using WalletFlow.Application.Notifications;
 using WalletFlow.Application.Persistence;
 using WalletFlow.Domain.AccountsAndCategories;
 
@@ -7,20 +8,24 @@ namespace WalletFlow.Application.Transactions;
 // Cas d'utilisation : l'utilisateur connecté change la catégorie d'une opération (GR Dépenses). S'il le demande,
 // ce choix s'appliquera aussi aux prochaines opérations qui ont le même libellé : une règle de l'utilisateur est créée,
 // ou la sienne pour ce libellé change de catégorie. Les opérations déjà reçues ne changent pas.
+// Les dépenses du mois de la nouvelle catégorie changent : ses seuils de budget sont vérifiés juste après.
 public class TransactionCategoryChangeService
 {
     private readonly ITransactionRepository transactionRepository;
     private readonly ICategoryRepository categoryRepository;
+    private readonly BudgetAlertService budgetAlerts;
     private readonly DatabaseChangesSavingService savingService;
 
-    // Reçoit l'accès aux opérations et aux catégories, et l'enregistrement avec réessai.
+    // Reçoit l'accès aux opérations et aux catégories, la vérification des budgets, et l'enregistrement avec réessai.
     public TransactionCategoryChangeService(
         ITransactionRepository transactionRepository,
         ICategoryRepository categoryRepository,
+        BudgetAlertService budgetAlerts,
         DatabaseChangesSavingService savingService)
     {
         this.transactionRepository = transactionRepository;
         this.categoryRepository = categoryRepository;
+        this.budgetAlerts = budgetAlerts;
         this.savingService = savingService;
     }
 
@@ -36,6 +41,8 @@ public class TransactionCategoryChangeService
         {
             return refusal;
         }
+
+        await budgetAlerts.CheckAsync(userId);
 
         var view = await transactionRepository.ReadViewAsync(userId, transactionId);
 

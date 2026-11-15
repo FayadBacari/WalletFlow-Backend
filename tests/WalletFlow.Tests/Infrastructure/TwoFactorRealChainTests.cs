@@ -1,4 +1,6 @@
 using System.Net;
+using WalletFlow.Domain.NotificationsAndSupport;
+using WalletFlow.Application.Emails;
 using Microsoft.EntityFrameworkCore;
 using WalletFlow.Application.AccountRecovery;
 using WalletFlow.Application.Configuration;
@@ -30,7 +32,6 @@ public class TwoFactorRealChainTests
     private readonly OtpNetAuthenticatorCodeTool authenticatorCodeTool = new OtpNetAuthenticatorCodeTool();
     private readonly AesGcmTotpSecretProtector secretProtector = new AesGcmTotpSecretProtector(TwoFactorTestTools.CreateEncryptionKey());
     private readonly FakeEmailSender emailSender = new FakeEmailSender();
-    private readonly FakeBackgroundEmailRequestQueue emailQueue = new FakeBackgroundEmailRequestQueue();
     private readonly FakeTimeProvider clock = new FakeTimeProvider();
     private readonly InMemoryWaitingLoginStore waitingLoginStore;
     private readonly InMemoryWaitingSecretStore waitingSecretStore;
@@ -97,6 +98,7 @@ public class TwoFactorRealChainTests
             new UserAccountRepository(databaseContext),
             new UserSessionRepository(databaseContext),
             new TwoFactorAuthenticationRepository(databaseContext),
+            new EmailRequestRepository(databaseContext, new EmailRequestWakeUp()),
             CreateSavingService(databaseContext),
             CreateSecurityJournal(databaseContext, clock),
             tokenGenerator,
@@ -157,7 +159,7 @@ public class TwoFactorRealChainTests
             new UserAccountRepository(databaseContext),
             CreateSavingService(databaseContext),
             CreateSecurityJournal(databaseContext, clock),
-            emailQueue,
+            new EmailRequestRepository(databaseContext, new EmailRequestWakeUp()),
             passwordHasher,
             tokenGenerator,
             waitingLoginStore,
@@ -335,7 +337,7 @@ public class TwoFactorRealChainTests
         Assert.NotNull(lockedAccount.LockoutEndsAt);
         Assert.Equal(1, lockedAccount.LockoutCount);
         Assert.Equal(1, await CountSecurityEventsAsync(databaseContext, accountId, SecurityEventType.Lockout, SecurityEventResult.Success));
-        Assert.Single(emailQueue.AddedRequests);
+        Assert.Equal(1, await databaseContext.EmailRequests.CountAsync(row => row.UserId == accountId && row.Type == EmailRequestType.AccountUnlock));
 
         var lockedResult = await LogInWithPasswordAsync(databaseContext);
         Assert.IsNotType<AccountLoginResult.WaitingForTwoFactorCode>(lockedResult);
@@ -423,6 +425,7 @@ public class TwoFactorRealChainTests
         var passwordResetService = new PasswordResetService(
             new UserAccountRepository(databaseContext),
             new UserSessionRepository(databaseContext),
+            new EmailRequestRepository(databaseContext, new EmailRequestWakeUp()),
             CreateSavingService(databaseContext),
             CreateSecurityJournal(databaseContext, clock),
             passwordHasher,

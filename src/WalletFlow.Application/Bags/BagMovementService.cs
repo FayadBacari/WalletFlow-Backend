@@ -1,3 +1,4 @@
+using WalletFlow.Application.Notifications;
 using WalletFlow.Application.Persistence;
 using WalletFlow.Domain.BagsAndSuggestions;
 
@@ -6,22 +7,27 @@ namespace WalletFlow.Application.Bags;
 // Cas d'utilisation : l'utilisateur connecté déplace de l'argent disponible vers un sac, d'un sac à un autre,
 // ou d'un sac vers l'argent disponible (GR Sacs). Un déplacement ne rend jamais un sac négatif, et ne porte jamais
 // le total des sacs au-dessus du solde total. Le serveur vérifie ces règles, un déplacement à la fois (SS §5).
+// Un sac qui atteint son objectif grâce au déplacement envoie son alerte avec lui.
 public class BagMovementService
 {
     private readonly IBagRepository bagRepository;
     private readonly BagMovementChecks movementChecks;
+    private readonly BagGoalAlerts goalAlerts;
     private readonly DatabaseChangesSavingService savingService;
     private readonly TimeProvider clock;
 
-    // Reçoit l'accès aux sacs, les contrôles d'un déplacement, l'enregistrement avec réessai, et l'horloge qui date le mouvement.
+    // Reçoit l'accès aux sacs, les contrôles d'un déplacement, l'alerte d'objectif, l'enregistrement avec réessai,
+    // et l'horloge qui date le mouvement.
     public BagMovementService(
         IBagRepository bagRepository,
         BagMovementChecks movementChecks,
+        BagGoalAlerts goalAlerts,
         DatabaseChangesSavingService savingService,
         TimeProvider clock)
     {
         this.bagRepository = bagRepository;
         this.movementChecks = movementChecks;
+        this.goalAlerts = goalAlerts;
         this.savingService = savingService;
         this.clock = clock;
     }
@@ -83,6 +89,12 @@ public class BagMovementService
         };
 
         bagRepository.PrepareMovement(movement);
+
+        if (destinationBagId is Guid arrivalBagId)
+        {
+            await goalAlerts.PrepareAfterArrivalAsync(userId, arrivalBagId, amountInCents, now);
+        }
+
         bagRepository.PrepareUserCheck(user);
 
         return PreparedChanges<BagMovementResult>.SaveThenReturn(new BagMovementResult.Moved { Movement = movement });

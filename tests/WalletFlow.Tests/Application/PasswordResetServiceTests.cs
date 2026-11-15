@@ -3,6 +3,7 @@ using WalletFlow.Application.AccountRecovery;
 using WalletFlow.Application.UserAccounts;
 using WalletFlow.Application.Persistence;
 using WalletFlow.Application.Security;
+using WalletFlow.Domain.NotificationsAndSupport;
 using WalletFlow.Domain.UsersAndSecurity;
 using WalletFlow.Tests.Fakes;
 
@@ -20,6 +21,7 @@ public class PasswordResetServiceTests
     private readonly FakeUserAccountRepository accountRepository = new FakeUserAccountRepository();
     private readonly FakeUserSessionRepository sessionRepository = new FakeUserSessionRepository();
     private readonly FakeSecurityEventRepository securityEventRepository = new FakeSecurityEventRepository();
+    private readonly FakeEmailRequestRepository emailRequests = new FakeEmailRequestRepository();
     private readonly FakePasswordHasher passwordHasher = new FakePasswordHasher();
     private readonly FakeTimeProvider clock = new FakeTimeProvider();
 
@@ -29,7 +31,8 @@ public class PasswordResetServiceTests
         return new PasswordResetService(
             accountRepository,
             sessionRepository,
-            new DatabaseChangesSavingService(new FakeDatabaseUnitOfWork(accountRepository, sessionRepository, securityEventRepository)),
+            emailRequests,
+            new DatabaseChangesSavingService(new FakeDatabaseUnitOfWork(accountRepository, sessionRepository, securityEventRepository, emailRequests)),
             new SecurityJournalService(securityEventRepository, clock),
             passwordHasher,
             new FakeSecureTokenGenerator(),
@@ -373,5 +376,47 @@ public class PasswordResetServiceTests
         await Assert.ThrowsAsync<InvalidOperationException>(() => ResetPasswordAsync());
 
         Assert.Equal(OldHash, account.PasswordHash);
+    }
+
+    // --- Alerte « changement de mot de passe » (GR Notif)
+
+    // Le nouveau mot de passe et son alerte partent ensemble.
+    [Fact]
+    public async Task NewPasswordQueuesThePasswordChangeAlert()
+    {
+        var account = AddAccountWithRecoveryLink();
+
+        await ResetPasswordAsync();
+
+        var alert = Assert.Single(emailRequests.SavedRequests);
+        Assert.Equal(EmailRequestType.PasswordChange, alert.Type);
+        Assert.Equal(account.Id, alert.UserId);
+        Assert.Equal(IpAddress, alert.IpAddress);
+        Assert.Null(alert.EmailAddress);
+        Assert.Equal(clock.GetUtcNow().UtcDateTime, alert.RequestedAt);
+    }
+
+    // Un lien refusé ne change rien : aucune alerte ne part.
+    [Fact]
+    public async Task RefusedLinkQueuesNoAlert()
+    {
+        AddAccountWithRecoveryLink(linkType: EmailTokenType.AccountUnlock);
+
+        await ResetPasswordAsync();
+
+        Assert.Empty(emailRequests.SavedRequests);
+    }
+
+    // L'alerte ne part pas seule : si le changement ne peut pas s'enregistrer, elle n'entre pas dans la file.
+    [Fact]
+    public async Task AlertIsNotQueuedWhenTheChangeCannotBeSaved()
+    {
+        var account = AddAccountWithRecoveryLink();
+        emailRequests.IsDown = true;
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => ResetPasswordAsync());
+
+        Assert.Equal(OldHash, account.PasswordHash);
+        Assert.Empty(emailRequests.SavedRequests);
     }
 }

@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using WalletFlow.Application.AccountRecovery;
 using WalletFlow.Application.TwoFactorAuthentication;
 using WalletFlow.Application.UserSessions;
+using WalletFlow.Domain.NotificationsAndSupport;
 using WalletFlow.Domain.UsersAndSecurity;
 using WalletFlow.Infrastructure.Security;
 using WalletFlow.Tests.Fakes;
@@ -601,7 +602,7 @@ public class TwoFactorLoginServiceTests
             Assert.Null(activatedAccount.UserAccount.LockoutEndsAt);
         }
 
-        Assert.Empty(services.EmailQueue.AddedRequests);
+        Assert.Empty(services.EmailRequests.SavedRequests);
 
         var fifthResult = await services.LogInAsync(AccountPassword);
 
@@ -609,8 +610,9 @@ public class TwoFactorLoginServiceTests
         Assert.Equal(services.Clock.GetUtcNow().UtcDateTime.AddMinutes(15), activatedAccount.UserAccount.LockoutEndsAt);
         Assert.Equal(1, activatedAccount.UserAccount.LockoutCount);
         Assert.Equal(1, services.CountSecurityEvents(SecurityEventType.Lockout, SecurityEventResult.Success));
-        var unlockRequest = Assert.IsType<BackgroundEmailRequest.AccountUnlock>(Assert.Single(services.EmailQueue.AddedRequests));
-        Assert.Equal(activatedAccount.UserAccount.Id, unlockRequest.AccountId);
+        var unlockRequest = Assert.Single(services.EmailRequests.SavedRequests);
+        Assert.Equal(EmailRequestType.AccountUnlock, unlockRequest.Type);
+        Assert.Equal(activatedAccount.UserAccount.Id, unlockRequest.UserId);
     }
 
     [Fact]

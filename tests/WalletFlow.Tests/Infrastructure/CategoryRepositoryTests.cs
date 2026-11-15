@@ -7,6 +7,7 @@ using WalletFlow.Domain.UsersAndSecurity;
 using WalletFlow.Infrastructure.Persistence;
 using WalletFlow.Infrastructure.Persistence.Repositories;
 using WalletFlow.Tests.EndToEnd;
+using WalletFlow.Tests.Fakes;
 using static WalletFlow.Tests.Infrastructure.LocalTestDatabase;
 using static WalletFlow.Tests.Infrastructure.RealDeadlocks;
 
@@ -344,11 +345,12 @@ public class CategoryRepositoryTests
         var created = await new CategoryCreationService(repository, savingService).CreateAsync(account.Id, " Abonnements ");
         var category = Assert.IsType<CategoryCreationResult.Created>(created).Category;
         var renamed = await new CategoryRenameService(repository, savingService).RenameAsync(account.Id, category.Id, "Streaming");
-        var budget = await new CategoryBudgetService(repository, savingService).ReplaceAsync(account.Id, category.Id, 3000);
+        var budgetAlerts = CreateBudgetAlerts(databaseContext, new FakeTimeProvider());
+        var budget = await new CategoryBudgetService(repository, budgetAlerts, savingService).ReplaceAsync(account.Id, category.Id, 3000);
         var duplicate = await new CategoryCreationService(repository, savingService).CreateAsync(account.Id, "STREAMING");
         var transactionInCategory = await SaveTransactionAsync(databaseContext, account, category, "NETFLIX");
         var list = await new CategoryListService(repository).ListAsync(account.Id);
-        var deleted = await new CategoryDeletionService(repository).DeleteAsync(account.Id, category.Id);
+        var deleted = await new CategoryDeletionService(repository, budgetAlerts).DeleteAsync(account.Id, category.Id);
 
         await databaseContext.Database.ExecuteSqlRawAsync("SET CONSTRAINTS ALL IMMEDIATE");
         Assert.IsType<CategoryRenameResult.Renamed>(renamed);

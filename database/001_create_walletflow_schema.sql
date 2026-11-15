@@ -235,6 +235,79 @@ CREATE TABLE parametrer (
     PRIMARY KEY (id_utilisateur, code_type_alerte)
 );
 
+-- Les alertes envoyées des quatre types désactivables (DD §9.3). Chaque type porte exactement ce dont il a besoin :
+-- une catégorie, un mois et un seuil pour le budget ; un mois pour les suggestions ; un sac ; une connexion.
+CREATE TABLE alerte (
+    id_alerte        UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    date_alerte      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    mois_alerte      DATE,
+    seuil_alerte     SMALLINT,
+    id_utilisateur   UUID        NOT NULL
+        REFERENCES utilisateur (id_utilisateur) ON DELETE CASCADE,
+    code_type_alerte VARCHAR(30) NOT NULL
+        REFERENCES type_alerte (code_type_alerte),
+    id_categorie     UUID
+        REFERENCES categorie (id_categorie) ON DELETE CASCADE,
+    id_sac           UUID
+        REFERENCES sac (id_sac) ON DELETE CASCADE,
+    id_connexion     UUID
+        REFERENCES connexion_bancaire (id_connexion) ON DELETE CASCADE,
+    CONSTRAINT ck_alerte_mois CHECK (EXTRACT(DAY FROM mois_alerte) = 1),
+    CONSTRAINT ck_alerte_seuil CHECK (seuil_alerte IN (80, 100)),
+    CONSTRAINT ck_alerte_contenu CHECK (
+        (code_type_alerte = 'budget_atteint'
+            AND id_categorie IS NOT NULL AND mois_alerte IS NOT NULL AND seuil_alerte IS NOT NULL
+            AND id_sac IS NULL AND id_connexion IS NULL)
+        OR (code_type_alerte = 'nouvelle_suggestion'
+            AND mois_alerte IS NOT NULL
+            AND id_categorie IS NULL AND seuil_alerte IS NULL AND id_sac IS NULL AND id_connexion IS NULL)
+        OR (code_type_alerte = 'objectif_sac_atteint'
+            AND id_sac IS NOT NULL
+            AND id_categorie IS NULL AND mois_alerte IS NULL AND seuil_alerte IS NULL AND id_connexion IS NULL)
+        OR (code_type_alerte = 'autorisation_bancaire'
+            AND id_connexion IS NOT NULL
+            AND id_categorie IS NULL AND mois_alerte IS NULL AND seuil_alerte IS NULL AND id_sac IS NULL))
+);
+
+-- Une alerte ne part qu'une fois : par catégorie, mois et seuil ; par utilisateur et par mois ; par sac ; par connexion.
+CREATE UNIQUE INDEX ux_alerte_budget ON alerte (id_categorie, mois_alerte, seuil_alerte)
+    WHERE code_type_alerte = 'budget_atteint';
+CREATE UNIQUE INDEX ux_alerte_suggestion ON alerte (id_utilisateur, mois_alerte)
+    WHERE code_type_alerte = 'nouvelle_suggestion';
+CREATE UNIQUE INDEX ux_alerte_sac ON alerte (id_sac)
+    WHERE code_type_alerte = 'objectif_sac_atteint';
+CREATE UNIQUE INDEX ux_alerte_autorisation ON alerte (id_connexion)
+    WHERE code_type_alerte = 'autorisation_bancaire';
+
+-- La file d'e-mails (DD §9.4) : aucun secret, chaque lien est créé au moment de l'envoi. Une récupération ne vise aucun
+-- compte : elle entre dans la file avant de savoir si l'adresse en a un. Tout autre e-mail vise un compte. Seuls la
+-- récupération, le lien vers la nouvelle adresse et l'avis à l'ancienne gardent une adresse, en minuscules comme
+-- celle du compte. Un e-mail d'alerte, et lui seul, est lié à son alerte.
+CREATE TABLE demande_email (
+    id_demande_email      UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
+    type_demande_email    VARCHAR(30)  NOT NULL,
+    adresse_email_demande VARCHAR(254),
+    adresse_ip_demande    INET,
+    date_demande_email    TIMESTAMPTZ  NOT NULL DEFAULT now(),
+    nb_essais_envoi       SMALLINT     NOT NULL DEFAULT 0,
+    date_prochain_essai   TIMESTAMPTZ  NOT NULL DEFAULT now(),
+    id_utilisateur        UUID
+        REFERENCES utilisateur (id_utilisateur) ON DELETE CASCADE,
+    id_alerte             UUID         UNIQUE
+        REFERENCES alerte (id_alerte) ON DELETE CASCADE,
+    CONSTRAINT ck_demande_email_type CHECK (type_demande_email IN (
+        'recuperation_mdp', 'deblocage', 'changement_email', 'avis_ancienne_adresse',
+        'nouvel_appareil', 'changement_mdp', 'alerte')),
+    CONSTRAINT ck_demande_email_essais CHECK (nb_essais_envoi BETWEEN 0 AND 5),
+    CONSTRAINT ck_demande_email_compte CHECK (
+        (type_demande_email = 'recuperation_mdp') = (id_utilisateur IS NULL)),
+    CONSTRAINT ck_demande_email_adresse CHECK (
+        (type_demande_email IN ('recuperation_mdp', 'changement_email', 'avis_ancienne_adresse'))
+        = (adresse_email_demande IS NOT NULL)),
+    CONSTRAINT ck_demande_email_minuscules CHECK (adresse_email_demande = lower(adresse_email_demande)),
+    CONSTRAINT ck_demande_email_alerte CHECK ((type_demande_email = 'alerte') = (id_alerte IS NOT NULL))
+);
+
 CREATE TABLE demande_support (
     id_demande      UUID          PRIMARY KEY DEFAULT gen_random_uuid(),
     message_demande VARCHAR(5000) NOT NULL,
@@ -273,6 +346,12 @@ CREATE INDEX ix_suggestion_utilisateur ON suggestion (id_utilisateur);
 CREATE INDEX ix_suggestion_categorie ON suggestion (id_categorie);
 CREATE INDEX ix_mouvement_depart ON mouvement_sac (id_sac_depart);
 CREATE INDEX ix_mouvement_arrivee ON mouvement_sac (id_sac_arrivee);
+CREATE INDEX ix_alerte_utilisateur ON alerte (id_utilisateur);
+CREATE INDEX ix_alerte_categorie ON alerte (id_categorie);
+CREATE INDEX ix_alerte_sac ON alerte (id_sac);
+CREATE INDEX ix_alerte_connexion ON alerte (id_connexion);
+CREATE INDEX ix_demande_email_utilisateur ON demande_email (id_utilisateur);
+CREATE INDEX ix_demande_email_essai ON demande_email (date_prochain_essai);
 CREATE INDEX ix_demande_utilisateur ON demande_support (id_utilisateur);
 CREATE INDEX ix_reponse_demande ON reponse_support (id_demande);
 

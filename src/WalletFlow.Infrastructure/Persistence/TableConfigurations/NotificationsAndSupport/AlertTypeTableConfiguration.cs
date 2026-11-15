@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata.Builders;
 using WalletFlow.Domain.NotificationsAndSupport;
+using WalletFlow.Infrastructure.Persistence.DatabaseCodes;
 
 namespace WalletFlow.Infrastructure.Persistence.TableConfigurations.NotificationsAndSupport;
 
@@ -13,8 +14,10 @@ public class AlertTypeTableConfiguration : IEntityTypeConfiguration<AlertType>
         builder.ToTable("type_alerte");
 
         // Les 8 types d'alerte sont insérés par le script SQL : leur code sert d'identifiant.
-        builder.HasKey(nameof(AlertType.Code));
-        builder.Property(nameof(AlertType.Code)).HasColumnName("code_type_alerte").ValueGeneratedNever();
+        builder.HasKey(nameof(AlertType.Kind));
+        builder.Property(nameof(AlertType.Kind)).HasColumnName("code_type_alerte")
+            .HasConversion(AlertKindDatabaseCodes.Table.Converter)
+            .ValueGeneratedNever();
 
         builder.Property(nameof(AlertType.Label)).HasColumnName("libelle_type_alerte");
         builder.Property(nameof(AlertType.CanBeDisabled)).HasColumnName("est_desactivable");

@@ -25,7 +25,7 @@ public class TwoFactorServicesWithFakeTools
     public FakeUserSessionRepository SessionRepository { get; } = new FakeUserSessionRepository();
     public FakeTwoFactorAuthenticationRepository TwoFactorRepository { get; } = new FakeTwoFactorAuthenticationRepository();
     public FakeDatabaseUnitOfWork UnitOfWork { get; }
-    public FakeBackgroundEmailRequestQueue EmailQueue { get; } = new FakeBackgroundEmailRequestQueue();
+    public FakeEmailRequestRepository EmailRequests { get; } = new FakeEmailRequestRepository();
     public FakePasswordHasher PasswordHasher { get; } = new FakePasswordHasher();
     public FakeBackupCodeHasher BackupCodeHasher { get; } = new FakeBackupCodeHasher();
     public FakeTimeProvider Clock { get; } = new FakeTimeProvider();
@@ -43,7 +43,8 @@ public class TwoFactorServicesWithFakeTools
             AccountRepository,
             SessionRepository,
             TwoFactorRepository,
-            SecurityEventRepository);
+            SecurityEventRepository,
+            EmailRequests);
         WaitingLoginStore = new InMemoryWaitingLoginStore(Clock);
         WaitingSecretStore = new InMemoryWaitingSecretStore(Clock);
         UsedCodesRegister = new InMemoryUsedAuthenticatorCodesRegister(Clock);
@@ -80,6 +81,7 @@ public class TwoFactorServicesWithFakeTools
             AccountRepository,
             SessionRepository,
             TwoFactorRepository,
+            EmailRequests,
             CreateSavingService(),
             CreateSecurityJournal(),
             TokenGenerator,
@@ -93,7 +95,7 @@ public class TwoFactorServicesWithFakeTools
             AccountRepository,
             CreateSavingService(),
             CreateSecurityJournal(),
-            EmailQueue,
+            EmailRequests,
             PasswordHasher,
             TokenGenerator,
             WaitingLoginStore,
@@ -148,6 +150,7 @@ public class TwoFactorServicesWithFakeTools
         return new PasswordResetService(
             AccountRepository,
             SessionRepository,
+            EmailRequests,
             CreateSavingService(),
             CreateSecurityJournal(),
             PasswordHasher,

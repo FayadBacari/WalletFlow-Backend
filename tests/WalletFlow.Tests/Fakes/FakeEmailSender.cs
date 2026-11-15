@@ -28,6 +28,15 @@ public class FakeEmailSender : IEmailSender
         return Task.CompletedTask;
     }
 
+    // Donne le dernier e-mail parti vers cette adresse, même pendant qu'une tâche de fond en envoie.
+    public EmailMessage FindLastSentEmailTo(string recipient)
+    {
+        lock (sentEmailsLock)
+        {
+            return SentEmails.Last(email => email.RecipientAddress == recipient);
+        }
+    }
+
     // Compte les e-mails partis vers cette adresse, même pendant qu'une tâche de fond en envoie.
     public int CountSentEmailsTo(string recipient)
     {

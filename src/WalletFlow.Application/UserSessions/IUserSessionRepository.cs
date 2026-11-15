@@ -18,6 +18,9 @@ public interface IUserSessionRepository
     // Renvoie vrai si cette empreinte de jeton d'appareil appartient à ce compte.
     Task<bool> DeviceBelongsToAccountAsync(string deviceTokenHash, Guid accountId);
 
+    // Renvoie vrai si le compte a déjà au moins un appareil : sinon, c'est sa toute première connexion.
+    Task<bool> HasDeviceAsync(Guid accountId);
+
     // Cherche une session par l'empreinte de son identifiant. Renvoie null si elle n'existe pas.
     // La session lue n'est pas suivie : sa date d'activité s'écrit avec RecordActivityAsync.
     Task<UserSession?> FindAsync(string sessionTokenHash);

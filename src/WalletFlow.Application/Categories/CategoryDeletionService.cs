@@ -1,19 +1,24 @@
+using WalletFlow.Application.Notifications;
+
 namespace WalletFlow.Application.Categories;
 
 // Cas d'utilisation : l'utilisateur connecté supprime une de ses catégories, sauf « Autres » (GR Dépenses).
 // Ses transactions passent dans « Autres », ses règles disparaissent, ses suggestions sans réponse sont retirées,
 // et ses suggestions acceptées restent sans catégorie, pour que les économies réalisées restent comptées (GR Sacs, MPD §1.3).
+// Ses alertes partent avec elle. Les dépenses du mois d'« Autres » changent : ses seuils de budget sont vérifiés juste après.
 public class CategoryDeletionService
 {
     // Un interblocage veut dire qu'une autre requête a réussi à écrire : quelques essais suffisent largement.
     public const int MaximumTries = 5;
 
     private readonly ICategoryRepository categoryRepository;
+    private readonly BudgetAlertService budgetAlerts;
 
-    // Reçoit l'accès aux catégories.
-    public CategoryDeletionService(ICategoryRepository categoryRepository)
+    // Reçoit l'accès aux catégories et la vérification des budgets.
+    public CategoryDeletionService(ICategoryRepository categoryRepository, BudgetAlertService budgetAlerts)
     {
         this.categoryRepository = categoryRepository;
+        this.budgetAlerts = budgetAlerts;
     }
 
     // Supprime la catégorie si elle est à l'utilisateur et n'est pas « Autres ».
@@ -37,6 +42,7 @@ public class CategoryDeletionService
             // la suppression ne supprime alors rien, et le passage suivant relit la catégorie.
             if (await categoryRepository.DeleteAsync(userId, categoryId))
             {
+                await budgetAlerts.CheckAsync(userId);
                 return new CategoryDeletionResult.Deleted();
             }
         }

@@ -1,5 +1,5 @@
-using WalletFlow.Application.AccountRecovery;
 using WalletFlow.Application.AccountSettings;
+using WalletFlow.Domain.NotificationsAndSupport;
 using WalletFlow.Domain.UsersAndSecurity;
 using WalletFlow.Tests.Fakes;
 
@@ -36,10 +36,12 @@ public class EmailChangeRequestServiceTests
 
         Assert.IsType<EmailChangeRequestResult.RequestAccepted>(result);
         Assert.Equal(TwoFactorServicesWithFakeTools.AccountEmail, account.Email);
-        var request = Assert.IsType<BackgroundEmailRequest.EmailChange>(Assert.Single(tools.EmailQueue.AddedRequests));
-        Assert.Equal(account.Id, request.AccountId);
-        Assert.Equal(NewEmail, request.NewEmailAddress);
+        var request = Assert.Single(tools.EmailRequests.SavedRequests);
+        Assert.Equal(EmailRequestType.EmailChange, request.Type);
+        Assert.Equal(account.Id, request.UserId);
+        Assert.Equal(NewEmail, request.EmailAddress);
         Assert.Equal(TwoFactorServicesWithFakeTools.IpAddress, request.IpAddress);
+        Assert.Equal(tools.Clock.GetUtcNow().UtcDateTime, request.NextTryAt);
         Assert.Equal(new List<string> { NewEmail }, requestLimiter.CountedAddresses);
     }
 
@@ -55,7 +57,7 @@ public class EmailChangeRequestServiceTests
 
         Assert.IsType<EmailChangeRequestResult.RequestAccepted>(freeAddressResult);
         Assert.IsType<EmailChangeRequestResult.RequestAccepted>(takenAddressResult);
-        Assert.Equal(2, tools.EmailQueue.AddedRequests.Count);
+        Assert.Equal(2, tools.EmailRequests.SavedRequests.Count);
     }
 
     [Theory]
@@ -70,7 +72,7 @@ public class EmailChangeRequestServiceTests
 
         Assert.IsType<EmailChangeRequestResult.InvalidEmailAddress>(result);
         Assert.Equal(0, tools.PasswordHasher.VerifiedPasswordCount);
-        Assert.Empty(tools.EmailQueue.AddedRequests);
+        Assert.Empty(tools.EmailRequests.SavedRequests);
         Assert.Empty(requestLimiter.CountedAddresses);
     }
 
@@ -83,7 +85,7 @@ public class EmailChangeRequestServiceTests
         var result = await RequestAsync(account.Id, TwoFactorServicesWithFakeTools.AccountPassword, " UTILISATEUR@exemple.test");
 
         Assert.IsType<EmailChangeRequestResult.SameEmailAddress>(result);
-        Assert.Empty(tools.EmailQueue.AddedRequests);
+        Assert.Empty(tools.EmailRequests.SavedRequests);
     }
 
     [Fact]
@@ -94,7 +96,7 @@ public class EmailChangeRequestServiceTests
         var result = await RequestAsync(account.Id, TwoFactorServicesWithFakeTools.WrongPassword);
 
         Assert.IsType<EmailChangeRequestResult.WrongPassword>(result);
-        Assert.Empty(tools.EmailQueue.AddedRequests);
+        Assert.Empty(tools.EmailRequests.SavedRequests);
         Assert.Empty(requestLimiter.CountedAddresses);
         Assert.Equal(1, tools.CountSecurityEvents(SecurityEventType.EmailChange, SecurityEventResult.Failure));
     }
@@ -112,7 +114,7 @@ public class EmailChangeRequestServiceTests
         Assert.IsType<EmailChangeRequestResult.WrongPassword>(wrongPasswordResult);
         Assert.IsType<EmailChangeRequestResult.TooManyRequests>(rightPasswordResult);
         Assert.Single(requestLimiter.CountedAddresses);
-        Assert.Empty(tools.EmailQueue.AddedRequests);
+        Assert.Empty(tools.EmailRequests.SavedRequests);
     }
 
     [Fact]
@@ -128,7 +130,7 @@ public class EmailChangeRequestServiceTests
         Assert.IsType<EmailChangeRequestResult.WrongPasswordOrCode>(withoutCodeResult);
         Assert.IsType<EmailChangeRequestResult.WrongPasswordOrCode>(wrongCodeResult);
         Assert.IsType<EmailChangeRequestResult.RequestAccepted>(rightCodeResult);
-        Assert.Single(tools.EmailQueue.AddedRequests);
+        Assert.Single(tools.EmailRequests.SavedRequests);
     }
 
     // Avec la double authentification, un mauvais mot de passe reçoit le même refus qu'un mauvais code.
@@ -158,6 +160,22 @@ public class EmailChangeRequestServiceTests
         Assert.IsType<EmailChangeRequestResult.RequestAccepted>(firstResult);
         Assert.IsType<EmailChangeRequestResult.WrongPasswordOrCode>(secondResult);
         Assert.Single(tools.TwoFactorRepository.SavedBackupCodes, savedCode => savedCode.UsedAt != null);
-        Assert.Single(tools.EmailQueue.AddedRequests);
+        Assert.Single(tools.EmailRequests.SavedRequests);
+    }
+
+    // Le code de secours et la demande partent ensemble : si la demande ne peut pas entrer dans la file, le code reste valable.
+    [Fact]
+    public async Task BackupCodeIsNotSpentWhenTheRequestCannotBeQueued()
+    {
+        var activatedAccount = tools.AddActivatedAccount();
+        tools.EmailRequests.IsDown = true;
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => RequestAsync(
+            activatedAccount.UserAccount.Id,
+            TwoFactorServicesWithFakeTools.AccountPassword,
+            code: activatedAccount.BackupCodes[0]));
+
+        Assert.DoesNotContain(tools.TwoFactorRepository.SavedBackupCodes, savedCode => savedCode.UsedAt != null);
+        Assert.Empty(tools.EmailRequests.SavedRequests);
     }
 }

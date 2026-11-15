@@ -86,6 +86,64 @@ public class ConcurrentRequestsTests
         }
     }
 
+    // Deux premières connexions simultanées, chacune depuis son appareil : une seule est la toute première du compte,
+    // l'autre déclenche l'alerte « nouvel appareil » (GR Notif). Sans le contrôle du compte à l'enregistrement, les deux
+    // se croiraient la première, et l'alerte se perdrait. La course est jouée sur 5 comptes, pour qu'elle arrive vraiment.
+    [Fact]
+    public async Task SimultaneousFirstLoginsSendExactlyOneNewDeviceAlert()
+    {
+        using var api = new ApiFactoryWithRealDatabase();
+        var emails = new List<string>();
+
+        try
+        {
+            for (var accountNumber = 1; accountNumber <= 5; accountNumber++)
+            {
+                var email = CreateUniqueEmail("course-appareils");
+                emails.Add(email);
+                await SaveConfirmedAccountAsync(api, email);
+
+                var results = await SimultaneousRequests.RunAsync(api, 2, (services, requestNumber) =>
+                    services.GetRequiredService<AccountLoginService>().LogInAsync(new LoginAttempt
+                    {
+                        EmailAddress = email,
+                        Password = ValidPassword
+                    }));
+
+                Assert.All(results, result => Assert.IsType<AccountLoginResult.LoggedIn>(result));
+            }
+
+            await using var databaseContext = LocalTestDatabase.CreateDatabaseContext();
+            foreach (var email in emails)
+            {
+                var account = await databaseContext.Users.SingleAsync(row => row.Email == email);
+                await WaitUntilQueueIsEmptyAsync(databaseContext, account.Id);
+                Assert.Equal(2, await databaseContext.Devices.CountAsync(row => row.UserId == account.Id));
+                Assert.Equal(1, api.EmailSender.CountSentEmailsTo(email));
+            }
+        }
+        finally
+        {
+            foreach (var email in emails)
+            {
+                await DeleteAccountAsync(email);
+            }
+        }
+    }
+
+    // Attend que la tâche de fond ait vidé la file de ce compte, 10 secondes au plus.
+    private static async Task WaitUntilQueueIsEmptyAsync(WalletFlowDatabaseContext databaseContext, Guid accountId)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(10);
+
+        while (await databaseContext.EmailRequests.AnyAsync(row => row.UserId == accountId) && DateTime.UtcNow < deadline)
+        {
+            await Task.Delay(20);
+        }
+
+        Assert.False(await databaseContext.EmailRequests.AnyAsync(row => row.UserId == accountId));
+    }
+
     // Lance les 20 requêtes au même signal, chacune avec son propre accès à la base (voir SimultaneousRequests).
     private static async Task<List<TResult>> RunSimultaneouslyAsync<TResult>(
         ApiFactoryWithRealDatabase api,

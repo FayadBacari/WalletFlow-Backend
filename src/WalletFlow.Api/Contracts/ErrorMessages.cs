@@ -132,4 +132,10 @@ public static class ErrorMessages
     public const string SuggestionAmountBreaksRules = "Le montant placé va de 0,01 € au montant de la suggestion.";
 
     public const string SuggestionAlreadyAnswered = "Tu as déjà répondu à cette suggestion.";
+
+    // Le canal des alertes ne fait pas partie de la liste.
+    public const string AlertChannelUnknown = "Le canal vaut « email », « phone » ou « emailAndPhone ».";
+
+    // GR Notif : les alertes de sécurité ne peuvent pas être désactivées.
+    public const string SecurityAlertCannotBeDisabled = "Les alertes de sécurité ne peuvent pas être désactivées.";
 }

@@ -1,4 +1,5 @@
 using System.Net;
+using WalletFlow.Application.Emails;
 using Microsoft.EntityFrameworkCore;
 using WalletFlow.Application.Configuration;
 using WalletFlow.Application.UserAccounts;
@@ -77,7 +78,7 @@ public class AccountLoginRealChainTests
             new UserAccountRepository(databaseContext),
             CreateSavingService(databaseContext),
             CreateSecurityJournal(databaseContext, clock),
-            new FakeBackgroundEmailRequestQueue(),
+            new EmailRequestRepository(databaseContext, new EmailRequestWakeUp()),
             passwordHasher,
             tokenGenerator,
             new InMemoryWaitingLoginStore(clock),
@@ -85,6 +86,7 @@ public class AccountLoginRealChainTests
                 new UserAccountRepository(databaseContext),
                 new UserSessionRepository(databaseContext),
                 new TwoFactorAuthenticationRepository(databaseContext),
+                new EmailRequestRepository(databaseContext, new EmailRequestWakeUp()),
                 CreateSavingService(databaseContext),
                 CreateSecurityJournal(databaseContext, clock),
                 tokenGenerator,

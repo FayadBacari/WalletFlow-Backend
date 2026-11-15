@@ -77,6 +77,15 @@ public class FakeUserSessionRepository : IUserSessionRepository, ITransactionalF
         return Task.FromResult(false);
     }
 
+    // Cherche en mémoire un appareil de ce compte.
+    public Task<bool> HasDeviceAsync(Guid accountId)
+    {
+        lock (pendingChangesLock)
+        {
+            return Task.FromResult(SavedDevices.Any(device => device.UserId == accountId));
+        }
+    }
+
     // Cherche en mémoire une session par son empreinte.
     public Task<UserSession?> FindAsync(string sessionTokenHash)
     {

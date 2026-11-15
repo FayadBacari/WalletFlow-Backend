@@ -25,6 +25,15 @@ public class FakeSuggestionRepository : ISuggestionRepository, ITransactionalFak
     // Simule d'autres requêtes qui écrivent les mêmes lignes juste avant chaque enregistrement : un conflit chacune.
     public int Conflicts { get; set; } = 0;
 
+    // Le faux dépôt des opérations, où se voit qu'un utilisateur en a au moins une. Sans lui, aucun utilisateur n'en a.
+    public FakeTransactionRepository? Transactions { get; set; } = null;
+
+    // Simule une panne de la base pour les suggestions de cet utilisateur : les lire échoue.
+    public Guid? FailingUserId { get; set; } = null;
+
+    // Simule une panne de la base pendant la recherche des utilisateurs à calculer.
+    public bool FailsWhenListingUsers { get; set; } = false;
+
     // Relie la fausse base des suggestions à celle des sacs, où sont les mouvements.
     public FakeSuggestionRepository(FakeBagRepository bagRepository)
     {
@@ -34,6 +43,11 @@ public class FakeSuggestionRepository : ISuggestionRepository, ITransactionalFak
     // Donne les suggestions gardées pour cet utilisateur.
     public Task<List<SavingsSuggestion>> FindAllAsync(Guid userId)
     {
+        if (userId == FailingUserId)
+        {
+            throw new InvalidOperationException("Panne simulée des suggestions de cet utilisateur.");
+        }
+
         lock (pendingChangesLock)
         {
             var suggestions = SavedSuggestions.Where(suggestion => suggestion.UserId == userId).ToList();
@@ -61,6 +75,37 @@ public class FakeSuggestionRepository : ISuggestionRepository, ITransactionalFak
 
             return Task.FromResult(suggestion);
         }
+    }
+
+    // Donne les utilisateurs gardés dont ce mois attend son calcul, dans l'ordre de leur identifiant comme la vraie base :
+    // PostgreSQL range les uuid octet par octet, comme cette comparaison de leur texte.
+    public async Task<List<Guid>> FindUsersToCalculateAsync(DateOnly month, Guid? afterUserId, int count)
+    {
+        if (FailsWhenListingUsers)
+        {
+            throw new InvalidOperationException("Panne simulée de la recherche des utilisateurs.");
+        }
+
+        var dueUsers = new List<Guid>();
+
+        foreach (var user in bagRepository.SavedUsers.ToList())
+        {
+            var hasTransaction = Transactions != null && await Transactions.FindEarliestDateAsync(user.Id, null) != null;
+            var isDue = user.IsEmailConfirmed
+                && (user.LastSuggestionMonth == null || user.LastSuggestionMonth < month)
+                && hasTransaction
+                && (afterUserId == null || string.CompareOrdinal(user.Id.ToString(), afterUserId.Value.ToString()) > 0);
+
+            if (isDue)
+            {
+                dueUsers.Add(user.Id);
+            }
+        }
+
+        return dueUsers
+            .OrderBy(userId => userId.ToString(), StringComparer.Ordinal)
+            .Take(count)
+            .ToList();
     }
 
     // Additionne les mouvements gardés qui viennent des suggestions acceptées de l'utilisateur.

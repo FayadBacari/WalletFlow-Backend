@@ -15,7 +15,7 @@ public class SecurityEvent
     // resultat_evenement
     public SecurityEventResult Result { get; init; }
 
-    // date_evenement : l'événement est conservé de 6 mois à 1 an.
+    // date_evenement : l'événement est conservé 1 an, puis effacé (SS §11).
     // Donnée par l'horloge de l'application : le compilateur refuse un événement créé sans elle.
     public required DateTime OccurredAt { get; init; }
 

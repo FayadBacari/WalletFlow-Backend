@@ -405,7 +405,7 @@ Cette donnée dépend à la fois de l'utilisateur et du type d'alerte : elle est
 - `mois_alerte` : premier jour d'un mois, seulement pour `budget_atteint` (le mois des dépenses) et `nouvelle_suggestion` (le mois des suggestions).
 - `seuil_alerte` : 80 ou 100, seulement pour `budget_atteint`.
 
-Une alerte est gardée pour les quatre types désactivables, pour ne jamais envoyer deux fois la même : une par catégorie, par mois et par seuil pour `budget_atteint` ; une par mois pour `nouvelle_suggestion` ; une par sac pour `objectif_sac_atteint` ; une par connexion pour `autorisation_bancaire`. Changer l'objectif d'un sac efface son alerte, comme renouveler l'autorisation d'une connexion : le nouvel objectif ou la nouvelle autorisation peut en déclencher une autre (GR Sacs, GR Comptes).
+Une alerte est gardée pour les quatre types désactivables, pour ne jamais envoyer deux fois la même : une par catégorie, par mois et par seuil pour `budget_atteint` ; une par mois pour `nouvelle_suggestion` ; une par sac pour `objectif_sac_atteint` ; une par connexion pour `autorisation_bancaire`. Quand les deux seuils de budget sont atteints d'un coup, l'alerte de 80 % est gardée sans e-mail : elle ne part pas plus tard dans le mois. Changer le montant de l'objectif d'un sac, ou l'enlever, efface son alerte ; changer seulement sa date la garde. Renouveler l'autorisation d'une connexion efface aussi son alerte : le nouvel objectif ou la nouvelle autorisation peut en déclencher une autre (GR Sacs, GR Comptes).
 
 Une alerte que l'utilisateur a désactivée n'est pas créée. Les alertes de sécurité ne sont pas gardées ici : elles partent directement par la file d'e-mails (§9.4).
 
@@ -429,7 +429,7 @@ Une alerte est liée à son utilisateur et à son type, et selon son type à une
 
 - `id_demande_email` : UUID.
 - `type_demande_email` : `recuperation_mdp`, `deblocage`, `changement_email`, `avis_ancienne_adresse`, `nouvel_appareil`, `changement_mdp` ou `alerte`.
-- `adresse_email_demande` : seulement quand l'e-mail ne part pas à l'adresse actuelle du compte : l'adresse saisie pour une récupération, la nouvelle adresse à confirmer, ou l'ancienne adresse prévenue.
+- `adresse_email_demande` : seulement quand l'e-mail ne part pas à l'adresse actuelle du compte : l'adresse saisie pour une récupération, la nouvelle adresse à confirmer, ou l'ancienne adresse prévenue. En minuscules, comme l'adresse d'un compte.
 - `adresse_ip_demande` : IPv4 ou IPv6, celle de la requête qui a demandé l'e-mail, pour le journal de sécurité.
 - `date_demande_email` : renseignée automatiquement.
 - `nb_essais_envoi` : de 0 à 5, 0 par défaut.
@@ -437,7 +437,7 @@ Une alerte est liée à son utilisateur et à son type, et selon son type à une
 
 La file d'e-mails est gardée en base : un redémarrage du serveur ne perd aucune demande. Elle ne contient aucun secret : chaque lien est créé au moment de l'envoi. Une demande est effacée dès que l'e-mail est parti, ou après son 5e échec, noté dans le journal technique (SS §9).
 
-Une demande peut ne viser aucun compte : une récupération est mise dans la file avec l'adresse saisie, avant de savoir si un compte l'utilise. Une demande de type `alerte` est liée à son alerte (§9.3). Ces liens sont les associations ATTENDRE et ANNONCER du MCD.
+Une récupération ne vise aucun compte : elle est mise dans la file avec l'adresse saisie, avant de savoir si un compte l'utilise. Toute autre demande vise un compte. Une demande de type `alerte` est liée à son alerte (§9.3). Ces liens sont les associations ATTENDRE et ANNONCER du MCD.
 
 
 ## 10. Support

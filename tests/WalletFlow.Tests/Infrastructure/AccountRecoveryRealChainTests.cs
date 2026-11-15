@@ -2,7 +2,9 @@ using System.Net;
 using Microsoft.EntityFrameworkCore;
 using WalletFlow.Application.AccountRecovery;
 using WalletFlow.Application.Configuration;
+using WalletFlow.Application.Emails;
 using WalletFlow.Application.UserSessions;
+using WalletFlow.Domain.NotificationsAndSupport;
 using WalletFlow.Domain.UsersAndSecurity;
 using WalletFlow.Infrastructure.Emails;
 using WalletFlow.Infrastructure.Persistence;
@@ -14,8 +16,8 @@ using static WalletFlow.Tests.Infrastructure.LocalTestDatabase;
 
 namespace WalletFlow.Tests.Infrastructure;
 
-// Vérifie la récupération et le déblocage avec les vrais outils : Argon2, jetons et base PostgreSQL locale.
-// Seuls l'envoi des e-mails, la file et l'horloge sont remplacés. Chaque test annule sa transaction à la fin : la base reste vide.
+// Vérifie la récupération et le déblocage avec les vrais outils : Argon2, jetons, file d'e-mails et base PostgreSQL locale.
+// Seuls l'envoi des e-mails et l'horloge sont remplacés. Chaque test annule sa transaction à la fin : la base reste vide.
 public class AccountRecoveryRealChainTests
 {
     private const string NewPassword = "Nouveau-Mot-De-Passe-2";
@@ -25,8 +27,11 @@ public class AccountRecoveryRealChainTests
     private readonly LibsodiumPasswordHasher passwordHasher = RealArgonHashers.CreatePasswordHasher();
     private readonly RandomSecureTokenGenerator tokenGenerator = new RandomSecureTokenGenerator();
     private readonly FakeEmailSender emailSender = new FakeEmailSender();
-    private readonly FakeBackgroundEmailRequestQueue emailQueue = new FakeBackgroundEmailRequestQueue();
     private readonly FakeTimeProvider clock = new FakeTimeProvider();
+
+    // Les comptes et les adresses de ce test : seules leurs demandes d'e-mail sont traitées, jamais celles d'un autre test.
+    private readonly List<Guid?> accountsOfThisTest = new List<Guid?>();
+    private readonly List<string?> addressesOfThisTest = new List<string?>();
 
     // Enregistre un compte avec ce mot de passe, haché avec le vrai Argon2.
     private async Task<Guid> SaveAccountAsync(WalletFlowDatabaseContext databaseContext, string emailAddress, string password, bool isEmailConfirmed = true)
@@ -40,6 +45,8 @@ public class AccountRecoveryRealChainTests
         databaseContext.Users.Add(newAccount);
         await databaseContext.SaveChangesAsync();
         databaseContext.ChangeTracker.Clear();
+        accountsOfThisTest.Add(newAccount.Id);
+        addressesOfThisTest.Add(emailAddress);
 
         return newAccount.Id;
     }
@@ -51,7 +58,7 @@ public class AccountRecoveryRealChainTests
             new UserAccountRepository(databaseContext),
             CreateSavingService(databaseContext),
             CreateSecurityJournal(databaseContext, clock),
-            emailQueue,
+            CreateEmailRequestRepository(databaseContext),
             passwordHasher,
             tokenGenerator,
             new InMemoryWaitingLoginStore(clock),
@@ -59,6 +66,7 @@ public class AccountRecoveryRealChainTests
                 new UserAccountRepository(databaseContext),
                 new UserSessionRepository(databaseContext),
                 new TwoFactorAuthenticationRepository(databaseContext),
+                CreateEmailRequestRepository(databaseContext),
                 CreateSavingService(databaseContext),
                 CreateSecurityJournal(databaseContext, clock),
                 tokenGenerator,
@@ -76,37 +84,68 @@ public class AccountRecoveryRealChainTests
         return result;
     }
 
-    // Traite toutes les demandes de la file, comme le ferait la tâche de fond, et les retire de la file.
+    // Le vrai accès à la file d'e-mails. Personne n'attend son réveil : ces tests traitent la file eux-mêmes.
+    private static EmailRequestRepository CreateEmailRequestRepository(WalletFlowDatabaseContext databaseContext)
+    {
+        return new EmailRequestRepository(databaseContext, new EmailRequestWakeUp());
+    }
+
+    // Les demandes d'e-mail de ce test, dans l'ordre de la file.
+    private async Task<List<EmailRequest>> FindRequestsOfThisTestAsync(WalletFlowDatabaseContext databaseContext)
+    {
+        return await databaseContext.EmailRequests.AsNoTracking()
+            .Where(request => accountsOfThisTest.Contains(request.UserId) || addressesOfThisTest.Contains(request.EmailAddress))
+            .OrderBy(request => request.NextTryAt)
+            .ToListAsync();
+    }
+
+    // Fait un essai pour chaque demande de ce test, comme le ferait la tâche de fond.
     private async Task ProcessQueuedRequestsAsync(WalletFlowDatabaseContext databaseContext)
     {
-        foreach (var request in emailQueue.AddedRequests)
+        foreach (var request in await FindRequestsOfThisTestAsync(databaseContext))
         {
-            var processingService = new BackgroundEmailRequestProcessingService(
+            var processingService = new EmailRequestProcessingService(
+                CreateEmailRequestRepository(databaseContext),
                 new UserAccountRepository(databaseContext),
+                new AlertRepository(databaseContext),
+                new EntityFrameworkDatabaseUnitOfWork(databaseContext),
                 CreateSecurityJournal(databaseContext, clock),
                 tokenGenerator,
                 emailSender,
                 new FrenchAccountRecoveryEmails(),
                 new FrenchAccountChangeEmails(),
+                new FrenchSecurityAlertEmails(),
+                new FrenchAlertEmails(),
                 new PublicWebsiteSettings("https://walletflow.test"),
                 clock);
 
-            await processingService.ProcessAsync(request);
+            await processingService.ProcessAsync(request.Id);
             databaseContext.ChangeTracker.Clear();
         }
+    }
 
-        emailQueue.AddedRequests.Clear();
+    // Demande un lien de récupération comme le ferait le visiteur : la demande entre dans la vraie file.
+    private async Task RequestRecoveryAsync(WalletFlowDatabaseContext databaseContext, string emailAddress)
+    {
+        var recoveryRequestService = new PasswordRecoveryRequestService(
+            new InMemoryPasswordRecoveryRequestLimiter(clock),
+            CreateEmailRequestRepository(databaseContext),
+            CreateSavingService(databaseContext),
+            clock);
+        addressesOfThisTest.Add(emailAddress);
+
+        Assert.IsType<PasswordRecoveryRequestResult.RequestAccepted>(await recoveryRequestService.RequestAsync(emailAddress, IpAddress));
+        databaseContext.ChangeTracker.Clear();
     }
 
     // Demande un lien de récupération et renvoie le jeton lu dans l'e-mail, comme le ferait le visiteur.
+    // Le compte a pu recevoir d'autres e-mails en même temps, comme le lien de déblocage : seul celui de la récupération compte.
     private async Task<string> RequestRecoveryThenReadTokenAsync(WalletFlowDatabaseContext databaseContext, string emailAddress)
     {
-        var recoveryRequestService = new PasswordRecoveryRequestService(new InMemoryPasswordRecoveryRequestLimiter(clock), emailQueue);
-
-        Assert.IsType<PasswordRecoveryRequestResult.RequestAccepted>(recoveryRequestService.Request(emailAddress, IpAddress));
+        await RequestRecoveryAsync(databaseContext, emailAddress);
         await ProcessQueuedRequestsAsync(databaseContext);
 
-        return ReadConfirmationToken(emailSender.SentEmails.Last().Body);
+        return ReadConfirmationToken(emailSender.SentEmails.Last(email => email.Body.Contains("/reset-password#token=")).Body);
     }
 
     // Envoie un nouveau mot de passe comme le ferait une requête.
@@ -115,6 +154,7 @@ public class AccountRecoveryRealChainTests
         var passwordResetService = new PasswordResetService(
             new UserAccountRepository(databaseContext),
             new UserSessionRepository(databaseContext),
+            CreateEmailRequestRepository(databaseContext),
             CreateSavingService(databaseContext),
             CreateSecurityJournal(databaseContext, clock),
             passwordHasher,
@@ -293,9 +333,8 @@ public class AccountRecoveryRealChainTests
         await using var databaseContext = CreateDatabaseContext();
         await using var transaction = await databaseContext.Database.BeginTransactionAsync();
         var accountId = await SaveAccountAsync(databaseContext, "chaine-non-confirmee@exemple.test", ValidPassword, isEmailConfirmed: false);
-        var recoveryRequestService = new PasswordRecoveryRequestService(new InMemoryPasswordRecoveryRequestLimiter(clock), emailQueue);
 
-        recoveryRequestService.Request("chaine-non-confirmee@exemple.test", IpAddress);
+        await RequestRecoveryAsync(databaseContext, "chaine-non-confirmee@exemple.test");
         await ProcessQueuedRequestsAsync(databaseContext);
 
         Assert.DoesNotContain("#token=", Assert.Single(emailSender.SentEmails).Body);
@@ -311,13 +350,73 @@ public class AccountRecoveryRealChainTests
         await using var transaction = await databaseContext.Database.BeginTransactionAsync();
         var anonymousEventCountBefore = await databaseContext.SecurityEvents.CountAsync(row =>
             row.UserId == null && row.Type == SecurityEventType.PasswordRecovery);
-        var recoveryRequestService = new PasswordRecoveryRequestService(new InMemoryPasswordRecoveryRequestLimiter(clock), emailQueue);
 
-        recoveryRequestService.Request("adresse-sans-compte@exemple.test", IpAddress);
+        await RequestRecoveryAsync(databaseContext, "adresse-sans-compte@exemple.test");
         await ProcessQueuedRequestsAsync(databaseContext);
 
         Assert.Empty(emailSender.SentEmails);
         Assert.Equal(anonymousEventCountBefore + 1, await databaseContext.SecurityEvents.CountAsync(row =>
             row.UserId == null && row.Type == SecurityEventType.PasswordRecovery));
+        Assert.Empty(await FindRequestsOfThisTestAsync(databaseContext));
+    }
+
+    // La demande attend dans la vraie file, sans compte ni secret, jusqu'à ce que son e-mail parte (SS §9, DD §9.4).
+    [Fact]
+    public async Task RecoveryRequestWaitsInTheRealQueueUntilItsEmailIsSent()
+    {
+        await using var databaseContext = CreateDatabaseContext();
+        await using var transaction = await databaseContext.Database.BeginTransactionAsync();
+        await SaveAccountAsync(databaseContext, "chaine-file@exemple.test", ValidPassword);
+
+        await RequestRecoveryAsync(databaseContext, "chaine-file@exemple.test");
+
+        var queuedRequest = Assert.Single(await FindRequestsOfThisTestAsync(databaseContext));
+        Assert.Equal(EmailRequestType.PasswordRecovery, queuedRequest.Type);
+        Assert.Equal("chaine-file@exemple.test", queuedRequest.EmailAddress);
+        Assert.Equal(IpAddress, queuedRequest.IpAddress);
+        Assert.Null(queuedRequest.UserId);
+        Assert.Equal(0, queuedRequest.FailedTryCount);
+        Assert.Equal(clock.GetUtcNow().UtcDateTime, queuedRequest.RequestedAt);
+        Assert.Equal(0, await databaseContext.EmailTokens.CountAsync(row => accountsOfThisTest.Contains(row.UserId)));
+
+        await ProcessQueuedRequestsAsync(databaseContext);
+
+        Assert.Single(emailSender.SentEmails);
+        Assert.Empty(await FindRequestsOfThisTestAsync(databaseContext));
+    }
+
+    // Un envoi raté laisse la demande dans la vraie file, avec l'heure de son prochain essai (SS §9).
+    [Fact]
+    public async Task FailedTryIsSavedInTheRealQueue()
+    {
+        await using var databaseContext = CreateDatabaseContext();
+        await using var transaction = await databaseContext.Database.BeginTransactionAsync();
+        await SaveAccountAsync(databaseContext, "chaine-file-panne@exemple.test", ValidPassword);
+        await RequestRecoveryAsync(databaseContext, "chaine-file-panne@exemple.test");
+        emailSender.AlwaysFails = true;
+
+        await ProcessQueuedRequestsAsync(databaseContext);
+
+        var queuedRequest = Assert.Single(await FindRequestsOfThisTestAsync(databaseContext));
+        Assert.Equal(1, queuedRequest.FailedTryCount);
+        Assert.Equal(clock.GetUtcNow().UtcDateTime.AddMinutes(1), queuedRequest.NextTryAt);
+    }
+
+    // Le nouveau mot de passe et son alerte partent ensemble : l'alerte attend dans la vraie file (GR Notif).
+    [Fact]
+    public async Task ResetQueuesThePasswordChangeAlertOnTheRealDatabase()
+    {
+        await using var databaseContext = CreateDatabaseContext();
+        await using var transaction = await databaseContext.Database.BeginTransactionAsync();
+        var accountId = await SaveAccountAsync(databaseContext, "chaine-alerte-mdp@exemple.test", ValidPassword);
+        var linkToken = await RequestRecoveryThenReadTokenAsync(databaseContext, "chaine-alerte-mdp@exemple.test");
+
+        await ResetPasswordAsync(databaseContext, linkToken, NewPassword);
+
+        var alert = Assert.Single(await FindRequestsOfThisTestAsync(databaseContext));
+        Assert.Equal(EmailRequestType.PasswordChange, alert.Type);
+        Assert.Equal(accountId, alert.UserId);
+        Assert.Null(alert.EmailAddress);
+        Assert.Equal(IpAddress, alert.IpAddress);
     }
 }

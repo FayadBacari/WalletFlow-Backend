@@ -14,6 +14,7 @@ public class FakeUserAccountRepository : IUserAccountRepository, ITransactionalF
     private readonly object pendingChangesLock = new object();
     private readonly ReadCopies<User> readAccounts = new ReadCopies<User>();
     private readonly ReadCopies<EmailToken> readTokens = new ReadCopies<EmailToken>();
+    private readonly List<User> accountsUnderCheck = new List<User>();
     private readonly List<EmailToken> preparedSignupTokens = new List<EmailToken>();
     private readonly List<Guid> accountsLosingRecoveryAndUnlockLinks = new List<Guid>();
     private Action? concurrentChanges = null;
@@ -62,6 +63,10 @@ public class FakeUserAccountRepository : IUserAccountRepository, ITransactionalF
 
     // Un autre compte prend la nouvelle adresse juste avant l'enregistrement d'un changement d'adresse.
     public User? AccountTakingNewEmailBeforeSave { get; set; } = null;
+
+    // Une récupération donne ce nouveau mot de passe à un compte juste avant un enregistrement qui le contrôle
+    // (voir PrepareUnchangedCheck). Un compte qui n'est ni changé ni contrôlé n'est pas réécrit : il ne voit pas ce conflit.
+    public string? PasswordChangedBeforeCheckedSave { get; set; } = null;
 
     // Cherche en mémoire le compte qui utilise cette adresse.
     public Task<User?> FindByEmailAsync(string email)
@@ -178,9 +183,13 @@ public class FakeUserAccountRepository : IUserAccountRepository, ITransactionalF
         return Task.CompletedTask;
     }
 
-    // Les conflits sont simulés par les réglages de ce faux dépôt : ce contrôle n'a rien à faire en mémoire.
+    // Note le compte à contrôler : les conflits simulés par les réglages de ce faux dépôt le visent.
     public void PrepareUnchangedCheck(User account)
     {
+        lock (pendingChangesLock)
+        {
+            accountsUnderCheck.Add(account);
+        }
     }
 
     // Garde la date du passage. La vraie règle d'effacement est testée sur la vraie base.
@@ -242,6 +251,15 @@ public class FakeUserAccountRepository : IUserAccountRepository, ITransactionalF
             {
                 LoginCounterConflicts = LoginCounterConflicts - 1;
                 concurrentChanges = () => CountAttemptLikeOtherRequest(countedAccount);
+                return true;
+            }
+
+            // Une récupération change le mot de passe d'un compte que cet enregistrement contrôle, juste avant lui.
+            if (PasswordChangedBeforeCheckedSave is string newPasswordHash && accountsUnderCheck.Count > 0)
+            {
+                var checkedAccount = accountsUnderCheck[0];
+                PasswordChangedBeforeCheckedSave = null;
+                concurrentChanges = () => checkedAccount.ReplacePasswordHash(newPasswordHash);
                 return true;
             }
 
@@ -377,5 +395,6 @@ public class FakeUserAccountRepository : IUserAccountRepository, ITransactionalF
         readTokens.Clear();
         preparedSignupTokens.Clear();
         accountsLosingRecoveryAndUnlockLinks.Clear();
+        accountsUnderCheck.Clear();
     }
 }

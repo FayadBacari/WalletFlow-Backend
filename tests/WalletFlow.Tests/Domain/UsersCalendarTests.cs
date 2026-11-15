@@ -21,4 +21,19 @@ public class UsersCalendarTests
     {
         Assert.Equal(DateOnly.Parse(expectedDay), UsersCalendar.FindToday(DateTimeOffset.Parse(utcNow)));
     }
+
+    // L'heure d'un e-mail est celle de Paris : une heure de plus en hiver, deux en été, et le changement d'heure compte
+    // dès 1 h en temps universel (le 29 mars 2026).
+    [Theory]
+    [InlineData(2026, 11, 4, 12, 0, "2026-11-04T13:00:00")]
+    [InlineData(2026, 7, 1, 7, 5, "2026-07-01T09:05:00")]
+    [InlineData(2026, 3, 29, 0, 59, "2026-03-29T01:59:00")]
+    [InlineData(2026, 3, 29, 1, 0, "2026-03-29T03:00:00")]
+    [InlineData(2026, 12, 31, 23, 30, "2027-01-01T00:30:00")]
+    public void UsersTimeIsTheTimeInParis(int year, int month, int day, int hour, int minute, string expectedParisTime)
+    {
+        var utcTime = new DateTime(year, month, day, hour, minute, 0, DateTimeKind.Utc);
+
+        Assert.Equal(DateTime.Parse(expectedParisTime), UsersCalendar.ConvertToUsersTime(utcTime));
+    }
 }

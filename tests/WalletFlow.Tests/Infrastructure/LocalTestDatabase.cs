@@ -1,4 +1,6 @@
 using Microsoft.EntityFrameworkCore;
+using WalletFlow.Application.Emails;
+using WalletFlow.Application.Notifications;
 using WalletFlow.Application.Persistence;
 using WalletFlow.Application.Security;
 using WalletFlow.Domain.UsersAndSecurity;
@@ -42,6 +44,30 @@ public static class LocalTestDatabase
     public static SecurityJournalService CreateSecurityJournal(WalletFlowDatabaseContext databaseContext, TimeProvider clock)
     {
         return new SecurityJournalService(new SecurityEventRepository(databaseContext), clock);
+    }
+
+    // Crée la préparation des alertes, sur les vraies alertes et la vraie file d'e-mails de cet accès à la base.
+    public static AlertPreparation CreateAlertPreparation(WalletFlowDatabaseContext databaseContext)
+    {
+        return new AlertPreparation(new AlertRepository(databaseContext), new EmailRequestRepository(databaseContext, new EmailRequestWakeUp()));
+    }
+
+    // Crée la vérification des budgets, sur cet accès à la base.
+    public static BudgetAlertService CreateBudgetAlerts(WalletFlowDatabaseContext databaseContext, TimeProvider clock)
+    {
+        return new BudgetAlertService(
+            new CategoryRepository(databaseContext),
+            new TransactionRepository(databaseContext),
+            new AlertRepository(databaseContext),
+            CreateAlertPreparation(databaseContext),
+            CreateSavingService(databaseContext),
+            clock);
+    }
+
+    // Crée l'alerte d'objectif des sacs, sur cet accès à la base.
+    public static BagGoalAlerts CreateBagGoalAlerts(WalletFlowDatabaseContext databaseContext)
+    {
+        return new BagGoalAlerts(new BagRepository(databaseContext), new AlertRepository(databaseContext), CreateAlertPreparation(databaseContext));
     }
 
     // Enregistre un nouveau compte confirmé avec cette adresse, puis oublie les objets gardés en mémoire.

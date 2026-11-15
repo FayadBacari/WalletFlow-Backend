@@ -43,6 +43,8 @@ public class WalletFlowDatabaseContext : DbContext
     // Notifications et support
     public DbSet<AlertType> AlertTypes => Set<AlertType>();
     public DbSet<AlertPreference> AlertPreferences => Set<AlertPreference>();
+    public DbSet<Alert> Alerts => Set<Alert>();
+    public DbSet<EmailRequest> EmailRequests => Set<EmailRequest>();
     public DbSet<SupportRequest> SupportRequests => Set<SupportRequest>();
     public DbSet<SupportResponse> SupportResponses => Set<SupportResponse>();
 
@@ -79,6 +81,8 @@ public class WalletFlowDatabaseContext : DbContext
 
         modelBuilder.ApplyConfiguration(new AlertTypeTableConfiguration());
         modelBuilder.ApplyConfiguration(new AlertPreferenceTableConfiguration());
+        modelBuilder.ApplyConfiguration(new AlertTableConfiguration());
+        modelBuilder.ApplyConfiguration(new EmailRequestTableConfiguration());
         modelBuilder.ApplyConfiguration(new SupportRequestTableConfiguration());
         modelBuilder.ApplyConfiguration(new SupportResponseTableConfiguration());
     }

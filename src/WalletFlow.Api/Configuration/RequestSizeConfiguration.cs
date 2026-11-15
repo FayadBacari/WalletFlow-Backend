@@ -23,4 +23,7 @@ public static class RequestSizeConfiguration
 
     // Un identifiant de sac et un montant tiennent largement dans cette taille.
     public const long MaximumSuggestionRequestBytes = 1024;
+
+    // Le nom d'un canal ou une valeur vrai ou faux tiennent largement dans cette taille.
+    public const long MaximumAlertSettingsRequestBytes = 1024;
 }

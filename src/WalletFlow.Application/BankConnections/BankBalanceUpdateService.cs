@@ -1,3 +1,4 @@
+using WalletFlow.Application.Notifications;
 using WalletFlow.Application.Persistence;
 using WalletFlow.Application.Transactions;
 using WalletFlow.Domain.AccountsAndCategories;
@@ -6,22 +7,25 @@ namespace WalletFlow.Application.BankConnections;
 
 // Cas d'utilisation : les soldes et les opérations sont mis à jour à chaque ouverture de l'application, et jusqu'à 4 fois
 // par jour en arrière-plan (GR Comptes). Si la banque ne répond pas, le dernier solde reste affiché avec sa date.
+// Quand de nouvelles opérations arrivent, les seuils de budget de l'utilisateur sont vérifiés juste après.
 public class BankBalanceUpdateService
 {
     private readonly IBankDataProvider bankProvider;
     private readonly IBankConnectionRepository connectionRepository;
     private readonly IBankUpdateLimiter updateLimiter;
     private readonly BankTransactionArrival transactionArrival;
+    private readonly BudgetAlertService budgetAlerts;
     private readonly DatabaseChangesSavingService savingService;
     private readonly TimeProvider clock;
 
     // Reçoit le prestataire, l'accès aux connexions, la limite par utilisateur, l'arrivée des opérations,
-    // l'enregistrement avec réessai et l'horloge.
+    // la vérification des budgets, l'enregistrement avec réessai et l'horloge.
     public BankBalanceUpdateService(
         IBankDataProvider bankProvider,
         IBankConnectionRepository connectionRepository,
         IBankUpdateLimiter updateLimiter,
         BankTransactionArrival transactionArrival,
+        BudgetAlertService budgetAlerts,
         DatabaseChangesSavingService savingService,
         TimeProvider clock)
     {
@@ -29,6 +33,7 @@ public class BankBalanceUpdateService
         this.connectionRepository = connectionRepository;
         this.updateLimiter = updateLimiter;
         this.transactionArrival = transactionArrival;
+        this.budgetAlerts = budgetAlerts;
         this.savingService = savingService;
         this.clock = clock;
     }
@@ -73,9 +78,14 @@ public class BankBalanceUpdateService
             return;
         }
 
-        await savingService.SaveWithRetriesAsync(
+        var addedCount = await savingService.SaveWithRetriesAsync(
             () => PrepareUpdateAsync(connectionId, readSessionId, reading, now),
-            false);
+            0);
+
+        if (addedCount > 0)
+        {
+            await budgetAlerts.CheckAsync(connection.UserId);
+        }
     }
 
     // Lit chez le prestataire le solde et les opérations de chaque compte gardé, retrouvé dans la session par son identifiant stable.
@@ -147,8 +157,8 @@ public class BankBalanceUpdateService
     }
 
     // Un passage : relit la connexion, puis note ce que la lecture a donné. Une connexion supprimée ou renouvelée entre-temps
-    // n'est pas touchée : ce qui a été lu appartenait à son ancienne session.
-    private async Task<PreparedChanges<bool>> PrepareUpdateAsync(Guid connectionId, string readSessionId, BankReading reading, DateTime now)
+    // n'est pas touchée : ce qui a été lu appartenait à son ancienne session. Renvoie le nombre d'opérations nouvelles.
+    private async Task<PreparedChanges<int>> PrepareUpdateAsync(Guid connectionId, string readSessionId, BankReading reading, DateTime now)
     {
         var connection = await connectionRepository.FindConnectionByIdAsync(connectionId);
 
@@ -156,22 +166,23 @@ public class BankBalanceUpdateService
             || connection.ExternalConnectionId != readSessionId
             || connection.Status == BankConnectionStatus.Expired)
         {
-            return PreparedChanges<bool>.NothingToSave(false);
+            return PreparedChanges<int>.NothingToSave(0);
         }
 
         if (reading.Outcome == BankReadingOutcome.SessionEnded)
         {
             connection.MarkExpired();
-            return PreparedChanges<bool>.SaveThenReturn(true);
+            return PreparedChanges<int>.SaveThenReturn(0);
         }
 
         if (reading.Outcome == BankReadingOutcome.BankFailed)
         {
             connection.RecordBankFailure();
-            return PreparedChanges<bool>.SaveThenReturn(true);
+            return PreparedChanges<int>.SaveThenReturn(0);
         }
 
         var accounts = await connectionRepository.FindAccountsAsync(new List<Guid> { connectionId });
+        var addedCount = 0;
 
         foreach (var account in accounts)
         {
@@ -182,12 +193,12 @@ public class BankBalanceUpdateService
 
             if (reading.Transactions.TryGetValue(account.Id, out var receivedTransactions))
             {
-                await transactionArrival.PrepareNewTransactionsAsync(connection.UserId, account.Id, receivedTransactions);
+                addedCount = addedCount + await transactionArrival.PrepareNewTransactionsAsync(connection.UserId, account.Id, receivedTransactions);
             }
         }
 
         connection.RecordSuccessfulUpdate();
-        return PreparedChanges<bool>.SaveThenReturn(true);
+        return PreparedChanges<int>.SaveThenReturn(addedCount);
     }
 
     // Ce que la lecture chez le prestataire a donné : les soldes lus et les opérations reçues, par compte.

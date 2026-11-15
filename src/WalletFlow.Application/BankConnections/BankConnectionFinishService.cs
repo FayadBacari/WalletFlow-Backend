@@ -1,3 +1,4 @@
+using WalletFlow.Application.Notifications;
 using WalletFlow.Application.Persistence;
 using WalletFlow.Application.Security;
 using WalletFlow.Domain.AccountsAndCategories;
@@ -7,11 +8,13 @@ namespace WalletFlow.Application.BankConnections;
 
 // Cas d'utilisation : l'utilisateur revient de sa banque, et WalletFlow termine la connexion ou son renouvellement (GR Comptes).
 // Le state doit être celui que WalletFlow a donné à cet utilisateur (SS §7). Seuls les comptes en euros sont gardés.
-// Les opérations des comptes gardés sont lues aussitôt, l'utilisateur étant là.
+// Les opérations des comptes gardés sont lues aussitôt, l'utilisateur étant là. Un renouvellement efface l'alerte de l'ancienne
+// autorisation : la nouvelle préviendra à son tour 7 jours avant sa fin.
 public class BankConnectionFinishService
 {
     private readonly IBankDataProvider bankProvider;
     private readonly IBankConnectionRepository connectionRepository;
+    private readonly IAlertRepository alertRepository;
     private readonly IBankAuthorizationStore authorizationStore;
     private readonly ISecureTokenGenerator tokenGenerator;
     private readonly BankFirstTransactionsReading firstTransactionsReading;
@@ -19,11 +22,12 @@ public class BankConnectionFinishService
     private readonly SecurityJournalService securityJournal;
     private readonly TimeProvider clock;
 
-    // Reçoit le prestataire, l'accès aux connexions, la mémoire des autorisations commencées, le créateur de jetons,
+    // Reçoit le prestataire, l'accès aux connexions et aux alertes, la mémoire des autorisations commencées, le créateur de jetons,
     // la première lecture des opérations, l'enregistrement avec réessai, le journal de sécurité et l'horloge.
     public BankConnectionFinishService(
         IBankDataProvider bankProvider,
         IBankConnectionRepository connectionRepository,
+        IAlertRepository alertRepository,
         IBankAuthorizationStore authorizationStore,
         ISecureTokenGenerator tokenGenerator,
         BankFirstTransactionsReading firstTransactionsReading,
@@ -33,6 +37,7 @@ public class BankConnectionFinishService
     {
         this.bankProvider = bankProvider;
         this.connectionRepository = connectionRepository;
+        this.alertRepository = alertRepository;
         this.authorizationStore = authorizationStore;
         this.tokenGenerator = tokenGenerator;
         this.firstTransactionsReading = firstTransactionsReading;
@@ -189,8 +194,8 @@ public class BankConnectionFinishService
         });
     }
 
-    // Un passage : renouvelle la connexion, met à jour ses comptes, et ajoute ceux qui sont nouveaux.
-    // Les comptes que la banque ne donne plus restent, avec leurs transactions.
+    // Un passage : renouvelle la connexion, met à jour ses comptes, ajoute ceux qui sont nouveaux, et efface l'alerte de
+    // l'ancienne autorisation. Les comptes que la banque ne donne plus restent, avec leurs transactions.
     private async Task<RenewalChanges> PrepareRenewalAsync(KeptSession kept, Guid connectionId)
     {
         var connection = await connectionRepository.FindConnectionAsync(kept.UserId, connectionId);
@@ -226,6 +231,13 @@ public class BankConnectionFinishService
 
             connectionRepository.PrepareAccount(CreateAccount(account, connection.Id, kept.Now));
             addedCount = addedCount + 1;
+        }
+
+        var alert = await alertRepository.FindConnectionAlertAsync(connection.Id);
+
+        if (alert != null)
+        {
+            alertRepository.PrepareDeletion(alert);
         }
 
         connection.Renew(kept.SessionId, kept.AuthorizationEnd);

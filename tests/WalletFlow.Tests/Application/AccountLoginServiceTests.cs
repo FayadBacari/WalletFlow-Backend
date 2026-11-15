@@ -2,6 +2,7 @@ using System.Net;
 using WalletFlow.Application.UserSessions;
 using WalletFlow.Application.Persistence;
 using WalletFlow.Application.Security;
+using WalletFlow.Domain.NotificationsAndSupport;
 using WalletFlow.Domain.UsersAndSecurity;
 using WalletFlow.Infrastructure.Security;
 using WalletFlow.Tests.Fakes;
@@ -24,7 +25,7 @@ public class AccountLoginServiceTests
     private readonly FakeTwoFactorAuthenticationRepository twoFactorRepository = new FakeTwoFactorAuthenticationRepository();
     private readonly FakeDatabaseUnitOfWork unitOfWork;
     private readonly InMemoryWaitingLoginStore waitingLoginStore;
-    private readonly FakeBackgroundEmailRequestQueue emailQueue = new FakeBackgroundEmailRequestQueue();
+    private readonly FakeEmailRequestRepository emailRequests = new FakeEmailRequestRepository();
     private readonly FakePasswordHasher passwordHasher = new FakePasswordHasher();
     private readonly RandomSecureTokenGenerator tokenGenerator = new RandomSecureTokenGenerator();
     private readonly FakeTimeProvider clock = new FakeTimeProvider();
@@ -36,7 +37,8 @@ public class AccountLoginServiceTests
             accountRepository,
             sessionRepository,
             twoFactorRepository,
-            securityEventRepository);
+            securityEventRepository,
+            emailRequests);
         waitingLoginStore = new InMemoryWaitingLoginStore(clock);
     }
 
@@ -50,7 +52,7 @@ public class AccountLoginServiceTests
             accountRepository,
             savingService,
             securityJournal,
-            emailQueue,
+            emailRequests,
             passwordHasher,
             tokenGenerator,
             waitingLoginStore,
@@ -58,6 +60,7 @@ public class AccountLoginServiceTests
                 accountRepository,
                 sessionRepository,
                 twoFactorRepository,
+                emailRequests,
                 savingService,
                 securityJournal,
                 tokenGenerator,
@@ -532,6 +535,23 @@ public class AccountLoginServiceTests
         AssertGenericRefusal(result);
     }
 
+    // Une récupération s'enregistre juste avant la session, alors qu'une autre connexion a déjà remis les compteurs à zéro :
+    // rien du compte ne change, mais il est contrôlé quand même. Sinon, la session de l'ancien mot de passe survivrait
+    // à la récupération (SS §3).
+    [Fact]
+    public async Task RecoverySavedJustBeforeTheSessionOpensNoSessionEvenWithCountersAlreadyReset()
+    {
+        var account = AddAccount();
+        passwordHasher.OnPasswordVerified = () => account.ResetLoginCounters();
+        accountRepository.PasswordChangedBeforeCheckedSave = "empreinte-du-nouveau-mot-de-passe";
+
+        var result = await LogInAsync(AccountEmail, AccountPassword);
+
+        AssertGenericRefusal(result);
+        Assert.Empty(sessionRepository.SavedSessions);
+        Assert.Equal("empreinte-du-nouveau-mot-de-passe", account.PasswordHash);
+    }
+
     // --- E-mail de déblocage
 
     [Fact]
@@ -541,9 +561,12 @@ public class AccountLoginServiceTests
 
         await TryWrongPasswordAsync(5);
 
-        var unlockRequest = Assert.IsType<WalletFlow.Application.AccountRecovery.BackgroundEmailRequest.AccountUnlock>(Assert.Single(emailQueue.AddedRequests));
-        Assert.Equal(account.Id, unlockRequest.AccountId);
+        var unlockRequest = Assert.Single(emailRequests.SavedRequests);
+        Assert.Equal(EmailRequestType.AccountUnlock, unlockRequest.Type);
+        Assert.Equal(account.Id, unlockRequest.UserId);
         Assert.Equal(IpAddress, unlockRequest.IpAddress);
+        Assert.Null(unlockRequest.EmailAddress);
+        Assert.Equal(clock.GetUtcNow().UtcDateTime, unlockRequest.NextTryAt);
     }
 
     [Fact]
@@ -553,7 +576,7 @@ public class AccountLoginServiceTests
 
         await TryWrongPasswordAsync(4);
 
-        Assert.Empty(emailQueue.AddedRequests);
+        Assert.Empty(emailRequests.SavedRequests);
     }
 
     // SS §2 : un seul e-mail par blocage, pour qu'un attaquant ne puisse pas inonder la boîte de la victime.
@@ -566,7 +589,7 @@ public class AccountLoginServiceTests
         await TryWrongPasswordAsync(3);
         await LogInAsync(AccountEmail, AccountPassword);
 
-        Assert.Single(emailQueue.AddedRequests);
+        Assert.Single(emailRequests.SavedRequests);
     }
 
     [Fact]
@@ -578,7 +601,7 @@ public class AccountLoginServiceTests
 
         await TryWrongPasswordAsync(5);
 
-        Assert.Equal(2, emailQueue.AddedRequests.Count);
+        Assert.Equal(2, emailRequests.SavedRequests.Count(request => request.Type == EmailRequestType.AccountUnlock));
     }
 
     // Le bon mot de passe au 5e essai annule le blocage : il n'y a rien à débloquer.
@@ -590,7 +613,7 @@ public class AccountLoginServiceTests
 
         await LogInAsync(AccountEmail, AccountPassword);
 
-        Assert.Empty(emailQueue.AddedRequests);
+        Assert.Empty(emailRequests.SavedRequests);
     }
 
     // SS §2 : un compte non confirmé n'est jamais bloqué, et aucun e-mail de déblocage ne part.
@@ -601,7 +624,7 @@ public class AccountLoginServiceTests
 
         await TryWrongPasswordAsync(6);
 
-        Assert.Empty(emailQueue.AddedRequests);
+        Assert.Empty(emailRequests.SavedRequests);
     }
 
     // --- Appareils
@@ -672,6 +695,89 @@ public class AccountLoginServiceTests
 
         Assert.NotEqual(otherDeviceToken, Assert.IsType<AccountLoginResult.LoggedIn>(result).DeviceToken);
         Assert.Equal(2, sessionRepository.SavedDevices.Count);
+    }
+
+    // --- Alerte « nouvel appareil » (GR Notif)
+
+    // La toute première connexion d'un compte ne déclenche pas l'alerte.
+    [Fact]
+    public async Task FirstLoginOfTheAccountSendsNoNewDeviceAlert()
+    {
+        AddAccount();
+
+        await LogInWithCookiesAsync(null, null);
+
+        Assert.Single(sessionRepository.SavedDevices);
+        Assert.Empty(emailRequests.SavedRequests);
+    }
+
+    [Fact]
+    public async Task LoginFromAnotherDeviceSendsTheNewDeviceAlertWithTheAccountAndIpAddress()
+    {
+        var account = AddAccount();
+        await LogInWithCookiesAsync(null, null);
+        clock.Advance(TimeSpan.FromMinutes(3));
+
+        await LogInWithCookiesAsync(null, null);
+
+        var alert = Assert.Single(emailRequests.SavedRequests);
+        Assert.Equal(EmailRequestType.NewDevice, alert.Type);
+        Assert.Equal(account.Id, alert.UserId);
+        Assert.Equal(IpAddress, alert.IpAddress);
+        Assert.Null(alert.EmailAddress);
+        Assert.Equal(clock.GetUtcNow().UtcDateTime, alert.RequestedAt);
+        Assert.Equal(clock.GetUtcNow().UtcDateTime, alert.NextTryAt);
+    }
+
+    [Fact]
+    public async Task LoginFromAKnownDeviceSendsNoAlert()
+    {
+        AddAccount();
+        var firstResult = await LogInWithCookiesAsync(null, null);
+
+        await LogInWithCookiesAsync(Assert.IsType<AccountLoginResult.LoggedIn>(firstResult).DeviceToken, null);
+
+        Assert.Empty(emailRequests.SavedRequests);
+    }
+
+    // Le jeton d'appareil d'un autre compte ne protège pas de l'alerte.
+    [Fact]
+    public async Task DeviceOfAnotherAccountSendsTheAlertToAnAccountThatAlreadyHasADevice()
+    {
+        var account = AddAccount();
+        await LogInWithCookiesAsync(null, null);
+        var otherDeviceToken = "jeton-d-appareil-d-un-autre-compte";
+        sessionRepository.SavedDevices.Add(new Device { DeviceToken = tokenGenerator.HashToken(otherDeviceToken), UserId = Guid.NewGuid() });
+
+        await LogInWithCookiesAsync(otherDeviceToken, null);
+
+        Assert.Equal(account.Id, Assert.Single(emailRequests.SavedRequests).UserId);
+    }
+
+    // L'alerte part avec la connexion, ou pas du tout : une connexion qui ne s'enregistre pas ne prévient de rien.
+    [Fact]
+    public async Task LoginThatCannotBeSavedSendsNoAlert()
+    {
+        AddAccount();
+        await LogInWithCookiesAsync(null, null);
+        sessionRepository.IsDown = true;
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => LogInWithCookiesAsync(null, null));
+
+        Assert.Empty(emailRequests.SavedRequests);
+        Assert.Single(sessionRepository.SavedDevices);
+    }
+
+    // Un mauvais mot de passe depuis un nouvel appareil n'ouvre rien : il ne prévient de rien non plus.
+    [Fact]
+    public async Task WrongPasswordFromANewDeviceSendsNoAlert()
+    {
+        AddAccount();
+        await LogInWithCookiesAsync(null, null);
+
+        await LogInAsync(AccountEmail, WrongPassword);
+
+        Assert.Empty(emailRequests.SavedRequests);
     }
 
     // --- Ancienne session du navigateur

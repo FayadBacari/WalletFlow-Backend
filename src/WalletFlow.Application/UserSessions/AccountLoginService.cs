@@ -1,8 +1,9 @@
-using WalletFlow.Application.AccountRecovery;
+using WalletFlow.Application.Emails;
 using WalletFlow.Application.Persistence;
 using WalletFlow.Application.Security;
 using WalletFlow.Application.TwoFactorAuthentication;
 using WalletFlow.Application.UserAccounts;
+using WalletFlow.Domain.NotificationsAndSupport;
 using WalletFlow.Domain.UsersAndSecurity;
 
 namespace WalletFlow.Application.UserSessions;
@@ -14,7 +15,7 @@ public class AccountLoginService
     private readonly IUserAccountRepository accountRepository;
     private readonly DatabaseChangesSavingService savingService;
     private readonly SecurityJournalService securityJournal;
-    private readonly IBackgroundEmailRequestQueue emailQueue;
+    private readonly IEmailRequestRepository emailRequests;
     private readonly IPasswordHasher passwordHasher;
     private readonly ISecureTokenGenerator tokenGenerator;
     private readonly IWaitingLoginStore waitingLoginStore;
@@ -26,7 +27,7 @@ public class AccountLoginService
         IUserAccountRepository accountRepository,
         DatabaseChangesSavingService savingService,
         SecurityJournalService securityJournal,
-        IBackgroundEmailRequestQueue emailQueue,
+        IEmailRequestRepository emailRequests,
         IPasswordHasher passwordHasher,
         ISecureTokenGenerator tokenGenerator,
         IWaitingLoginStore waitingLoginStore,
@@ -36,7 +37,7 @@ public class AccountLoginService
         this.accountRepository = accountRepository;
         this.savingService = savingService;
         this.securityJournal = securityJournal;
-        this.emailQueue = emailQueue;
+        this.emailRequests = emailRequests;
         this.passwordHasher = passwordHasher;
         this.tokenGenerator = tokenGenerator;
         this.waitingLoginStore = waitingLoginStore;
@@ -159,14 +160,16 @@ public class AccountLoginService
         LoginAttemptCountResult countResult,
         LoginAttempt attempt)
     {
-        await NotifyOwnerIfLockedAsync(accountId, countResult, attempt);
+        await NotifyLockoutAsync(accountId, countResult, attempt);
 
         return await RefuseAsync(accountId, attempt);
     }
 
-    // Une seule requête peut avoir déclenché le blocage : il n'est donc noté qu'une fois, et un seul e-mail de déblocage part (SS §2).
-    // Cet e-mail part en arrière-plan : le temps de réponse ne révèle donc pas que le compte existe.
-    private async Task NotifyOwnerIfLockedAsync(
+    // Une seule requête peut avoir déclenché le blocage : il n'est donc noté qu'une fois, et un seul lien de déblocage part (SS §2).
+    // Ce lien est l'alerte « compte bloqué » (GR Notif) : la trace du journal et la demande d'e-mail partent ensemble.
+    // L'e-mail part en arrière-plan : le temps de réponse ne révèle donc pas que le compte existe.
+    // Le bon mot de passe sans double authentification n'arrive jamais ici : sa connexion réussie annule le blocage.
+    private async Task NotifyLockoutAsync(
         Guid accountId,
         LoginAttemptCountResult countResult,
         LoginAttempt attempt)
@@ -176,13 +179,19 @@ public class AccountLoginService
             return;
         }
 
-        await securityJournal.SaveEventNowAsync(SecurityEventType.Lockout, SecurityEventResult.Success, accountId, attempt.IpAddress);
+        var now = clock.GetUtcNow().UtcDateTime;
 
-        emailQueue.Add(new BackgroundEmailRequest.AccountUnlock
-        {
-            AccountId = accountId,
-            IpAddress = attempt.IpAddress
-        });
+        await savingService.SaveWithRetriesAsync(() => PrepareLockoutNoticeAsync(accountId, attempt, now), false);
+    }
+
+    // Un passage : prépare la trace du blocage au journal et la demande du lien de déblocage. Rien d'existant n'est modifié :
+    // aucune autre requête ne peut empêcher cet enregistrement.
+    private Task<PreparedChanges<bool>> PrepareLockoutNoticeAsync(Guid accountId, LoginAttempt attempt, DateTime now)
+    {
+        securityJournal.PrepareEvent(SecurityEventType.Lockout, SecurityEventResult.Success, accountId, attempt.IpAddress);
+        emailRequests.PrepareRequest(EmailRequest.ForAccountUnlock(accountId, attempt.IpAddress, now));
+
+        return Task.FromResult(PreparedChanges<bool>.SaveThenReturn(true));
     }
 
     // Le mot de passe est bon, mais le compte demande aussi un code : aucune session ne s'ouvre, et l'essai reste compté.
@@ -194,7 +203,7 @@ public class AccountLoginService
         LoginAttemptCountResult countResult,
         LoginAttempt attempt)
     {
-        await NotifyOwnerIfLockedAsync(accountId, countResult, attempt);
+        await NotifyLockoutAsync(accountId, countResult, attempt);
 
         var waitingLoginToken = tokenGenerator.GenerateToken();
         waitingLoginStore.Save(waitingLoginToken.Hash, accountId, passwordHash);

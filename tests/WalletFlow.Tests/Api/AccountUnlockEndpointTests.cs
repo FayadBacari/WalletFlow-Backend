@@ -170,7 +170,7 @@ public class AccountUnlockEndpointTests
         }
 
         await WaitUntilAsync(() => api.LoggerProvider.Messages.Any(message =>
-            message.StartsWith("Error") && message.Contains("n'a pas pu partir")));
+            message.StartsWith("Warning") && message.Contains("n'a pas pu partir")));
     }
 
     [Fact]

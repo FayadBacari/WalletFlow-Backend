@@ -1,8 +1,9 @@
 using System.Net;
-using WalletFlow.Application.AccountRecovery;
+using WalletFlow.Application.Emails;
 using WalletFlow.Application.Persistence;
 using WalletFlow.Application.Security;
 using WalletFlow.Application.UserAccounts;
+using WalletFlow.Domain.NotificationsAndSupport;
 using WalletFlow.Domain.UsersAndSecurity;
 
 namespace WalletFlow.Application.AccountSettings;
@@ -17,7 +18,8 @@ public class EmailChangeRequestService
     private readonly SecurityJournalService securityJournal;
     private readonly AccountIdentityCheckingService identityChecking;
     private readonly IEmailChangeRequestLimiter requestLimiter;
-    private readonly IBackgroundEmailRequestQueue emailQueue;
+    private readonly IEmailRequestRepository emailRequests;
+    private readonly TimeProvider clock;
 
     // Reçoit les outils dont la demande a besoin.
     public EmailChangeRequestService(
@@ -26,14 +28,16 @@ public class EmailChangeRequestService
         SecurityJournalService securityJournal,
         AccountIdentityCheckingService identityChecking,
         IEmailChangeRequestLimiter requestLimiter,
-        IBackgroundEmailRequestQueue emailQueue)
+        IEmailRequestRepository emailRequests,
+        TimeProvider clock)
     {
         this.accountRepository = accountRepository;
         this.savingService = savingService;
         this.securityJournal = securityJournal;
         this.identityChecking = identityChecking;
         this.requestLimiter = requestLimiter;
-        this.emailQueue = emailQueue;
+        this.emailRequests = emailRequests;
+        this.clock = clock;
     }
 
     // Vérifie la nouvelle adresse, l'identité et la limite, puis confie les e-mails à la file.
@@ -73,50 +77,52 @@ public class EmailChangeRequestService
             return new EmailChangeRequestResult.TooManyRequests();
         }
 
-        if (identityCheck.BackupCodeId != null)
+        var change = new EmailChangeToRequest
         {
-            var saved = await savingService.SaveWithRetriesAsync(
-                () => PrepareBackupCodeUseAsync(account.Id, checkedPasswordHash, checkedTotpSecret, identityCheck.BackupCodeId),
-                false);
-
-            if (!saved)
-            {
-                return await RefuseAsync(account, attempt.IpAddress);
-            }
-        }
-
-        emailQueue.Add(new BackgroundEmailRequest.EmailChange
-        {
-            AccountId = account.Id,
-            NewEmailAddress = newEmail,
+            UserId = account.Id,
+            NewEmail = newEmail,
+            CheckedPasswordHash = checkedPasswordHash,
+            CheckedTotpSecret = checkedTotpSecret,
+            BackupCodeId = identityCheck.BackupCodeId,
             IpAddress = attempt.IpAddress
-        });
+        };
+
+        if (!await savingService.SaveWithRetriesAsync(() => PrepareRequestAsync(change), false))
+        {
+            return await RefuseAsync(account, attempt.IpAddress);
+        }
 
         return new EmailChangeRequestResult.RequestAccepted();
     }
 
-    // Un passage : lit le compte, vérifie que le mot de passe et le secret contrôlés sont toujours les bons, puis prépare l'usage
-    // du code de secours. Le compte est contrôlé à l'enregistrement, même s'il n'a pas changé.
-    private async Task<PreparedChanges<bool>> PrepareBackupCodeUseAsync(
-        Guid userId,
-        string checkedPasswordHash,
-        string? checkedTotpSecret,
-        Guid? backupCodeId)
+    // Un passage : prépare l'entrée de la demande dans la file d'e-mails. Si un code de secours a servi, relit d'abord le compte,
+    // vérifie que le mot de passe et le secret contrôlés sont toujours les bons, et prépare l'usage du code : le code n'est
+    // dépensé que si la demande entre dans la file. Le compte est alors contrôlé à l'enregistrement, même s'il n'a pas changé.
+    private async Task<PreparedChanges<bool>> PrepareRequestAsync(EmailChangeToRequest change)
     {
-        var account = await accountRepository.FindByIdAsync(userId);
-        if (account == null
-            || account.PasswordHash != checkedPasswordHash
-            || account.EncryptedTotpSecret != checkedTotpSecret)
+        if (change.BackupCodeId != null)
         {
-            return PreparedChanges<bool>.NothingToSave(false);
+            var account = await accountRepository.FindByIdAsync(change.UserId);
+            if (account == null
+                || account.PasswordHash != change.CheckedPasswordHash
+                || account.EncryptedTotpSecret != change.CheckedTotpSecret)
+            {
+                return PreparedChanges<bool>.NothingToSave(false);
+            }
+
+            if (!await identityChecking.TryPrepareBackupCodeUseAsync(change.BackupCodeId))
+            {
+                return PreparedChanges<bool>.NothingToSave(false);
+            }
+
+            accountRepository.PrepareUnchangedCheck(account);
         }
 
-        if (!await identityChecking.TryPrepareBackupCodeUseAsync(backupCodeId))
-        {
-            return PreparedChanges<bool>.NothingToSave(false);
-        }
-
-        accountRepository.PrepareUnchangedCheck(account);
+        emailRequests.PrepareRequest(EmailRequest.ForEmailChange(
+            change.UserId,
+            change.NewEmail,
+            change.IpAddress,
+            clock.GetUtcNow().UtcDateTime));
 
         return PreparedChanges<bool>.SaveThenReturn(true);
     }
@@ -132,5 +138,16 @@ public class EmailChangeRequestService
         }
 
         return new EmailChangeRequestResult.WrongPassword();
+    }
+
+    // Ce qu'un passage doit enregistrer, et ce qui a été vérifié avant.
+    private class EmailChangeToRequest
+    {
+        public required Guid UserId { get; init; }
+        public required string NewEmail { get; init; }
+        public required string CheckedPasswordHash { get; init; }
+        public required string? CheckedTotpSecret { get; init; }
+        public required Guid? BackupCodeId { get; init; }
+        public required IPAddress? IpAddress { get; init; }
     }
 }

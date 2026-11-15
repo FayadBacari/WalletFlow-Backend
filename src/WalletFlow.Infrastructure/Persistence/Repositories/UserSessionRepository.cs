@@ -47,6 +47,12 @@ public class UserSessionRepository : IUserSessionRepository
             && device.UserId == accountId);
     }
 
+    // Renvoie vrai si le compte a déjà au moins un appareil : sinon, c'est sa toute première connexion.
+    public async Task<bool> HasDeviceAsync(Guid accountId)
+    {
+        return await databaseContext.Devices.AnyAsync(device => device.UserId == accountId);
+    }
+
     // Cherche une session par l'empreinte de son identifiant. Renvoie null si elle n'existe pas.
     public async Task<UserSession?> FindAsync(string sessionTokenHash)
     {

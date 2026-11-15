@@ -13,6 +13,7 @@ using WalletFlow.Application.Transactions;
 using WalletFlow.Application.TwoFactorAuthentication;
 using WalletFlow.Application.UserAccounts;
 using WalletFlow.Application.UserSessions;
+using WalletFlow.Application.Notifications;
 using WalletFlow.Application.Persistence;
 using WalletFlow.Tests.Fakes;
 
@@ -31,6 +32,9 @@ public class ApiFactoryWithFakes : WebApplicationFactory<Program>
     public FakeBagRepository BagRepository { get; }
     public FakeSuggestionRepository SuggestionRepository { get; }
     public FakeResourceOwnershipRepository OwnershipRepository { get; }
+    public EmailRequestWakeUp EmailWakeUp { get; } = new EmailRequestWakeUp();
+    public FakeEmailRequestRepository EmailRequests { get; }
+    public FakeAlertRepository AlertRepository { get; } = new FakeAlertRepository();
     public FakeBankDataProvider BankProvider { get; } = new FakeBankDataProvider();
     public FakeDatabaseUnitOfWork UnitOfWork { get; }
     public FakeEmailSender EmailSender { get; } = new FakeEmailSender();
@@ -48,8 +52,12 @@ public class ApiFactoryWithFakes : WebApplicationFactory<Program>
         CategoryRepository = new FakeCategoryRepository(AccountRepository.SavedCategories);
         TransactionRepository = new FakeTransactionRepository(BankRepository, CategoryRepository);
         BagRepository = new FakeBagRepository(AccountRepository.SavedUsers);
-        SuggestionRepository = new FakeSuggestionRepository(BagRepository);
+        SuggestionRepository = new FakeSuggestionRepository(BagRepository) { Transactions = TransactionRepository };
+        AlertRepository.Categories = CategoryRepository;
+        AlertRepository.Bags = BagRepository;
+        AlertRepository.Connections = BankRepository;
         OwnershipRepository = new FakeResourceOwnershipRepository(CategoryRepository, BankRepository, BagRepository, SuggestionRepository);
+        EmailRequests = new FakeEmailRequestRepository(EmailWakeUp);
         UnitOfWork = new FakeDatabaseUnitOfWork(
             AccountRepository,
             SessionRepository,
@@ -59,7 +67,9 @@ public class ApiFactoryWithFakes : WebApplicationFactory<Program>
             BankRepository,
             TransactionRepository,
             BagRepository,
-            SuggestionRepository);
+            SuggestionRepository,
+            EmailRequests,
+            AlertRepository);
     }
 
     // Remplace les services avant le démarrage de l'API (nom imposé par le framework).
@@ -80,6 +90,9 @@ public class ApiFactoryWithFakes : WebApplicationFactory<Program>
             services.AddSingleton<IBagRepository>(BagRepository);
             services.AddSingleton<ISuggestionRepository>(SuggestionRepository);
             services.AddSingleton<IResourceOwnershipRepository>(OwnershipRepository);
+            services.AddSingleton<IEmailRequestRepository>(EmailRequests);
+            services.AddSingleton<IAlertRepository>(AlertRepository);
+            services.AddSingleton(EmailWakeUp);
             services.AddSingleton<IBankDataProvider>(BankProvider);
             services.AddSingleton<IEmailSender>(EmailSender);
             services.AddSingleton<TimeProvider>(Clock);

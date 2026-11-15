@@ -2,6 +2,7 @@ using System.Net;
 using WalletFlow.Application.BankConnections;
 using WalletFlow.Application.Charts;
 using WalletFlow.Application.Configuration;
+using WalletFlow.Application.Notifications;
 using WalletFlow.Application.Persistence;
 using WalletFlow.Application.Security;
 using WalletFlow.Application.Transactions;
@@ -25,6 +26,8 @@ public class BankServices
     public FakeCategoryRepository Categories { get; } = new FakeCategoryRepository();
     public FakeTransactionRepository Transactions { get; }
     public FakeSecurityEventRepository Journal { get; } = new FakeSecurityEventRepository();
+    public FakeAlertRepository Alerts { get; } = new FakeAlertRepository();
+    public FakeEmailRequestRepository EmailRequests { get; } = new FakeEmailRequestRepository();
     public FakeDatabaseUnitOfWork UnitOfWork { get; }
     public InMemoryBankAuthorizationStore AuthorizationStore { get; }
     public InMemoryBankUpdateLimiter UpdateLimiter { get; }
@@ -32,11 +35,14 @@ public class BankServices
     public RandomSecureTokenGenerator TokenGenerator { get; } = new RandomSecureTokenGenerator();
     public UserPresence Presence { get; } = new UserPresence(IPAddress.Parse("203.0.113.7"), "Navigateur de test");
 
-    // Relie la fausse base et le faux journal à la fausse unité de travail. L'utilisateur des tests a ses 8 catégories par défaut.
+    // Relie la fausse base, le faux journal, les fausses alertes et la fausse file d'e-mails à la fausse unité de travail.
+    // L'utilisateur des tests a ses 8 catégories par défaut.
     public BankServices()
     {
         Transactions = new FakeTransactionRepository(Repository, Categories);
-        UnitOfWork = new FakeDatabaseUnitOfWork(Repository, Journal, Categories, Transactions);
+        Alerts.Categories = Categories;
+        Alerts.Connections = Repository;
+        UnitOfWork = new FakeDatabaseUnitOfWork(Repository, Journal, Categories, Transactions, Alerts, EmailRequests);
         Categories.SavedCategories.AddRange(DefaultCategories.CreateForUser(UserId));
         AuthorizationStore = new InMemoryBankAuthorizationStore(Clock);
         UpdateLimiter = new InMemoryBankUpdateLimiter(Clock);
@@ -56,27 +62,28 @@ public class BankServices
     // Crée le service qui termine une autorisation.
     public BankConnectionFinishService CreateFinish()
     {
-        var firstReading = new BankFirstTransactionsReading(Provider, Repository, CreateArrival(), CreateSavingService(), Clock);
+        var firstReading = new BankFirstTransactionsReading(Provider, Repository, CreateArrival(), CreateBudgetAlerts(), CreateSavingService(), Clock);
 
-        return new BankConnectionFinishService(Provider, Repository, AuthorizationStore, TokenGenerator, firstReading, CreateSavingService(), CreateJournal(), Clock);
+        return new BankConnectionFinishService(
+            Provider, Repository, Alerts, AuthorizationStore, TokenGenerator, firstReading, CreateSavingService(), CreateJournal(), Clock);
     }
 
     // Crée le service qui met à jour les soldes.
     public BankBalanceUpdateService CreateUpdate()
     {
-        return new BankBalanceUpdateService(Provider, Repository, UpdateLimiter, CreateArrival(), CreateSavingService(), Clock);
+        return new BankBalanceUpdateService(Provider, Repository, UpdateLimiter, CreateArrival(), CreateBudgetAlerts(), CreateSavingService(), Clock);
     }
 
     // Crée le service qui change la catégorie d'une opération.
     public TransactionCategoryChangeService CreateCategoryChange()
     {
-        return new TransactionCategoryChangeService(Transactions, Categories, CreateSavingService());
+        return new TransactionCategoryChangeService(Transactions, Categories, CreateBudgetAlerts(), CreateSavingService());
     }
 
     // Crée le service qui marque une opération comme transfert.
     public TransactionTransferService CreateTransfer()
     {
-        return new TransactionTransferService(Transactions, CreateSavingService());
+        return new TransactionTransferService(Transactions, CreateBudgetAlerts(), CreateSavingService());
     }
 
     // Crée le service qui cherche les opérations.
@@ -154,7 +161,7 @@ public class BankServices
     // Crée le service qui déconnecte une banque.
     public BankDisconnectionService CreateDisconnection()
     {
-        return new BankDisconnectionService(Provider, Repository, CreateJournal());
+        return new BankDisconnectionService(Provider, Repository, CreateBudgetAlerts(), CreateJournal());
     }
 
     // Crée le service qui liste les connexions.
@@ -189,6 +196,24 @@ public class BankServices
     public List<BankAccount> AccountsOf(BankConnection connection)
     {
         return Repository.SavedAccounts.Where(account => account.BankConnectionId == connection.Id).ToList();
+    }
+
+    // Crée la vérification des budgets, sur les fausses bases.
+    public BudgetAlertService CreateBudgetAlerts()
+    {
+        return new BudgetAlertService(Categories, Transactions, Alerts, CreateAlertPreparation(), CreateSavingService(), Clock);
+    }
+
+    // Crée l'alerte d'une autorisation bancaire à renouveler, sur les fausses bases.
+    public BankAuthorizationAlertService CreateAuthorizationAlerts()
+    {
+        return new BankAuthorizationAlertService(Repository, Alerts, CreateAlertPreparation(), CreateSavingService(), Clock);
+    }
+
+    // Crée la préparation des alertes, sur les fausses alertes et la fausse file d'e-mails.
+    public AlertPreparation CreateAlertPreparation()
+    {
+        return new AlertPreparation(Alerts, EmailRequests);
     }
 
     // Crée l'arrivée des opérations, sur les fausses opérations et les fausses catégories.

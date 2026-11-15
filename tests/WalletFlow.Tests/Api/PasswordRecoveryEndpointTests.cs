@@ -89,7 +89,7 @@ public class PasswordRecoveryEndpointTests
 
         Assert.Equal(HttpStatusCode.OK, failureResponse.StatusCode);
         await WaitUntilAsync(() => api.LoggerProvider.Messages.Any(message =>
-            message.StartsWith("Error") && message.Contains("n'a pas pu partir")));
+            message.StartsWith("Warning") && message.Contains("n'a pas pu partir")));
         var logText = string.Join("\n", api.LoggerProvider.Messages);
         Assert.Contains(account.Id.ToString(), logText);
         Assert.DoesNotContain(Email, logText);

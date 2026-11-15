@@ -334,8 +334,10 @@ CREATE UNIQUE INDEX ux_alerte_sac ON alerte (id_sac)
 CREATE UNIQUE INDEX ux_alerte_autorisation ON alerte (id_connexion)
     WHERE code_type_alerte = 'autorisation_bancaire';
 
--- La file d'e-mails (DD §9.4) : aucun secret, chaque lien est créé au moment de l'envoi. Une récupération peut ne viser
--- aucun compte ; tout autre e-mail vise un compte. Un e-mail d'alerte, et lui seul, est lié à son alerte.
+-- La file d'e-mails (DD §9.4) : aucun secret, chaque lien est créé au moment de l'envoi. Une récupération ne vise aucun
+-- compte : elle entre dans la file avant de savoir si l'adresse en a un. Tout autre e-mail vise un compte. Seuls la
+-- récupération, le lien vers la nouvelle adresse et l'avis à l'ancienne gardent une adresse, en minuscules comme
+-- celle du compte. Un e-mail d'alerte, et lui seul, est lié à son alerte.
 CREATE TABLE demande_email (
     id_demande_email      UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
     type_demande_email    VARCHAR(30)  NOT NULL,
@@ -353,10 +355,11 @@ CREATE TABLE demande_email (
         'nouvel_appareil', 'changement_mdp', 'alerte')),
     CONSTRAINT ck_demande_email_essais CHECK (nb_essais_envoi BETWEEN 0 AND 5),
     CONSTRAINT ck_demande_email_compte CHECK (
-        type_demande_email = 'recuperation_mdp' OR id_utilisateur IS NOT NULL),
+        (type_demande_email = 'recuperation_mdp') = (id_utilisateur IS NULL)),
     CONSTRAINT ck_demande_email_adresse CHECK (
-        type_demande_email NOT IN ('recuperation_mdp', 'changement_email', 'avis_ancienne_adresse')
-        OR adresse_email_demande IS NOT NULL),
+        (type_demande_email IN ('recuperation_mdp', 'changement_email', 'avis_ancienne_adresse'))
+        = (adresse_email_demande IS NOT NULL)),
+    CONSTRAINT ck_demande_email_minuscules CHECK (adresse_email_demande = lower(adresse_email_demande)),
     CONSTRAINT ck_demande_email_alerte CHECK ((type_demande_email = 'alerte') = (id_alerte IS NOT NULL))
 );
 
@@ -536,7 +539,7 @@ COMMIT;
 - Une seule catégorie « Autres » par utilisateur (`ux_categorie_autres`).
 - Une seule suggestion par règle et par mois, et par catégorie pour le dépassement (`ux_suggestion_categorie_mois`, `ux_suggestion_regle_mois`).
 - Une alerte qui ne part qu'une fois, avec exactement ce que son type demande (`ux_alerte_budget`, `ux_alerte_suggestion`, `ux_alerte_sac`, `ux_alerte_autorisation`, `ck_alerte_contenu`).
-- Une demande d'e-mail qui vise un compte, sauf une récupération, et qui n'est liée à une alerte que pour un e-mail d'alerte (`ck_demande_email_compte`, `ck_demande_email_alerte`).
+- Une demande d'e-mail qui vise un compte, sauf une récupération qui n'en vise aucun, qui ne garde une adresse, en minuscules, que pour une récupération, un changement d'adresse ou l'avis à l'ancienne adresse, et qui n'est liée à une alerte que pour un e-mail d'alerte (`ck_demande_email_compte`, `ck_demande_email_adresse`, `ck_demande_email_minuscules`, `ck_demande_email_alerte`).
 - Chaque compte et chaque opération reçus de la banque, enregistrés une seule fois (`ux_compte_externe`, `ux_transaction_externe`).
 - Une alerte non désactivable toujours activée (`tg_parametrer_controle`).
 - La suppression d'un sac et l'effacement d'un compte utilisateur (`tg_sac_avant_suppression`, `tg_utilisateur_avant_suppression` et les règles ON DELETE).
@@ -551,7 +554,7 @@ COMMIT;
 - Le hachage des mots de passe et des codes de secours, et le chiffrement du secret TOTP, avant l'enregistrement (SS §2).
 - Les durées : expiration des jetons, fermeture des sessions après 30 minutes d'inactivité, mise à jour des comptes jusqu'à 4 fois par jour, rappel 7 jours avant la fin d'une autorisation bancaire, effacement des comptes 30 jours après la demande, effacement des comptes non confirmés une fois leur lien expiré, conservation du journal un an (la tâche appelle `fn_effacer_vieux_evenements`). Ce sont des tâches planifiées.
 - Le calcul des suggestions une fois par mois, la pause de 30 jours après une suggestion ignorée, et l'effacement des suggestions dépassées, au moment du calcul (GR Sacs).
-- Les alertes : la préférence de l'utilisateur, le passage des seuils de budget après chaque changement des dépenses du mois ou du budget, l'objectif d'un sac après chaque mouvement ou changement d'objectif, et l'effacement de l'alerte d'un sac ou d'une connexion quand son objectif ou son autorisation change (GR Notif, GR Dépenses, GR Sacs, GR Comptes).
+- Les alertes : la préférence de l'utilisateur, le passage des seuils de budget après chaque changement des dépenses du mois ou du budget, l'objectif d'un sac après chaque mouvement ou changement d'objectif, et l'effacement de l'alerte d'un sac quand le montant de son objectif change ou disparaît, ou d'une connexion quand son autorisation est renouvelée (GR Notif, GR Dépenses, GR Sacs, GR Comptes).
 - La file d'e-mails : les essais d'envoi, 5 au plus (1 min, 5 min, 30 min, puis 2 h d'attente), et l'effacement d'une demande une fois l'e-mail parti. L'effacement des alertes de budget et de suggestion deux mois après leur mois, et le calcul des suggestions de chaque utilisateur à partir du 5, avec son alerte, sont des tâches planifiées (SS §7, §9).
 - La révocation de l'autorisation chez le prestataire, quand l'utilisateur déconnecte une banque ou demande la suppression de son compte (GR Comptes, GR Suppression).
 
