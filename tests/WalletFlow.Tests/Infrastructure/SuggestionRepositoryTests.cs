@@ -171,7 +171,8 @@ public class SuggestionRepositoryTests
         Assert.False(await databaseContext.SavingsSuggestions.AnyAsync(row => row.UserId == user.Id));
     }
 
-    // Chaîne réelle : calcul, acceptation et ignorance avec les vrais dépôts, la vraie unité de travail et la vraie base.
+    // Chaîne réelle, le 5 novembre 2026 : calcul, acceptation et ignorance avec les vrais dépôts, la vraie unité de travail
+    // et la vraie base.
     // 1 000 € sur le compte, Alimentation à 100 € par mois puis 150 € en octobre, et 2 000 € de revenus pour 1 750 € de dépenses.
     [Fact]
     public async Task SuggestionsLiveTheirWholeLifeOnTheRealDatabase()
@@ -198,6 +199,7 @@ public class SuggestionRepositoryTests
         await databaseContext.SaveChangesAsync();
         databaseContext.ChangeTracker.Clear();
         var clock = new FakeTimeProvider();
+        clock.Advance(TimeSpan.FromDays(1));
         var bagRepository = new BagRepository(databaseContext);
         var suggestionRepository = new SuggestionRepository(databaseContext);
         var balanceTotal = new BankBalanceTotalService(new BankConnectionRepository(databaseContext));

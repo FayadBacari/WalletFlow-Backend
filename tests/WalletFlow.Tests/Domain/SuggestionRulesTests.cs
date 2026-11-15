@@ -6,13 +6,23 @@ namespace WalletFlow.Tests.Domain;
 // les seuils exacts de 20 %, et la pause de 30 jours.
 public class SuggestionRulesTests
 {
+    [Fact]
+    public void CalculationWaitsUntilTheFifth()
+    {
+        Assert.Equal(5, SuggestionRules.CalculationDay);
+    }
+
+    // Le mois d'avant est évalué à partir du 5 : du 1er au 4, c'est encore celui d'avant (GR Sacs, DD §8 et §12).
     [Theory]
-    [InlineData("2026-11-04", "2026-10-01")]
-    [InlineData("2026-11-01", "2026-10-01")]
+    [InlineData("2026-11-05", "2026-10-01")]
     [InlineData("2026-11-30", "2026-10-01")]
-    [InlineData("2026-01-15", "2025-12-01")]
+    [InlineData("2026-11-04", "2026-09-01")]
+    [InlineData("2026-11-01", "2026-09-01")]
+    [InlineData("2026-01-05", "2025-12-01")]
+    [InlineData("2026-01-04", "2025-11-01")]
+    [InlineData("2026-02-03", "2025-12-01")]
     [InlineData("2026-03-31", "2026-02-01")]
-    public void EvaluatedMonthIsTheLastFullMonth(string today, string expectedMonth)
+    public void EvaluatedMonthStartsOnTheFifth(string today, string expectedMonth)
     {
         Assert.Equal(DateOnly.Parse(expectedMonth), SuggestionRules.FindEvaluatedMonth(DateOnly.Parse(today)));
     }

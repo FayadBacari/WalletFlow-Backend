@@ -16,7 +16,7 @@ using static WalletFlow.Tests.Api.TwoFactorRequestTestValues;
 namespace WalletFlow.Tests.Api;
 
 // Vérifie les routes des suggestions (GR Sacs, SS §4, §5, §6 et §11) dans la vraie API, avec une fausse base.
-// L'horloge des tests marque le 4 novembre 2026 : le mois évalué est octobre.
+// Chaque test avance l'horloge du 4 au 5 novembre 2026 avant toute connexion : le mois évalué est octobre.
 public class SuggestionEndpointTests
 {
     private const string SuggestionsEndpoint = "/api/suggestions";
@@ -30,6 +30,7 @@ public class SuggestionEndpointTests
     // avec ce solde.
     private static async Task<LoggedInUser> LogInWithBalanceAsync(ApiFactoryWithFakes api, int balanceInCents, string email = Email)
     {
+        api.Clock.Advance(TimeSpan.FromDays(1));
         var account = await AddAccountAsync(api, email);
         api.CategoryRepository.SavedCategories.AddRange(DefaultCategories.CreateForUser(account.Id));
         var client = CreateBrowserClient(api);

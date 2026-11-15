@@ -10,7 +10,7 @@ namespace WalletFlow.Application.Suggestions;
 
 // Cas d'utilisation : l'utilisateur connecté voit ses suggestions d'épargne et ce qu'il a économisé (GR Sacs).
 // Les suggestions portent sur le dernier mois complet, à Paris. Elles sont calculées une seule fois, à la première lecture
-// après la fin du mois, puis lues telles quelles. Au même calcul, les suggestions restées sans réponse des mois d'avant
+// à partir du 5 du mois suivant, puis lues telles quelles. Au même calcul, les suggestions restées sans réponse des mois d'avant
 // sont effacées, comme les suggestions ignorées dont la pause de 30 jours est finie (DD §8).
 public class SuggestionListService
 {

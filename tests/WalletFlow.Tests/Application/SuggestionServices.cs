@@ -10,8 +10,8 @@ using WalletFlow.Tests.Fakes;
 namespace WalletFlow.Tests.Application;
 
 // Crée les cas d'utilisation des suggestions avec une fausse base et une fausse horloge, pour un utilisateur qui a ses
-// 8 catégories par défaut, sans compte bancaire, sans opération et sans sac. L'horloge des tests marque le 4 novembre 2026
-// à midi : le mois évalué est octobre 2026, et sa moyenne porte sur juillet, août et septembre.
+// 8 catégories par défaut, sans compte bancaire, sans opération et sans sac. L'horloge marque le 5 novembre 2026 à midi,
+// sauf si le test la veut plus tôt : le mois évalué est octobre 2026, et sa moyenne porte sur juillet, août et septembre.
 public class SuggestionServices
 {
     public static readonly DateOnly October = new DateOnly(2026, 10, 1);
@@ -24,9 +24,11 @@ public class SuggestionServices
     public FakeDatabaseUnitOfWork UnitOfWork { get; }
     public User User { get; }
 
-    // Garde le compte de l'utilisateur dans la fausse base, et relie les fausses bases à la fausse unité de travail.
-    public SuggestionServices()
+    // Garde le compte de l'utilisateur dans la fausse base, relie les fausses bases à la fausse unité de travail, et avance
+    // l'horloge des tests, qui marque le 4 novembre, de ce nombre de jours : par défaut jusqu'au 5, où octobre est calculé.
+    public SuggestionServices(int daysAfterNovember4 = 1)
     {
+        Bank.Clock.Advance(TimeSpan.FromDays(daysAfterNovember4));
         User = new User { Id = Bank.UserId, Email = "suggestions@exemple.test", PasswordHash = "empreinte-de-test", IsEmailConfirmed = true };
         Bags.SavedUsers.Add(User);
         Suggestions = new FakeSuggestionRepository(Bags);

@@ -5,7 +5,7 @@ using static WalletFlow.Tests.Application.SuggestionServices;
 namespace WalletFlow.Tests.Application;
 
 // Vérifie le calcul et la liste des suggestions (GR Sacs, DD §8, §11 et §12), avec une fausse base.
-// Le 4 novembre 2026, le mois évalué est octobre ; sa moyenne porte sur juillet, août et septembre.
+// Le 5 novembre 2026, le mois évalué est octobre ; sa moyenne porte sur juillet, août et septembre.
 public class SuggestionListServiceTests
 {
     private readonly SuggestionServices services = new SuggestionServices();
@@ -298,6 +298,29 @@ public class SuggestionListServiceTests
 
         Assert.Equal(savedByOther!.Id, Assert.Single(list.Suggestions).Id);
         Assert.Single(services.SavedSuggestionsOfUser());
+    }
+
+    // Du 1er au 4 novembre, octobre n'est pas encore calculé : la liste montre toujours septembre, déjà calculé.
+    // Le 5, octobre est calculé, et la suggestion de septembre restée sans réponse est effacée.
+    [Fact]
+    public async Task OctoberIsCalculatedOnTheFifth()
+    {
+        var early = new SuggestionServices(0);
+        var account = early.AddBankAccount(50_000);
+        early.SaveTransaction(account, "Alimentation", October, -1_000);
+        early.User.NoteSuggestionMonth(September);
+        var september = early.SaveSuggestion(SuggestionRule.UnallocatedMoney, September, 4_000);
+
+        var onTheFourth = await early.CreateList().ListAsync(early.UserId);
+        early.Bank.Clock.Advance(TimeSpan.FromDays(1));
+        var onTheFifth = await early.CreateList().ListAsync(early.UserId);
+
+        Assert.Equal(September, onTheFourth.Month);
+        Assert.Equal(september.Id, Assert.Single(onTheFourth.Suggestions).Id);
+        Assert.Equal(October, onTheFifth.Month);
+        Assert.Equal(SuggestionRule.UnallocatedMoney, Assert.Single(onTheFifth.Suggestions).Rule);
+        Assert.Equal(October, Assert.Single(early.SavedSuggestionsOfUser()).Month);
+        Assert.Equal(October, early.User.LastSuggestionMonth);
     }
 
     // Sans opération, le calcul n'a pas lieu : une ancienne suggestion sans réponse, restée d'un mois d'avant, n'est pas montrée.
