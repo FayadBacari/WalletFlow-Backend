@@ -78,7 +78,7 @@ public class UserSessionOpeningService
 
     // Un passage : lit le compte, vérifie que ce qui vient d'être contrôlé est toujours valable, puis prépare en une fois
     // les compteurs remis à zéro, la nouvelle session, le nouvel appareil s'il y en a un avec son alerte, le code de secours
-    // utilisé s'il y en a un, et l'événement du journal. Donne faux si le compte a disparu ou si ce qui vient d'être vérifié
+    // utilisé s'il y en a un avec son alerte, et l'événement du journal. Donne faux si le compte a disparu ou si ce qui vient d'être vérifié
     // n'est plus valable.
     private async Task<PreparedChanges<bool>> PrepareLoginAsync(
         SuccessfulLogin login,
@@ -101,6 +101,7 @@ public class UserSessionOpeningService
 
             // L'enregistrement refusera tout si une autre requête vient de se servir de ce code.
             backupCode.MarkAsUsed(session.LastActivityAt);
+            emailRequests.PrepareRequest(EmailRequest.ForBackupCodeUse(login.AccountId, login.IpAddress, session.LastActivityAt));
         }
 
         account.ResetLoginCounters();

@@ -4,6 +4,7 @@ using WalletFlow.Application.Configuration;
 using WalletFlow.Application.Notifications;
 using WalletFlow.Application.Persistence;
 using WalletFlow.Application.Security;
+using WalletFlow.Application.Support;
 using WalletFlow.Application.UserAccounts;
 using WalletFlow.Domain.AccountsAndCategories;
 using WalletFlow.Domain.NotificationsAndSupport;
@@ -19,9 +20,13 @@ namespace WalletFlow.Application.Emails;
 // Le temps de ces envois ne compte dans aucune réponse : la route a déjà répondu, de la même façon pour toutes les adresses (SS §2).
 public class EmailRequestProcessingService
 {
+    // La page du site où écrire au support : les e-mails de sécurité y renvoient (SS §9).
+    public const string SupportPagePath = "/support";
+
     private readonly IEmailRequestRepository emailRequests;
     private readonly IUserAccountRepository accountRepository;
     private readonly IAlertRepository alertRepository;
+    private readonly ISupportRequestRepository supportRepository;
     private readonly IDatabaseUnitOfWork unitOfWork;
     private readonly SecurityJournalService securityJournal;
     private readonly ISecureTokenGenerator tokenGenerator;
@@ -30,6 +35,7 @@ public class EmailRequestProcessingService
     private readonly IAccountChangeEmails changeEmails;
     private readonly ISecurityAlertEmails securityAlertEmails;
     private readonly IAlertEmails alertEmails;
+    private readonly ISupportEmails supportEmails;
     private readonly PublicWebsiteSettings websiteSettings;
     private readonly TimeProvider clock;
 
@@ -38,6 +44,7 @@ public class EmailRequestProcessingService
         IEmailRequestRepository emailRequests,
         IUserAccountRepository accountRepository,
         IAlertRepository alertRepository,
+        ISupportRequestRepository supportRepository,
         IDatabaseUnitOfWork unitOfWork,
         SecurityJournalService securityJournal,
         ISecureTokenGenerator tokenGenerator,
@@ -46,12 +53,14 @@ public class EmailRequestProcessingService
         IAccountChangeEmails changeEmails,
         ISecurityAlertEmails securityAlertEmails,
         IAlertEmails alertEmails,
+        ISupportEmails supportEmails,
         PublicWebsiteSettings websiteSettings,
         TimeProvider clock)
     {
         this.emailRequests = emailRequests;
         this.accountRepository = accountRepository;
         this.alertRepository = alertRepository;
+        this.supportRepository = supportRepository;
         this.unitOfWork = unitOfWork;
         this.securityJournal = securityJournal;
         this.tokenGenerator = tokenGenerator;
@@ -60,6 +69,7 @@ public class EmailRequestProcessingService
         this.changeEmails = changeEmails;
         this.securityAlertEmails = securityAlertEmails;
         this.alertEmails = alertEmails;
+        this.supportEmails = supportEmails;
         this.websiteSettings = websiteSettings;
         this.clock = clock;
     }
@@ -113,9 +123,14 @@ public class EmailRequestProcessingService
             EmailRequestType.AccountUnlock => await TrySendUnlockEmailAsync(request),
             EmailRequestType.EmailChange => await TrySendEmailChangeEmailAsync(request),
             EmailRequestType.EmailChangedNotice => await TrySendEmailAsync(
-                changeEmails.CreateEmailChangedEmail(ReadEmailAddress(request)), request.UserId, null),
+                changeEmails.CreateEmailChangedEmail(ReadEmailAddress(request), BuildSupportPageAddress()), request.UserId, null),
             EmailRequestType.NewDevice => await TrySendSecurityAlertAsync(request, securityAlertEmails.CreateNewDeviceEmail),
             EmailRequestType.PasswordChange => await TrySendSecurityAlertAsync(request, securityAlertEmails.CreatePasswordChangedEmail),
+            EmailRequestType.TwoFactorDeactivation => await TrySendSecurityAlertAsync(
+                request, securityAlertEmails.CreateTwoFactorDeactivatedEmail),
+            EmailRequestType.BackupCodeUse => await TrySendSecurityAlertAsync(request, securityAlertEmails.CreateBackupCodeUsedEmail),
+            EmailRequestType.TwoFactorDeactivationLink => await TrySendTwoFactorLinkEmailAsync(request),
+            EmailRequestType.SupportResponse => await TrySendSupportResponseEmailAsync(request),
             EmailRequestType.Alert => await TrySendAlertEmailAsync(request),
             _ => throw new InvalidOperationException("Ce type de demande d'e-mail n'est pas prévu.")
         };
@@ -199,11 +214,11 @@ public class EmailRequestProcessingService
         return await TrySendEmailAsync(linkEmail, account.Id, null);
     }
 
-    // Envoie une alerte de sécurité à l'adresse actuelle du compte, avec l'heure de Paris de ce qui s'est passé.
-    // Un compte effacé depuis ne reçoit rien.
+    // Envoie une alerte de sécurité à l'adresse actuelle du compte, avec l'heure de Paris de ce qui s'est passé et l'adresse
+    // de la page de support. Un compte effacé depuis ne reçoit rien.
     private async Task<SendingAttempt> TrySendSecurityAlertAsync(
         EmailRequest request,
-        Func<string, DateTime, EmailMessage> createAlertEmail)
+        Func<string, DateTime, string, EmailMessage> createAlertEmail)
     {
         var account = await accountRepository.FindByIdAsync(ReadUserId(request));
         if (account == null)
@@ -211,9 +226,54 @@ public class EmailRequestProcessingService
             return SendingAttempt.Finished(request.UserId, null);
         }
 
-        var alertEmail = createAlertEmail(account.Email, UsersCalendar.ConvertToUsersTime(request.RequestedAt));
+        var alertEmail = createAlertEmail(
+            account.Email,
+            UsersCalendar.ConvertToUsersTime(request.RequestedAt),
+            BuildSupportPageAddress());
 
         return await TrySendEmailAsync(alertEmail, account.Id, null);
+    }
+
+    // Envoie le lien du support qui désactive la double authentification, à l'adresse actuelle du compte. Un compte effacé,
+    // ou dont la double authentification est déjà désactivée, ne reçoit rien : il n'y a plus rien à désactiver.
+    private async Task<SendingAttempt> TrySendTwoFactorLinkEmailAsync(EmailRequest request)
+    {
+        var account = await accountRepository.FindByIdAsync(ReadUserId(request));
+        if (account == null || !account.IsTwoFactorEnabled)
+        {
+            return SendingAttempt.Finished(request.UserId, null);
+        }
+
+        var linkToken = await ReplaceLinkAsync(
+            account.Id,
+            EmailTokenType.TwoFactorDeactivation,
+            EmailTokenValidityDurations.TwoFactorDeactivationLink,
+            null);
+        var linkEmail = recoveryEmails.CreateTwoFactorDeactivationLinkEmail(
+            account.Email,
+            websiteSettings.BuildLink("/disable-two-factor", linkToken.Token),
+            BuildSupportPageAddress());
+
+        return await TrySendEmailAsync(linkEmail, account.Id, null);
+    }
+
+    // Envoie une réponse du support, avec son texte, à l'adresse lue dans sa demande au moment de l'envoi : celle du compte,
+    // ou celle du visiteur (GR Admin). Une réponse effacée depuis, avec sa demande, ne part plus.
+    private async Task<SendingAttempt> TrySendSupportResponseEmailAsync(EmailRequest request)
+    {
+        var content = await supportRepository.ReadResponseEmailAsync(ReadSupportResponseId(request));
+        if (content == null)
+        {
+            return SendingAttempt.Finished(null, null);
+        }
+
+        var responseEmail = supportEmails.CreateResponseEmail(
+            content.RecipientAddress,
+            UsersCalendar.ConvertToUsersTime(content.RequestSentAt),
+            content.ResponseText,
+            BuildSupportPageAddress());
+
+        return await TrySendEmailAsync(responseEmail, content.AccountId, null);
     }
 
     // Envoie l'e-mail d'une alerte à l'adresse actuelle du compte. Ce qu'il dit est lu au moment de l'envoi : une catégorie
@@ -233,6 +293,12 @@ public class EmailRequestProcessingService
         }
 
         return await TrySendEmailAsync(alertEmails.CreateEmail(account.Email, content), account.Id, null);
+    }
+
+    // Donne l'adresse de la page de support, sur le domaine de WalletFlow, en HTTPS (SS §9).
+    private string BuildSupportPageAddress()
+    {
+        return websiteSettings.BuildPageAddress(SupportPagePath);
     }
 
     // Tire un nouveau jeton et remplace l'ancien lien du même type, qui ne marche plus (SS §2). Seule l'empreinte va en base.
@@ -334,7 +400,7 @@ public class EmailRequestProcessingService
         return emailAddress;
     }
 
-    // Le compte que vise la demande. La base refuse toute demande sans compte, sauf une récupération.
+    // Le compte que vise la demande. La base refuse toute demande sans compte, sauf une récupération et une réponse au support.
     private static Guid ReadUserId(EmailRequest request)
     {
         if (request.UserId is not Guid userId)
@@ -343,6 +409,17 @@ public class EmailRequestProcessingService
         }
 
         return userId;
+    }
+
+    // La réponse qu'envoie la demande. La base refuse l'e-mail d'une réponse sans elle.
+    private static Guid ReadSupportResponseId(EmailRequest request)
+    {
+        if (request.SupportResponseId is not Guid responseId)
+        {
+            throw new InvalidOperationException("Cette demande d'e-mail n'envoie aucune réponse du support.");
+        }
+
+        return responseId;
     }
 
     // L'alerte qu'annonce la demande. La base refuse un e-mail d'alerte sans elle.

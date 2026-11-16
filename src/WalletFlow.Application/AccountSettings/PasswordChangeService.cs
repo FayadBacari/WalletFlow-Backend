@@ -108,7 +108,7 @@ public class PasswordChangeService
             return PreparedChanges<bool>.NothingToSave(false);
         }
 
-        if (!await identityChecking.TryPrepareBackupCodeUseAsync(change.BackupCodeId))
+        if (!await identityChecking.TryPrepareBackupCodeUseAsync(change.BackupCodeId, change.IpAddress))
         {
             return PreparedChanges<bool>.NothingToSave(false);
         }

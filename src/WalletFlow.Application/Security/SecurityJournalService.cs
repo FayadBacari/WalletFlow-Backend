@@ -4,7 +4,8 @@ using WalletFlow.Domain.UsersAndSecurity;
 namespace WalletFlow.Application.Security;
 
 // Écrit les événements du journal de sécurité (SS §11). Chaque événement est créé ici, toujours de la même façon :
-// date, utilisateur, adresse IP, événement et résultat. Jamais l'adresse e-mail (SS §7).
+// date, utilisateur, adresse IP, événement et résultat, et pour une action de l'administrateur, le compte qu'elle vise.
+// Jamais l'adresse e-mail (SS §7).
 public class SecurityJournalService
 {
     private readonly ISecurityEventRepository securityEventRepository;
@@ -40,12 +41,28 @@ public class SecurityJournalService
             CreateEvent(type, result, accountId, ipAddress));
     }
 
-    // Crée l'événement, daté par l'horloge de l'application.
+    // Écrit tout de suite l'action d'un administrateur, avec le compte qu'elle vise s'il y en a un (SS §8, §11) :
+    // pour une recherche, quand rien d'autre n'est à enregistrer.
+    public async Task SaveAdminActionNowAsync(Guid administratorId, Guid? targetAccountId, IPAddress? ipAddress)
+    {
+        await securityEventRepository.SaveEventAsync(
+            CreateEvent(SecurityEventType.AdminAction, SecurityEventResult.Success, administratorId, ipAddress, targetAccountId));
+    }
+
+    // Prépare l'action d'un administrateur, avec le compte qu'elle vise s'il y en a un : elle partira avec ce qu'elle change.
+    public void PrepareAdminAction(Guid administratorId, Guid? targetAccountId, IPAddress? ipAddress)
+    {
+        securityEventRepository.PrepareEvent(
+            CreateEvent(SecurityEventType.AdminAction, SecurityEventResult.Success, administratorId, ipAddress, targetAccountId));
+    }
+
+    // Crée l'événement, daté par l'horloge de l'application. Seule une action de l'administrateur vise un compte.
     private SecurityEvent CreateEvent(
         SecurityEventType type,
         SecurityEventResult result,
         Guid? accountId,
-        IPAddress? ipAddress)
+        IPAddress? ipAddress,
+        Guid? targetAccountId = null)
     {
         return new SecurityEvent
         {
@@ -53,7 +70,8 @@ public class SecurityJournalService
             Result = result,
             OccurredAt = clock.GetUtcNow().UtcDateTime,
             IpAddress = ipAddress,
-            UserId = accountId
+            UserId = accountId,
+            TargetUserId = targetAccountId
         };
     }
 }

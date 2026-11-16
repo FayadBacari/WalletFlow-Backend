@@ -6,5 +6,6 @@ public enum EmailTokenType
     SignupConfirmation, // confirmation_inscription
     PasswordRecovery,   // recuperation_mdp
     AccountUnlock,      // deblocage
-    EmailChange         // changement_email
+    EmailChange,        // changement_email
+    TwoFactorDeactivation // desactivation_double_auth
 }

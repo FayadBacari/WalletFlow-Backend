@@ -26,6 +26,8 @@ public class AlertSettingsController : ControllerBase
         { AlertKind.AccountLocked, "accountLocked" },
         { AlertKind.PasswordChange, "passwordChange" },
         { AlertKind.EmailChange, "emailChange" },
+        { AlertKind.TwoFactorDeactivation, "twoFactorDeactivation" },
+        { AlertKind.BackupCodeUse, "backupCodeUse" },
     };
 
     // Le nom de chaque canal tel que le site le reçoit et l'envoie.
@@ -44,7 +46,7 @@ public class AlertSettingsController : ControllerBase
         this.settingsService = settingsService;
     }
 
-    // GET api/alert-settings : le canal et les 8 types d'alerte, avec le choix de l'utilisateur. Ce sont des données
+    // GET api/alert-settings : le canal et les 10 types d'alerte, avec le choix de l'utilisateur. Ce sont des données
     // personnelles : aucun navigateur ni intermédiaire ne doit les garder.
     [HttpGet]
     [ResponseCache(NoStore = true, Location = ResponseCacheLocation.None)]

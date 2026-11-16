@@ -73,7 +73,8 @@ public class EmailChangeConfirmationService
     }
 
     // Un passage : relit le lien et son compte, les vérifie, puis prépare la nouvelle adresse, le lien utilisé, l'effacement
-    // des liens de récupération et de déblocage partis vers l'ancienne adresse (SS §2), l'événement du journal,
+    // des liens de récupération, de déblocage et de désactivation de la double authentification partis vers l'ancienne adresse
+    // (SS §2), l'événement du journal,
     // et l'avis à l'adresse que le compte quitte.
     private async Task<PreparedChanges<EmailChangeConfirmationResult>> PrepareNewEmailAsync(
         string tokenHash,
@@ -105,7 +106,7 @@ public class EmailChangeConfirmationService
 
         account.ReplaceEmail(token.NewEmail);
         token.MarkAsUsed(now);
-        await accountRepository.PrepareRecoveryAndUnlockLinksRemovalAsync(account.Id);
+        await accountRepository.PrepareOldAddressLinksRemovalAsync(account.Id);
         securityJournal.PrepareEvent(SecurityEventType.EmailChange, SecurityEventResult.Success, account.Id, ipAddress);
         emailRequests.PrepareRequest(EmailRequest.ForEmailChangedNotice(account.Id, oldEmail, ipAddress, now));
 

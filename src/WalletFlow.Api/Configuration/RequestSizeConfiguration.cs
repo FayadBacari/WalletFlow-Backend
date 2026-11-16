@@ -26,4 +26,11 @@ public static class RequestSizeConfiguration
 
     // Le nom d'un canal ou une valeur vrai ou faux tiennent largement dans cette taille.
     public const long MaximumAlertSettingsRequestBytes = 1024;
+
+    // Le plus long message permis tient dans cette taille, même si chacun de ses 5 000 caractères est un emoji écrit
+    // en \uXXXX\uXXXX dans le JSON (12 octets chacun, 60 000 en tout), avec l'adresse de contact d'un visiteur.
+    public const long MaximumSupportRequestBytes = 65536;
+
+    // Les actions de l'administrateur sur un compte ou une demande n'ont pas de corps : cette taille suffit largement.
+    public const long MaximumAdministrationRequestBytes = 1024;
 }

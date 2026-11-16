@@ -39,7 +39,7 @@ public class AlertSettingsServiceTests
     }
 
     [Fact]
-    public async Task SettingsGiveTheEightTypesInListOrderAllEnabledByDefault()
+    public async Task SettingsGiveTheTenTypesInListOrderAllEnabledByDefault()
     {
         var settings = await CreateService().ReadAsync(user.Id);
 
@@ -48,7 +48,7 @@ public class AlertSettingsServiceTests
         Assert.Equal(Enum.GetValues<AlertKind>().ToList(), settings.Alerts.Select(setting => setting.Kind).ToList());
         Assert.All(settings.Alerts, setting => Assert.True(setting.IsEnabled));
         Assert.Equal(
-            new List<bool> { true, true, true, true, false, false, false, false },
+            new List<bool> { true, true, true, true, false, false, false, false, false, false },
             settings.Alerts.Select(setting => setting.CanBeDisabled).ToList());
         Assert.Equal("Budget d'une catégorie atteint", settings.Alerts[0].Label);
     }
@@ -86,6 +86,8 @@ public class AlertSettingsServiceTests
     [InlineData(AlertKind.AccountLocked)]
     [InlineData(AlertKind.PasswordChange)]
     [InlineData(AlertKind.EmailChange)]
+    [InlineData(AlertKind.TwoFactorDeactivation)]
+    [InlineData(AlertKind.BackupCodeUse)]
     public async Task SecurityAlertCannotBeDisabled(AlertKind kind)
     {
         var result = await SwitchAsync(kind, false);

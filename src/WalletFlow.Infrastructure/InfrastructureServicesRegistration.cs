@@ -3,8 +3,10 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using WalletFlow.Application.AccountRecovery;
 using WalletFlow.Application.AccountSettings;
+using WalletFlow.Application.Administration;
 using WalletFlow.Application.Bags;
 using WalletFlow.Application.Suggestions;
+using WalletFlow.Application.Support;
 using WalletFlow.Application.BankConnections;
 using WalletFlow.Application.Categories;
 using WalletFlow.Application.Emails;
@@ -49,6 +51,8 @@ public static class InfrastructureServicesRegistration
         services.AddScoped<IResourceOwnershipRepository, ResourceOwnershipRepository>();
         services.AddScoped<IEmailRequestRepository, EmailRequestRepository>();
         services.AddScoped<IAlertRepository, AlertRepository>();
+        services.AddScoped<ISupportRequestRepository, SupportRequestRepository>();
+        services.AddScoped<IAdministrationRepository, AdministrationRepository>();
 
         return services;
     }
@@ -98,6 +102,7 @@ public static class InfrastructureServicesRegistration
         services.AddSingleton<IAccountRecoveryEmails, FrenchAccountRecoveryEmails>();
         services.AddSingleton<IAccountChangeEmails, FrenchAccountChangeEmails>();
         services.AddSingleton<ISecurityAlertEmails, FrenchSecurityAlertEmails>();
+        services.AddSingleton<ISupportEmails, FrenchSupportEmails>();
         services.AddSingleton<IAlertEmails, FrenchAlertEmails>();
         return services;
     }

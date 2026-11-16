@@ -105,10 +105,10 @@ public class AlertSettingsEndpointTests
         Assert.Empty(api.AlertRepository.SavedPreferences);
     }
 
-    // Les 8 types, dans l'ordre de la liste, avec leur nom pour le site, leur libellé et leur choix. Ce sont des données
+    // Les 10 types, dans l'ordre de la liste, avec leur nom pour le site, leur libellé et leur choix. Ce sont des données
     // personnelles : aucun navigateur ni intermédiaire ne doit les garder.
     [Fact]
-    public async Task SettingsGiveTheEightTypesAndAreNeverCached()
+    public async Task SettingsGiveTheTenTypesAndAreNeverCached()
     {
         using var api = new ApiFactoryWithFakes();
         var user = await LogInAsync(api);
@@ -124,14 +124,15 @@ public class AlertSettingsEndpointTests
             new List<string?>
             {
                 "budgetReached", "newSuggestion", "bagGoalReached", "bankAuthorizationToRenew",
-                "newDevice", "accountLocked", "passwordChange", "emailChange"
+                "newDevice", "accountLocked", "passwordChange", "emailChange", "twoFactorDeactivation", "backupCodeUse"
             },
             alerts.Select(alert => alert.GetProperty("type").GetString()).ToList());
         Assert.Equal(
-            new List<bool> { true, true, true, true, false, false, false, false },
+            new List<bool> { true, true, true, true, false, false, false, false, false, false },
             alerts.Select(alert => alert.GetProperty("canBeDisabled").GetBoolean()).ToList());
         Assert.All(alerts, alert => Assert.True(alert.GetProperty("isEnabled").GetBoolean()));
         Assert.Equal("Objectif d'un sac atteint", alerts[2].GetProperty("label").GetString());
+        Assert.Equal("Utilisation d'un code de secours", alerts[9].GetProperty("label").GetString());
     }
 
     // Couper une alerte répond avec les réglages à jour, et la remettre aussi.
@@ -161,6 +162,8 @@ public class AlertSettingsEndpointTests
     [InlineData("accountLocked")]
     [InlineData("passwordChange")]
     [InlineData("emailChange")]
+    [InlineData("twoFactorDeactivation")]
+    [InlineData("backupCodeUse")]
     public async Task SecurityAlertCannotBeDisabled(string type)
     {
         using var api = new ApiFactoryWithFakes();

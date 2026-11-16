@@ -33,6 +33,7 @@
 | date_expiration_jeton  |
 | date_utilisation_jeton |
 | nouvel_email           |
+| nb_essais_jeton        |
 
 | APPAREIL        |
 |-----------------|
@@ -141,11 +142,13 @@
 | message_demande |
 | email_contact   |
 | statut_demande  |
+| date_demande    |
 
 | REPONSE_SUPPORT |
 |-----------------|
 | **id_reponse**  |
 | contenu_reponse |
+| date_reponse    |
 
 | OBTENIR      | Card. |
 |--------------|-------|
@@ -168,6 +171,11 @@
 | SESSION     | 1,1   |
 
 | TRACER             | Card. |
+|--------------------|-------|
+| UTILISATEUR        | 0,n   |
+| EVENEMENT_SECURITE | 0,1   |
+
+| CONCERNER          | Card. |
 |--------------------|-------|
 | UTILISATEUR        | 0,n   |
 | EVENEMENT_SECURITE | 0,1   |
@@ -272,6 +280,11 @@
 |---------------|-------|
 | ALERTE        | 0,1   |
 | DEMANDE_EMAIL | 0,1   |
+
+| TRANSMETTRE     | Card. |
+|-----------------|-------|
+| REPONSE_SUPPORT | 0,1   |
+| DEMANDE_EMAIL   | 0,1   |
 
 | EMETTRE         | Card. |
 |-----------------|-------|

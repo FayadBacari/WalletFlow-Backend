@@ -1,3 +1,4 @@
+using WalletFlow.Application.Emails;
 using WalletFlow.Infrastructure.Emails;
 
 namespace WalletFlow.Tests.Infrastructure;
@@ -6,8 +7,21 @@ namespace WalletFlow.Tests.Infrastructure;
 public class FrenchSecurityAlertEmailsTests
 {
     private const string Recipient = "utilisateur@exemple.test";
+    private const string SupportPage = "https://walletflow.test/support";
 
     private readonly FrenchSecurityAlertEmails emails = new FrenchSecurityAlertEmails();
+
+    // Les quatre alertes de sécurité écrites par cette classe, au même moment.
+    private List<EmailMessage> CreateAll(DateTime moment)
+    {
+        return new List<EmailMessage>
+        {
+            emails.CreateNewDeviceEmail(Recipient, moment, SupportPage),
+            emails.CreatePasswordChangedEmail(Recipient, moment, SupportPage),
+            emails.CreateTwoFactorDeactivatedEmail(Recipient, moment, SupportPage),
+            emails.CreateBackupCodeUsedEmail(Recipient, moment, SupportPage)
+        };
+    }
 
     // Le premier du mois s'écrit « 1er », et les minutes ont toujours deux chiffres.
     [Theory]
@@ -18,22 +32,44 @@ public class FrenchSecurityAlertEmailsTests
     {
         var moment = new DateTime(year, month, day, hour, minute, 0);
 
-        Assert.Contains(text + " (heure de Paris)", emails.CreateNewDeviceEmail(Recipient, moment).Body);
-        Assert.Contains(text + " (heure de Paris)", emails.CreatePasswordChangedEmail(Recipient, moment).Body);
+        Assert.All(CreateAll(moment), email => Assert.Contains(text + " (heure de Paris)", email.Body));
     }
 
-    // Une alerte ne cite aucun montant (GR Notif) et ne contient aucun lien : elle ne sert jamais à se connecter.
+    // Une alerte ne cite aucun montant (GR Notif). Son seul lien est la page de support, seul sur la dernière ligne :
+    // une alerte ne sert jamais à se connecter (SS §9).
     [Fact]
-    public void AlertsContainNeitherLinkNorAmount()
+    public void OnlyLinkIsTheSupportPageAndNoAmount()
     {
-        var moment = new DateTime(2026, 11, 15, 14, 2, 0);
-
-        foreach (var email in new[] { emails.CreateNewDeviceEmail(Recipient, moment), emails.CreatePasswordChangedEmail(Recipient, moment) })
+        foreach (var email in CreateAll(new DateTime(2026, 11, 15, 14, 2, 0)))
         {
             Assert.Equal(Recipient, email.RecipientAddress);
-            Assert.DoesNotContain("http", email.Body);
             Assert.DoesNotContain("€", email.Body);
-            Assert.Contains("support", email.Body);
+            Assert.Equal(1, CountOccurrences(email.Body, "http"));
+            Assert.EndsWith("écris au support de WalletFlow :\n" + SupportPage, email.Body.Replace("Écris aussi", "écris"));
+            Assert.StartsWith("Bonjour,", email.Body);
         }
+    }
+
+    // Chaque alerte dit ce qui s'est passé, et a son propre objet.
+    [Fact]
+    public void EachAlertSaysWhatHappened()
+    {
+        var all = CreateAll(new DateTime(2026, 11, 16, 10, 30, 0));
+
+        Assert.Contains("depuis un appareil que ton compte ne connaissait pas", all[0].Body);
+        Assert.Contains("Le mot de passe de ton compte WalletFlow vient d'être changé", all[1].Body);
+        Assert.Contains("La double authentification de ton compte WalletFlow vient d'être désactivée", all[2].Body);
+        Assert.Contains("réactive la double authentification", all[2].Body);
+        Assert.Contains("Un code de secours de ton compte WalletFlow vient de servir", all[3].Body);
+        Assert.Contains("désactive et réactive la double authentification pour recevoir de nouveaux codes de secours", all[3].Body);
+        Assert.Equal(4, all.Select(email => email.Subject).Distinct().Count());
+        Assert.Equal("La double authentification de ton compte WalletFlow est désactivée", all[2].Subject);
+        Assert.Equal("Un code de secours de ton compte WalletFlow a servi", all[3].Subject);
+    }
+
+    // Compte les fois où ce morceau apparaît dans le texte.
+    private static int CountOccurrences(string text, string part)
+    {
+        return (text.Length - text.Replace(part, string.Empty).Length) / part.Length;
     }
 }

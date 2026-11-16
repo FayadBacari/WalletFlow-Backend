@@ -138,4 +138,42 @@ public static class ErrorMessages
 
     // GR Notif : les alertes de sécurité ne peuvent pas être désactivées.
     public const string SecurityAlertCannotBeDisabled = "Les alertes de sécurité ne peuvent pas être désactivées.";
+
+    // SS §5 : le message au support, comme la règle du dictionnaire de données (DD §10.1).
+    public const string SupportMessageBreaksRules =
+        "Le message contient de 1 à 5 000 caractères, sans caractère invisible autre que le retour à la ligne.";
+
+    public const string SupportRequestNotSaved = "La demande n'a pas pu être enregistrée. Réessaie.";
+
+    // SS §5 : la réponse de l'administrateur suit la règle du message (DD §10.2).
+    public const string SupportAnswerBreaksRules =
+        "La réponse contient de 1 à 5 000 caractères, sans caractère invisible autre que le retour à la ligne.";
+
+    public const string SupportRequestStatusUnknown = "L'état vaut « sent », « inProgress » ou « resolved ».";
+
+    public const string SupportRequestAlreadyResolved = "Cette demande est déjà résolue.";
+
+    public const string SupportRequestChangedMeanwhile = "Cette demande vient de changer. Réessaie.";
+
+    // SS §8 : l'administration est réservée à l'administrateur, qui doit avoir activé la double authentification.
+    public const string AdministratorOnly = "Cette page est réservée à l'administrateur.";
+
+    public const string AdministratorTwoFactorRequired = "Active la double authentification pour utiliser l'administration.";
+
+    public const string AccountNotLocked = "Ce compte n'est pas bloqué.";
+
+    public const string AccountTwoFactorNotEnabled = "La double authentification de ce compte n'est pas activée.";
+
+    // SS §2 : le lien ne marcherait pas, et c'est le signe d'un voleur de la boîte mail qui vient de réinitialiser le mot de passe.
+    public const string AccountPasswordChangedRecently =
+        "Le mot de passe de ce compte a changé il y a moins de 7 jours : le lien ne marcherait pas.";
+
+    // Le lien du support qui désactive la double authentification (GR Auth, SS §2).
+    public const string TwoFactorLinkNoLongerValid = "Ce lien n'est plus valable. Écris au support pour en recevoir un autre.";
+
+    public const string TwoFactorLinkCancelled =
+        "Ce lien est annulé après 5 mauvais mots de passe. Écris au support pour en recevoir un autre.";
+
+    public const string TwoFactorLinkAfterPasswordChange =
+        "Ce lien ne marche pas : ton mot de passe a changé il y a moins de 7 jours. Écris au support.";
 }

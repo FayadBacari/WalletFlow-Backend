@@ -14,6 +14,7 @@ public static class AccountSettingsServices
             tools.TwoFactorRepository,
             tools.PasswordHasher,
             tools.CreateCodeCheckingService(),
+            tools.EmailRequests,
             tools.Clock);
     }
 

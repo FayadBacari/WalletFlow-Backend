@@ -33,6 +33,7 @@ public class EmailTokenTableConfiguration : IEntityTypeConfiguration<EmailToken>
         RowVersionConfiguration.AddRowVersion(builder);
 
         builder.Property(nameof(EmailToken.NewEmail)).HasColumnName("nouvel_email");
+        builder.Property(nameof(EmailToken.PasswordTryCount)).HasColumnName("nb_essais_jeton");
         builder.Property(nameof(EmailToken.UserId)).HasColumnName("id_utilisateur");
 
         // Un jeton appartient à un utilisateur et disparaît avec lui (ON DELETE CASCADE).

@@ -1,5 +1,8 @@
+using System.Net;
+using WalletFlow.Application.Emails;
 using WalletFlow.Application.Security;
 using WalletFlow.Application.TwoFactorAuthentication;
+using WalletFlow.Domain.NotificationsAndSupport;
 using WalletFlow.Domain.UsersAndSecurity;
 
 namespace WalletFlow.Application.AccountSettings;
@@ -11,6 +14,7 @@ public class AccountIdentityCheckingService
     private readonly ITwoFactorAuthenticationRepository twoFactorRepository;
     private readonly IPasswordHasher passwordHasher;
     private readonly TwoFactorCodeCheckingService codeCheckingService;
+    private readonly IEmailRequestRepository emailRequests;
     private readonly TimeProvider clock;
 
     // Reçoit les outils dont la vérification a besoin.
@@ -18,11 +22,13 @@ public class AccountIdentityCheckingService
         ITwoFactorAuthenticationRepository twoFactorRepository,
         IPasswordHasher passwordHasher,
         TwoFactorCodeCheckingService codeCheckingService,
+        IEmailRequestRepository emailRequests,
         TimeProvider clock)
     {
         this.twoFactorRepository = twoFactorRepository;
         this.passwordHasher = passwordHasher;
         this.codeCheckingService = codeCheckingService;
+        this.emailRequests = emailRequests;
         this.clock = clock;
     }
 
@@ -56,9 +62,10 @@ public class AccountIdentityCheckingService
         };
     }
 
-    // Prépare l'usage du code de secours reconnu, s'il y en a un. Renvoie faux s'il n'existe plus ou s'il a déjà servi :
-    // rien n'est alors préparé. L'enregistrement refusera tout si une autre requête s'en sert au même instant.
-    public async Task<bool> TryPrepareBackupCodeUseAsync(Guid? backupCodeId)
+    // Prépare l'usage du code de secours reconnu, s'il y en a un, avec l'alerte qui l'annonce (GR Notif). Renvoie faux s'il
+    // n'existe plus ou s'il a déjà servi : rien n'est alors préparé. L'enregistrement refusera tout si une autre requête
+    // s'en sert au même instant.
+    public async Task<bool> TryPrepareBackupCodeUseAsync(Guid? backupCodeId, IPAddress? ipAddress)
     {
         if (backupCodeId == null)
         {
@@ -71,7 +78,9 @@ public class AccountIdentityCheckingService
             return false;
         }
 
-        backupCode.MarkAsUsed(clock.GetUtcNow().UtcDateTime);
+        var now = clock.GetUtcNow().UtcDateTime;
+        backupCode.MarkAsUsed(now);
+        emailRequests.PrepareRequest(EmailRequest.ForBackupCodeUse(backupCode.UserId, ipAddress, now));
         return true;
     }
 }

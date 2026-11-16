@@ -17,6 +17,7 @@ public class ResourceOwnershipRepository : IResourceOwnershipRepository
     }
 
     // Lit l'utilisateur de la ressource. Un compte bancaire et une opération appartiennent à l'utilisateur de leur connexion.
+    // La demande de support d'un visiteur n'a pas d'utilisateur : personne d'autre ne la possède.
     public async Task<Guid?> FindOwnerAsync(OwnedResource resource, Guid resourceId)
     {
         switch (resource)
@@ -30,6 +31,11 @@ public class ResourceOwnershipRepository : IResourceOwnershipRepository
                 return await databaseContext.SavingsSuggestions.AsNoTracking()
                     .Where(suggestion => suggestion.Id == resourceId)
                     .Select(suggestion => (Guid?)suggestion.UserId)
+                    .SingleOrDefaultAsync();
+            case OwnedResource.SupportRequest:
+                return await databaseContext.SupportRequests.AsNoTracking()
+                    .Where(request => request.Id == resourceId)
+                    .Select(request => request.UserId)
                     .SingleOrDefaultAsync();
             case OwnedResource.Bag:
                 return await databaseContext.Bags.AsNoTracking()

@@ -108,6 +108,7 @@ public class AccountRecoveryRealChainTests
                 CreateEmailRequestRepository(databaseContext),
                 new UserAccountRepository(databaseContext),
                 new AlertRepository(databaseContext),
+                new SupportRequestRepository(databaseContext),
                 new EntityFrameworkDatabaseUnitOfWork(databaseContext),
                 CreateSecurityJournal(databaseContext, clock),
                 tokenGenerator,
@@ -116,6 +117,7 @@ public class AccountRecoveryRealChainTests
                 new FrenchAccountChangeEmails(),
                 new FrenchSecurityAlertEmails(),
                 new FrenchAlertEmails(),
+                new FrenchSupportEmails(),
                 new PublicWebsiteSettings("https://walletflow.test"),
                 clock);
 

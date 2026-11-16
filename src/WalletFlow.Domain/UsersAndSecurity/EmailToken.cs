@@ -6,6 +6,7 @@ namespace WalletFlow.Domain.UsersAndSecurity;
 public class EmailToken
 {
     private DateTime? usedAt = null;
+    private short passwordTryCount = 0;
 
     // id_jeton
     public Guid Id { get; init; } = Guid.NewGuid();
@@ -29,6 +30,14 @@ public class EmailToken
     // nouvel_email : seulement pour un changement d'adresse e-mail.
     public string? NewEmail { get; init; }
 
+    // nb_essais_jeton : les essais du mot de passe sur le lien qui désactive la double authentification, 5 au plus.
+    // Les autres liens ne les comptent pas (DD §4.2).
+    public short PasswordTryCount
+    {
+        get => passwordTryCount;
+        init => passwordTryCount = value;
+    }
+
     // id_utilisateur
     public Guid UserId { get; init; }
 
@@ -37,6 +46,29 @@ public class EmailToken
     public bool CanBeUsedAt(DateTime now)
     {
         return usedAt == null && ExpiresAt > now;
+    }
+
+    // Renvoie vrai s'il reste au lien au moins un essai du mot de passe. Un lien qui ne compte pas ses essais en a toujours.
+    public bool HasPasswordTriesLeft()
+    {
+        return passwordTryCount < TwoFactorAuthenticationRules.MaximumSupportLinkPasswordTries;
+    }
+
+    // Compte un essai du mot de passe sur ce lien, avant même de le vérifier : des essais simultanés ne peuvent donc pas en
+    // vérifier plus de 5 (DD §4.2). Seul le lien qui désactive la double authentification compte ses essais.
+    public void CountPasswordTry()
+    {
+        if (Type != EmailTokenType.TwoFactorDeactivation)
+        {
+            throw new InvalidOperationException("Seul le lien qui désactive la double authentification compte ses essais.");
+        }
+
+        if (!HasPasswordTriesLeft())
+        {
+            throw new InvalidOperationException("Ce lien a déjà fait tous ses essais.");
+        }
+
+        passwordTryCount = (short)(passwordTryCount + 1);
     }
 
     // Note que le lien vient de servir. Un lien ne sert qu'une seule fois (SS §2).

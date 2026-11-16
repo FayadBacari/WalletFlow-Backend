@@ -9,12 +9,25 @@ public static class TwoFactorAuthenticationRules
     public const int BackupCodeLength = 10;
     public const int BackupCodeDashPosition = 5;
 
+    // Le lien du support qui désactive la double authentification (GR Auth, SS §2) : 5 essais du mot de passe au plus,
+    // et seulement si le mot de passe n'a pas changé depuis au moins 7 jours.
+    public const int MaximumSupportLinkPasswordTries = 5;
+    public static readonly TimeSpan MinimumPasswordAgeForSupportLink = TimeSpan.FromDays(7);
+
     // 32 caractères possibles sur 10 positions, soit 50 bits aléatoires par code.
     // Ni I, ni L, ni O, ni U : ils se confondent à la lecture avec d'autres caractères.
     public const string BackupCodeAlphabet = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 
     public static readonly TimeSpan WaitingLoginLifetime = TimeSpan.FromMinutes(5);
     public static readonly TimeSpan WaitingSecretLifetime = TimeSpan.FromMinutes(10);
+
+    // Renvoie vrai si le mot de passe n'a pas changé depuis au moins 7 jours : le lien du support peut alors servir.
+    // Sans changement connu, le mot de passe est celui de l'inscription, ou d'un changement de plus d'un an, effacé du journal.
+    // Un voleur de la boîte mail qui vient de réinitialiser le mot de passe ne peut donc pas s'en servir (SS §2).
+    public static bool IsPasswordOldEnoughForSupportLink(DateTime? lastPasswordChange, DateTime now)
+    {
+        return lastPasswordChange == null || lastPasswordChange <= now - MinimumPasswordAgeForSupportLink;
+    }
 
     // Écrit un code comme le serveur le compare : les applications l'affichent avec un espace,
     // les codes de secours sont remis avec un tiret, et la casse ne compte pas.

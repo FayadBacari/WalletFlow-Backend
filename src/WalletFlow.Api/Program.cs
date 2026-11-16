@@ -9,6 +9,7 @@ using WalletFlow.Api.Filters;
 using WalletFlow.Api.Middlewares;
 using WalletFlow.Application.AccountRecovery;
 using WalletFlow.Application.AccountSettings;
+using WalletFlow.Application.Administration;
 using WalletFlow.Application.Bags;
 using WalletFlow.Application.BankConnections;
 using WalletFlow.Application.Categories;
@@ -19,6 +20,7 @@ using WalletFlow.Application.Notifications;
 using WalletFlow.Application.Persistence;
 using WalletFlow.Application.Security;
 using WalletFlow.Application.Suggestions;
+using WalletFlow.Application.Support;
 using WalletFlow.Application.Transactions;
 using WalletFlow.Application.TwoFactorAuthentication;
 using WalletFlow.Application.UserAccounts;
@@ -187,15 +189,28 @@ builder.Services.AddScoped<BagGoalAlerts>();
 builder.Services.AddScoped<BankAuthorizationAlertService>();
 builder.Services.AddScoped<AlertCleanupService>();
 builder.Services.AddScoped<AlertSettingsService>();
+builder.Services.AddScoped<SupportRequestSendingService>();
+builder.Services.AddScoped<VisitorSupportRequestService>();
+builder.Services.AddScoped<SupportRequestReadingService>();
+builder.Services.AddScoped<SupportRequestCleanupService>();
+builder.Services.AddScoped<AdministratorAccessService>();
+builder.Services.AddScoped<AdministratorOnlyFilter>();
+builder.Services.AddScoped<AdminAccountSearchService>();
+builder.Services.AddScoped<AdminAccountUnlockService>();
+builder.Services.AddScoped<AdminTwoFactorLinkService>();
+builder.Services.AddScoped<AdminSupportService>();
+builder.Services.AddScoped<AdminStatisticsService>();
+builder.Services.AddScoped<TwoFactorSupportLinkService>();
 
-// Tâches de fond : effacent chaque jour les comptes non confirmés dont le lien a expiré (GR Auth), les sessions expirées
-// et les événements du journal de sécurité de plus d'un an (SS §11),
+// Tâches de fond : effacent chaque jour les comptes non confirmés dont le lien a expiré (GR Auth), les sessions expirées,
+// les événements du journal de sécurité de plus d'un an (SS §11) et les demandes de support de plus d'un an (GR Admin),
 // envoient les e-mails de la file (SS §9), mettent à jour les soldes jusqu'à 4 fois par jour (GR Comptes),
 // et, toutes les heures, calculent les suggestions du mois (GR Sacs), préviennent 7 jours avant la fin d'une autorisation
 // bancaire (GR Comptes) et effacent les vieilles alertes (SS §7).
 builder.Services.AddHostedService<UnconfirmedAccountsCleanupBackgroundService>();
 builder.Services.AddHostedService<ExpiredUserSessionsCleanupBackgroundService>();
 builder.Services.AddHostedService<SecurityJournalCleanupBackgroundService>();
+builder.Services.AddHostedService<SupportRequestsCleanupBackgroundService>();
 builder.Services.AddHostedService<EmailRequestsBackgroundService>();
 builder.Services.AddHostedService<BankBalancesBackgroundService>();
 builder.Services.AddHostedService<SuggestionsBackgroundService>();

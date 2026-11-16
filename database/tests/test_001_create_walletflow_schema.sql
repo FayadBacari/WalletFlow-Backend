@@ -817,7 +817,7 @@ END;
 $$;
 
 
--- 14. SS §9 et DD §9.4 : la file d'e-mails. Une récupération ne vise aucun compte, tout autre e-mail en vise un.
+-- 14. SS §9 et DD §9.4 : la file d'e-mails. Une récupération ne vise aucun compte, un e-mail de sécurité en vise un.
 --     Seuls trois e-mails gardent une adresse, en minuscules. Un e-mail d'alerte, et lui seul, est lié à son alerte,
 --     une seule fois, et disparaît avec elle. Une alerte disparaît avec ce qu'elle vise (SS §7).
 DO $$
@@ -845,7 +845,7 @@ BEGIN
         '23514', 'une demande de récupération ne vise aucun compte');
     PERFORM pg_temp.verifier_que_la_base_refuse_cette_instruction(
         $sql$INSERT INTO demande_email (type_demande_email) VALUES ('nouvel_appareil')$sql$,
-        '23514', 'tout autre e-mail que la récupération vise un compte');
+        '23514', 'un e-mail de sécurité vise un compte');
     PERFORM pg_temp.verifier_que_la_base_refuse_cette_instruction(
         $sql$INSERT INTO demande_email (type_demande_email) VALUES ('recuperation_mdp')$sql$,
         '23514', 'une demande de récupération garde l''adresse saisie');
@@ -899,6 +899,162 @@ BEGIN
     ASSERT (SELECT count(*) FROM demande_email WHERE id_utilisateur = utilisateur_id) = 5,
         'ÉCHEC : les autres e-mails de l''utilisateur devaient rester';
     RAISE NOTICE 'OK : une alerte disparaît avec ce qu''elle vise, et son e-mail avec elle';
+END;
+$$;
+
+-- 15. DD §4.2 et GR Auth : le lien qui désactive la double authentification compte les essais du mot de passe,
+--     de 0 à 5. Aucun autre lien ne les compte.
+DO $$
+DECLARE
+    utilisateur_id uuid;
+    lien_id uuid;
+BEGIN
+    SELECT identifiant INTO utilisateur_id FROM donnees_communes_aux_tests_de_contraintes WHERE nom = 'utilisateur';
+
+    INSERT INTO jeton (type_jeton, empreinte_jeton, date_expiration_jeton, id_utilisateur)
+    VALUES ('desactivation_double_auth', repeat('e', 64), now() + interval '24 hours', utilisateur_id)
+    RETURNING id_jeton INTO lien_id;
+    ASSERT (SELECT nb_essais_jeton FROM jeton WHERE id_jeton = lien_id) = 0, 'ÉCHEC : un nouveau lien a déjà des essais';
+    UPDATE jeton SET nb_essais_jeton = 5 WHERE id_jeton = lien_id;
+    RAISE NOTICE 'OK : le lien qui désactive la double authentification compte jusqu''à 5 essais';
+
+    PERFORM pg_temp.verifier_que_la_base_refuse_cette_instruction(
+        format('UPDATE jeton SET nb_essais_jeton = 6 WHERE id_jeton = %L', lien_id),
+        '23514', 'un lien a au plus 5 essais du mot de passe');
+    PERFORM pg_temp.verifier_que_la_base_refuse_cette_instruction(
+        format('UPDATE jeton SET nb_essais_jeton = -1 WHERE id_jeton = %L', lien_id),
+        '23514', 'un lien n''a jamais un nombre d''essais négatif');
+    PERFORM pg_temp.verifier_que_la_base_refuse_cette_instruction(
+        format($sql$INSERT INTO jeton (type_jeton, empreinte_jeton, date_expiration_jeton, nb_essais_jeton, id_utilisateur)
+                    VALUES ('recuperation_mdp', repeat('f', 64), now(), 1, %L)$sql$, utilisateur_id),
+        '23514', 'seul le lien qui désactive la double authentification compte ses essais');
+END;
+$$;
+
+
+-- 16. DD §4.5, SS §8 et §11 : seule une action de l'administrateur garde le compte qu'elle vise. Quand l'application
+--     efface ce compte, l'action reste, avec l'administrateur et son adresse IP, mais sans le compte visé.
+DO $$
+DECLARE
+    administrateur_id uuid;
+    compte_vise_id uuid;
+BEGIN
+    INSERT INTO utilisateur (email_utilisateur, mot_de_passe_hash, email_confirme)
+    VALUES ('test-administrateur@exemple.test', 'empreinte-de-test', TRUE)
+    RETURNING id_utilisateur INTO administrateur_id;
+    INSERT INTO utilisateur (email_utilisateur, mot_de_passe_hash, email_confirme)
+    VALUES ('test-compte-vise@exemple.test', 'empreinte-de-test', TRUE)
+    RETURNING id_utilisateur INTO compte_vise_id;
+
+    INSERT INTO evenement_securite (type_evenement, resultat_evenement, adresse_ip_evenement, id_utilisateur, id_utilisateur_vise)
+    VALUES ('action_admin', 'succes', '192.0.2.30', administrateur_id, compte_vise_id);
+    RAISE NOTICE 'OK : une action de l''administrateur garde le compte qu''elle vise';
+
+    PERFORM pg_temp.verifier_que_la_base_refuse_cette_instruction(
+        format($sql$INSERT INTO evenement_securite (type_evenement, resultat_evenement, id_utilisateur, id_utilisateur_vise)
+                    VALUES ('connexion', 'succes', %L, %L)$sql$, administrateur_id, compte_vise_id),
+        '23514', 'seule une action de l''administrateur vise un compte');
+
+    DELETE FROM utilisateur WHERE id_utilisateur = compte_vise_id;
+
+    ASSERT (SELECT count(*) FROM evenement_securite
+            WHERE type_evenement = 'action_admin' AND id_utilisateur = administrateur_id
+              AND adresse_ip_evenement = '192.0.2.30' AND id_utilisateur_vise IS NULL) = 1,
+        'ÉCHEC : l''action de l''administrateur devait rester, sans le compte visé';
+    RAISE NOTICE 'OK : effacer le compte visé garde l''action de l''administrateur, sans ce compte';
+END;
+$$;
+
+
+-- 17. DD §9.4 et §10 : une demande et une réponse prennent leur date toutes seules. L'e-mail d'une réponse ne vise
+--     aucun compte et ne garde aucune adresse : il est lié à sa réponse, une seule fois, et disparaît avec sa demande.
+DO $$
+DECLARE
+    utilisateur_id uuid;
+    demande_id uuid;
+    reponse_id uuid;
+BEGIN
+    SELECT identifiant INTO utilisateur_id FROM donnees_communes_aux_tests_de_contraintes WHERE nom = 'utilisateur';
+
+    INSERT INTO demande_support (message_demande, id_utilisateur) VALUES ('Où est mon sac ?', utilisateur_id)
+    RETURNING id_demande INTO demande_id;
+    INSERT INTO reponse_support (contenu_reponse, id_demande) VALUES ('Dans la liste des sacs.', demande_id)
+    RETURNING id_reponse INTO reponse_id;
+    ASSERT (SELECT date_demande FROM demande_support WHERE id_demande = demande_id) = now()
+       AND (SELECT date_reponse FROM reponse_support WHERE id_reponse = reponse_id) = now(),
+        'ÉCHEC : la demande et la réponse devaient prendre la date de leur enregistrement';
+    RAISE NOTICE 'OK : une demande et une réponse prennent leur date toutes seules';
+
+    INSERT INTO demande_email (type_demande_email, id_reponse) VALUES ('reponse_support', reponse_id);
+    INSERT INTO demande_email (type_demande_email, id_utilisateur)
+    VALUES ('desactivation_double_auth', utilisateur_id), ('utilisation_code_secours', utilisateur_id),
+           ('lien_double_auth', utilisateur_id);
+    RAISE NOTICE 'OK : les quatre nouveaux e-mails entrent dans la file avec ce qu''ils demandent';
+
+    PERFORM pg_temp.verifier_que_la_base_refuse_cette_instruction(
+        format($sql$INSERT INTO demande_email (type_demande_email, id_reponse, id_utilisateur)
+                    VALUES ('reponse_support', %L, %L)$sql$, reponse_id, utilisateur_id),
+        '23514', 'l''e-mail d''une réponse ne vise aucun compte');
+    PERFORM pg_temp.verifier_que_la_base_refuse_cette_instruction(
+        $sql$INSERT INTO demande_email (type_demande_email) VALUES ('reponse_support')$sql$,
+        '23514', 'l''e-mail d''une réponse est lié à sa réponse');
+    PERFORM pg_temp.verifier_que_la_base_refuse_cette_instruction(
+        format($sql$INSERT INTO demande_email (type_demande_email, adresse_email_demande, id_reponse)
+                    VALUES ('reponse_support', 'visiteur@exemple.test', %L)$sql$, reponse_id),
+        '23514', 'l''e-mail d''une réponse ne garde aucune adresse : il la lit dans sa demande');
+    PERFORM pg_temp.verifier_que_la_base_refuse_cette_instruction(
+        format($sql$INSERT INTO demande_email (type_demande_email, id_utilisateur, id_reponse)
+                    VALUES ('lien_double_auth', %L, %L)$sql$, utilisateur_id, reponse_id),
+        '23514', 'seul l''e-mail d''une réponse est lié à une réponse');
+    PERFORM pg_temp.verifier_que_la_base_refuse_cette_instruction(
+        format($sql$INSERT INTO demande_email (type_demande_email, id_reponse) VALUES ('reponse_support', %L)$sql$, reponse_id),
+        '23505', 'une réponse n''a qu''un seul e-mail');
+
+    DELETE FROM demande_support WHERE id_demande = demande_id;
+
+    ASSERT NOT EXISTS (SELECT 1 FROM reponse_support WHERE id_reponse = reponse_id)
+       AND NOT EXISTS (SELECT 1 FROM demande_email WHERE id_reponse = reponse_id),
+        'ÉCHEC : la réponse et son e-mail devaient disparaître avec la demande';
+    RAISE NOTICE 'OK : une demande effacée emporte ses réponses et leurs e-mails';
+END;
+$$;
+
+
+-- 18. GR Notif : la désactivation de la double authentification et l'utilisation d'un code de secours sont deux
+--     alertes de sécurité de plus, qu'on ne peut pas désactiver.
+DO $$
+DECLARE
+    utilisateur_id uuid;
+BEGIN
+    SELECT identifiant INTO utilisateur_id FROM donnees_communes_aux_tests_de_contraintes WHERE nom = 'utilisateur';
+
+    ASSERT (SELECT count(*) FROM type_alerte) = 10
+       AND (SELECT count(*) FROM type_alerte WHERE NOT est_desactivable) = 6,
+        'ÉCHEC : il devait y avoir 10 types d''alerte, dont 6 alertes de sécurité';
+    RAISE NOTICE 'OK : les 10 types d''alerte sont là, dont 6 alertes de sécurité';
+
+    PERFORM pg_temp.verifier_que_la_base_refuse_cette_instruction(
+        format($sql$INSERT INTO parametrer (id_utilisateur, code_type_alerte, alerte_activee)
+                    VALUES (%L, 'desactivation_double_auth', FALSE)$sql$, utilisateur_id),
+        'P0001', 'l''alerte de désactivation de la double authentification ne peut pas être désactivée');
+    PERFORM pg_temp.verifier_que_la_base_refuse_cette_instruction(
+        format($sql$INSERT INTO parametrer (id_utilisateur, code_type_alerte, alerte_activee)
+                    VALUES (%L, 'utilisation_code_secours', FALSE)$sql$, utilisateur_id),
+        'P0001', 'l''alerte d''utilisation d''un code de secours ne peut pas être désactivée');
+END;
+$$;
+
+
+-- 19. SS §8 et MPD §3 : le rôle ne change que par fn_changer_role, que l'application ne peut pas lancer.
+--     La fonction n'a que les droits de celui qui la lance : elle ne donne aucun droit de plus.
+DO $$
+BEGIN
+    PERFORM pg_temp.verifier_que_la_base_refuse_cette_instruction(
+        $sql$SELECT fn_changer_role('test-contraintes@exemple.test', 'administrateur')$sql$,
+        '42501', 'l''application ne peut pas lancer fn_changer_role');
+    ASSERT NOT (SELECT prosecdef FROM pg_proc WHERE proname = 'fn_changer_role'),
+        'ÉCHEC : fn_changer_role ne doit pas avoir les droits de son propriétaire';
+    RAISE NOTICE 'OK : fn_changer_role n''a que les droits de celui qui la lance';
 END;
 $$;
 

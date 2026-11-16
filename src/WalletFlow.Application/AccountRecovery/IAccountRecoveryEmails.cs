@@ -14,4 +14,8 @@ public interface IAccountRecoveryEmails
 
     // Crée l'e-mail qui prévient du blocage et de sa durée, avec le lien de déblocage (GR Auth, SS §2).
     EmailMessage CreateUnlockEmail(string recipient, string unlockLink, TimeSpan lockoutDuration);
+
+    // Crée l'e-mail du lien que le support fait envoyer pour désactiver la double authentification (GR Auth, SS §2). Il finit
+    // par l'adresse de la page de support.
+    EmailMessage CreateTwoFactorDeactivationLinkEmail(string recipient, string deactivationLink, string supportPageAddress);
 }

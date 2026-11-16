@@ -141,7 +141,25 @@ public class TwoFactorServicesWithFakeTools
             CreateSavingService(),
             CreateSecurityJournal(),
             PasswordHasher,
-            CreateCodeCheckingService());
+            CreateCodeCheckingService(),
+            EmailRequests,
+            Clock);
+    }
+
+    // Crée le service du lien du support qui désactive la double authentification.
+    public TwoFactorSupportLinkService CreateSupportLinkService()
+    {
+        return new TwoFactorSupportLinkService(
+            AccountRepository,
+            TwoFactorRepository,
+            SessionRepository,
+            SecurityEventRepository,
+            EmailRequests,
+            CreateSavingService(),
+            CreateSecurityJournal(),
+            PasswordHasher,
+            TokenGenerator,
+            Clock);
     }
 
     // Crée le service qui change un mot de passe oublié.

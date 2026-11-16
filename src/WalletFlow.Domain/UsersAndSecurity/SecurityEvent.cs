@@ -25,4 +25,8 @@ public class SecurityEvent
     // id_utilisateur : vide pour une connexion échouée avec une adresse inconnue,
     // ou quand le compte de l'utilisateur a été supprimé.
     public Guid? UserId { get; init; }
+
+    // id_utilisateur_vise : seulement pour une action de l'administrateur, le compte sur lequel il agit (SS §8, §11).
+    // Vide quand ce compte est effacé.
+    public Guid? TargetUserId { get; init; }
 }

@@ -478,20 +478,20 @@ public class UserSessionEndpointTests
 
     // Ajouter une route publique doit être un choix conscient : ce test oblige à la déclarer ici.
     [Fact]
-    public void OnlyTheEightExpectedRoutesCanBeCalledWithoutSession()
+    public void OnlyTheTenExpectedRoutesCanBeCalledWithoutSession()
     {
         using var api = new ApiFactoryWithFakes();
-        var publicRoutes = new List<string> { "api/account/confirm-email", "api/account/confirm-email-change", "api/account/forgot-password", "api/account/login", "api/account/login/two-factor", "api/account/register", "api/account/reset-password", "api/account/unlock" };
+        var publicRoutes = new List<string> { "api/account/confirm-email", "api/account/confirm-email-change", "api/account/disable-two-factor", "api/account/forgot-password", "api/account/login", "api/account/login/two-factor", "api/account/register", "api/account/reset-password", "api/account/unlock", "api/support-requests/visitor" };
 
         Assert.Equal(publicRoutes, ListRoutesWithAttribute<Microsoft.AspNetCore.Authorization.IAllowAnonymous>(api));
     }
 
     // SS §6 : seules les routes appelées sans session n'ont pas besoin du jeton anti-CSRF.
     [Fact]
-    public void OnlyTheEightExpectedRoutesIgnoreTheCsrfToken()
+    public void OnlyTheTenExpectedRoutesIgnoreTheCsrfToken()
     {
         using var api = new ApiFactoryWithFakes();
-        var publicRoutes = new List<string> { "api/account/confirm-email", "api/account/confirm-email-change", "api/account/forgot-password", "api/account/login", "api/account/login/two-factor", "api/account/register", "api/account/reset-password", "api/account/unlock" };
+        var publicRoutes = new List<string> { "api/account/confirm-email", "api/account/confirm-email-change", "api/account/disable-two-factor", "api/account/forgot-password", "api/account/login", "api/account/login/two-factor", "api/account/register", "api/account/reset-password", "api/account/unlock", "api/support-requests/visitor" };
 
         Assert.Equal(publicRoutes, ListRoutesWithAttribute<IgnoreAntiforgeryTokenAttribute>(api));
     }

@@ -7,4 +7,5 @@ public static class EmailTokenValidityDurations
     public static readonly TimeSpan PasswordRecoveryLink = TimeSpan.FromMinutes(30);
     public static readonly TimeSpan AccountUnlockLink = TimeSpan.FromHours(1);
     public static readonly TimeSpan EmailChangeLink = TimeSpan.FromHours(24);
+    public static readonly TimeSpan TwoFactorDeactivationLink = TimeSpan.FromHours(24);
 }

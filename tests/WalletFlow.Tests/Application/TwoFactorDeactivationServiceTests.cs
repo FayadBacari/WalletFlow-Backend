@@ -1,4 +1,5 @@
 using WalletFlow.Application.TwoFactorAuthentication;
+using WalletFlow.Domain.NotificationsAndSupport;
 using WalletFlow.Domain.UsersAndSecurity;
 using WalletFlow.Tests.Fakes;
 using static WalletFlow.Tests.Application.TwoFactorServicesWithFakeTools;
@@ -49,6 +50,30 @@ public class TwoFactorDeactivationServiceTests
         Assert.Equal(SecurityEventResult.Success, securityEvent.Result);
         Assert.Equal(IpAddress, securityEvent.IpAddress);
         Assert.Equal(activatedAccount.UserAccount.Id, securityEvent.UserId);
+
+        // GR Notif : l'alerte de sécurité part à l'adresse du compte, avec l'heure de la désactivation.
+        var alert = Assert.Single(services.EmailRequests.SavedRequests);
+        Assert.Equal(EmailRequestType.TwoFactorDeactivation, alert.Type);
+        Assert.Equal(activatedAccount.UserAccount.Id, alert.UserId);
+        Assert.Equal(IpAddress, alert.IpAddress);
+        Assert.Null(alert.EmailAddress);
+        Assert.Equal(services.Clock.GetUtcNow().UtcDateTime, alert.RequestedAt);
+    }
+
+    // L'alerte n'entre dans la file qu'avec la désactivation : si elle ne peut pas y entrer, rien n'est désactivé.
+    [Fact]
+    public async Task DeactivationIsNotSavedWhenItsAlertCannotBeQueued()
+    {
+        var activatedAccount = services.AddActivatedAccount();
+        services.EmailRequests.IsDown = true;
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => DeactivateAsync(
+            activatedAccount.UserAccount,
+            AccountPassword,
+            services.CalculateCurrentCode(activatedAccount.Secret)));
+
+        AssertAccountStillActivated(activatedAccount);
+        Assert.Empty(services.EmailRequests.SavedRequests);
     }
 
     // Le seul moyen de changer de téléphone après en avoir perdu un.
@@ -61,6 +86,10 @@ public class TwoFactorDeactivationServiceTests
 
         Assert.IsType<TwoFactorDeactivationResult.TwoFactorDeactivated>(result);
         Assert.False(activatedAccount.UserAccount.IsTwoFactorEnabled);
+
+        // Les codes de secours sont effacés : seule l'alerte de la désactivation part, qui dit déjà tout.
+        var alert = Assert.Single(services.EmailRequests.SavedRequests);
+        Assert.Equal(EmailRequestType.TwoFactorDeactivation, alert.Type);
     }
 
     // Le même message pour les deux champs : une session volée ne sert pas à tester des mots de passe un par un.
@@ -82,6 +111,7 @@ public class TwoFactorDeactivationServiceTests
         Assert.IsType<TwoFactorDeactivationResult.WrongPasswordOrCode>(wrongCodeResult);
         AssertAccountStillActivated(activatedAccount);
         Assert.Equal(2, services.CountSecurityEvents(SecurityEventType.TwoFactorDeactivation, SecurityEventResult.Failure));
+        Assert.Empty(services.EmailRequests.SavedRequests);
     }
 
     // Le bon code envoyé avec un mauvais mot de passe reste utilisable : le mot de passe est vérifié d'abord.

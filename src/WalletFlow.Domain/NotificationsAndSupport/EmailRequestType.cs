@@ -21,6 +21,18 @@ public enum EmailRequestType
     // L'alerte d'un changement de mot de passe (GR Notif).
     PasswordChange,
 
+    // L'alerte de la désactivation de la double authentification (GR Notif).
+    TwoFactorDeactivation,
+
+    // L'alerte de l'utilisation d'un code de secours (GR Notif).
+    BackupCodeUse,
+
+    // Le lien que l'administrateur fait envoyer pour désactiver la double authentification (GR Admin, GR Auth).
+    TwoFactorDeactivationLink,
+
+    // Une réponse du support, avec son texte, liée à la réponse qu'elle envoie (GR Admin).
+    SupportResponse,
+
     // L'e-mail d'une des quatre alertes qu'on peut désactiver, lié à l'alerte qu'il annonce (DD §9.3).
     Alert
 }

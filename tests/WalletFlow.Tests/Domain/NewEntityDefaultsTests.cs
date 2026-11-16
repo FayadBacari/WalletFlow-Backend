@@ -83,12 +83,15 @@ public class NewEntityDefaultsTests
         Assert.True(alertPreference.IsEnabled);
     }
 
-    // DD §10.1 : une nouvelle demande de support est envoyée.
+    // DD §10.1 : une nouvelle demande de support est envoyée, qu'elle vienne d'un utilisateur ou d'un visiteur.
     [Fact]
     public void NewSupportRequestStartsInTheSentStatus()
     {
-        var supportRequest = new SupportRequest();
+        var now = new DateTime(2026, 11, 16, 9, 0, 0, DateTimeKind.Utc);
+        var fromUser = SupportRequest.FromUser(Guid.NewGuid(), "Bonjour", now);
+        var fromVisitor = SupportRequest.FromVisitor("visiteur@exemple.test", "Bonjour", now);
 
-        Assert.Equal(SupportRequestStatus.Sent, supportRequest.Status);
+        Assert.Equal(SupportRequestStatus.Sent, fromUser.Status);
+        Assert.Equal(SupportRequestStatus.Sent, fromVisitor.Status);
     }
 }

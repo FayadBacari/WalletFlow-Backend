@@ -3,7 +3,7 @@ using WalletFlow.Domain.NotificationsAndSupport;
 
 namespace WalletFlow.Tests.Fakes;
 
-// Remplace la vraie base dans les tests : garde les 8 types d'alerte, les choix des utilisateurs et les alertes envoyées
+// Remplace la vraie base dans les tests : garde les 10 types d'alerte, les choix des utilisateurs et les alertes envoyées
 // en mémoire. Ce qui est préparé n'est gardé qu'avec les autres changements (voir FakeDatabaseUnitOfWork). Comme les index
 // uniques de la vraie base, une alerte gardée deux fois fait échouer l'enregistrement : un cas d'utilisation qui la
 // préparerait deux fois est en faute, et le test le voit. Les noms visés par un e-mail se lisent dans les faux dépôts
@@ -20,7 +20,7 @@ public class FakeAlertRepository : IAlertRepository, ITransactionalFakeRepositor
     private readonly ReadCopies<AlertPreference> readPreferences = new ReadCopies<AlertPreference>();
     private Action? concurrentChanges = null;
 
-    // Les 8 types d'alerte, comme le script SQL les remplit.
+    // Les 10 types d'alerte, comme le script SQL les remplit.
     public List<AlertType> SavedTypes { get; } = new List<AlertType>
     {
         new AlertType { Kind = AlertKind.BudgetReached, Label = "Budget d'une catégorie atteint", CanBeDisabled = true },
@@ -31,6 +31,8 @@ public class FakeAlertRepository : IAlertRepository, ITransactionalFakeRepositor
         new AlertType { Kind = AlertKind.AccountLocked, Label = "Compte bloqué", CanBeDisabled = false },
         new AlertType { Kind = AlertKind.PasswordChange, Label = "Changement de mot de passe", CanBeDisabled = false },
         new AlertType { Kind = AlertKind.EmailChange, Label = "Changement d'adresse e-mail", CanBeDisabled = false },
+        new AlertType { Kind = AlertKind.TwoFactorDeactivation, Label = "Désactivation de la double authentification", CanBeDisabled = false },
+        new AlertType { Kind = AlertKind.BackupCodeUse, Label = "Utilisation d'un code de secours", CanBeDisabled = false },
     };
 
     // Ce que la fausse base contient.
@@ -59,7 +61,7 @@ public class FakeAlertRepository : IAlertRepository, ITransactionalFakeRepositor
     // Simule d'autres requêtes qui écrivent les mêmes lignes juste avant chaque enregistrement : un conflit chacune.
     public int Conflicts { get; set; } = 0;
 
-    // Donne les 8 types d'alerte.
+    // Donne les 10 types d'alerte.
     public Task<List<AlertType>> FindTypesAsync()
     {
         ThrowIfDown();

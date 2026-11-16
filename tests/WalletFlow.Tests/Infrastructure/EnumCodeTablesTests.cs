@@ -40,6 +40,7 @@ public class EnumCodeTablesTests
     [InlineData(EmailTokenType.PasswordRecovery, "recuperation_mdp")]
     [InlineData(EmailTokenType.AccountUnlock, "deblocage")]
     [InlineData(EmailTokenType.EmailChange, "changement_email")]
+    [InlineData(EmailTokenType.TwoFactorDeactivation, "desactivation_double_auth")]
     public void EmailTokenTypeIsConvertedIntoItsDatabaseCodeAndBack(
         EmailTokenType emailTokenType, string databaseCode)
     {
@@ -134,6 +135,8 @@ public class EnumCodeTablesTests
     [InlineData(AlertKind.AccountLocked, "compte_bloque")]
     [InlineData(AlertKind.PasswordChange, "changement_mdp")]
     [InlineData(AlertKind.EmailChange, "changement_email")]
+    [InlineData(AlertKind.TwoFactorDeactivation, "desactivation_double_auth")]
+    [InlineData(AlertKind.BackupCodeUse, "utilisation_code_secours")]
     public void AlertKindIsConvertedIntoItsDatabaseCodeAndBack(
         AlertKind alertKind, string databaseCode)
     {
@@ -141,6 +144,34 @@ public class EnumCodeTablesTests
             AlertKindDatabaseCodes.Table.ToCode(alertKind));
         Assert.Equal(alertKind,
             AlertKindDatabaseCodes.Table.ToValue(databaseCode));
+    }
+
+    [Theory]
+    [InlineData(EmailRequestType.PasswordRecovery, "recuperation_mdp")]
+    [InlineData(EmailRequestType.AccountUnlock, "deblocage")]
+    [InlineData(EmailRequestType.EmailChange, "changement_email")]
+    [InlineData(EmailRequestType.EmailChangedNotice, "avis_ancienne_adresse")]
+    [InlineData(EmailRequestType.NewDevice, "nouvel_appareil")]
+    [InlineData(EmailRequestType.PasswordChange, "changement_mdp")]
+    [InlineData(EmailRequestType.TwoFactorDeactivation, "desactivation_double_auth")]
+    [InlineData(EmailRequestType.BackupCodeUse, "utilisation_code_secours")]
+    [InlineData(EmailRequestType.TwoFactorDeactivationLink, "lien_double_auth")]
+    [InlineData(EmailRequestType.SupportResponse, "reponse_support")]
+    [InlineData(EmailRequestType.Alert, "alerte")]
+    public void EmailRequestTypeIsConvertedIntoItsDatabaseCodeAndBack(
+        EmailRequestType emailRequestType, string databaseCode)
+    {
+        Assert.Equal(databaseCode,
+            EmailRequestTypeDatabaseCodes.Table.ToCode(emailRequestType));
+        Assert.Equal(emailRequestType,
+            EmailRequestTypeDatabaseCodes.Table.ToValue(databaseCode));
+    }
+
+    // Chaque valeur de la liste a son cas ci-dessus : une valeur ajoutée sans son code fait échouer ce test.
+    [Fact]
+    public void EveryEmailRequestTypeHasItsCase()
+    {
+        Assert.Equal(11, Enum.GetValues<EmailRequestType>().Length);
     }
 
     [Theory]

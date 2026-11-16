@@ -20,6 +20,7 @@ public class SecurityEventRepository : ISecurityEventRepository
 
     // Enregistre tout de suite un événement, seul : rien d'autre ne doit attendre l'unité de travail.
     // Si son compte vient d'être effacé, l'événement est gardé comme ceux d'un compte supprimé : sans identifiant ni adresse IP (GR Suppression).
+    // Si le compte qu'une action de l'administrateur vise vient d'être effacé, l'action est gardée sans lui (DD §4.5).
     public async Task SaveEventAsync(SecurityEvent securityEvent)
     {
         databaseContext.ThrowIfChangesArePending();
@@ -31,15 +32,36 @@ public class SecurityEventRepository : ISecurityEventRepository
         }
         catch (DbUpdateException exception)
         {
-            if (!PostgresErrors.IsForeignKeyViolation(exception, AccountForeignKey))
+            SecurityEvent keptEvent;
+
+            if (PostgresErrors.IsForeignKeyViolation(exception, AccountForeignKey))
+            {
+                keptEvent = CreateEventOfErasedAccount(securityEvent);
+            }
+            else if (PostgresErrors.IsForeignKeyViolation(exception, PostgresErrors.SecurityEventTargetForeignKey))
+            {
+                keptEvent = CreateEventOfErasedTarget(securityEvent);
+            }
+            else
             {
                 throw;
             }
 
             databaseContext.Entry(securityEvent).State = EntityState.Detached;
-            databaseContext.SecurityEvents.Add(CreateEventOfErasedAccount(securityEvent));
+            databaseContext.SecurityEvents.Add(keptEvent);
             await databaseContext.SaveChangesAsync();
         }
+    }
+
+    // Lit la date du dernier événement réussi de ce type pour ce compte. Le journal garde un an d'événements (SS §11).
+    public async Task<DateTime?> FindLastSuccessAsync(SecurityEventType type, Guid accountId)
+    {
+        return await databaseContext.SecurityEvents.AsNoTracking()
+            .Where(securityEvent =>
+                securityEvent.UserId == accountId
+                && securityEvent.Type == type
+                && securityEvent.Result == SecurityEventResult.Success)
+            .MaxAsync(securityEvent => (DateTime?)securityEvent.OccurredAt);
     }
 
     // Prépare un événement : il partira avec les autres changements, dans la même transaction, à l'appel de l'unité de travail.
@@ -60,6 +82,7 @@ public class SecurityEventRepository : ISecurityEventRepository
     }
 
     // Recrée l'événement sans identifiant de compte ni adresse IP. Le reste ne change pas : identifiant, type, résultat et date.
+    // Le compte visé reste : seul le compte de l'événement a été effacé.
     private static SecurityEvent CreateEventOfErasedAccount(SecurityEvent securityEvent)
     {
         return new SecurityEvent
@@ -67,7 +90,22 @@ public class SecurityEventRepository : ISecurityEventRepository
             Id = securityEvent.Id,
             Type = securityEvent.Type,
             Result = securityEvent.Result,
-            OccurredAt = securityEvent.OccurredAt
+            OccurredAt = securityEvent.OccurredAt,
+            TargetUserId = securityEvent.TargetUserId
+        };
+    }
+
+    // Recrée l'action de l'administrateur sans le compte qu'elle visait. Le reste ne change pas.
+    private static SecurityEvent CreateEventOfErasedTarget(SecurityEvent securityEvent)
+    {
+        return new SecurityEvent
+        {
+            Id = securityEvent.Id,
+            Type = securityEvent.Type,
+            Result = securityEvent.Result,
+            OccurredAt = securityEvent.OccurredAt,
+            IpAddress = securityEvent.IpAddress,
+            UserId = securityEvent.UserId
         };
     }
 }

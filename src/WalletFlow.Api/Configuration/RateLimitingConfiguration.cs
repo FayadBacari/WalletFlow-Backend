@@ -20,6 +20,8 @@ public static class RateLimitingConfiguration
     public const string EmailChangePolicy = "changement-d-adresse-par-adresse-ip";
     public const string EmailChangeLinkPolicy = "lien-de-changement-d-adresse-par-adresse-ip";
     public const string CostlyReadPolicy = "lecture-couteuse-par-session";
+    public const string VisitorSupportPolicy = "support-visiteur-par-adresse-ip";
+    public const string TwoFactorSupportLinkPolicy = "lien-de-desactivation-de-la-double-auth-par-adresse-ip";
 
     // Connexion : 10 essais par minute et par adresse IP, en plus des 5 tentatives par compte.
     public static FixedWindowRateLimiterOptions CreateLoginLimit()
@@ -51,7 +53,8 @@ public static class RateLimitingConfiguration
         };
     }
 
-    // Mot de passe oublié, lien de récupération, lien de déblocage : 10 par heure et par adresse IP. Chaque route a son compteur.
+    // Mot de passe oublié, lien de récupération, lien de déblocage, lien de désactivation de la double authentification :
+    // 10 par heure et par adresse IP. Chaque route a son compteur.
     public static FixedWindowRateLimiterOptions CreateAccountRecoveryLimit()
     {
         return new FixedWindowRateLimiterOptions
@@ -122,6 +125,17 @@ public static class RateLimitingConfiguration
         };
     }
 
+    // Formulaire de support des visiteurs : 3 demandes par heure et par adresse IP. Il est ouvert à tous : sans limite,
+    // un script remplirait la base de demandes.
+    public static FixedWindowRateLimiterOptions CreateVisitorSupportLimit()
+    {
+        return new FixedWindowRateLimiterOptions
+        {
+            PermitLimit = 3,
+            Window = TimeSpan.FromHours(1)
+        };
+    }
+
     // Ajoute les limites de débit aux services de l'API.
     public static IServiceCollection AddWalletFlowRateLimiting(this IServiceCollection services)
     {
@@ -141,6 +155,8 @@ public static class RateLimitingConfiguration
             AddLimitPerIp(options, EmailChangePolicy, CreateEmailChangeLimit());
             AddLimitPerIp(options, EmailChangeLinkPolicy, CreateEmailChangeLinkLimit());
             AddLimitPerSession(options, CostlyReadPolicy, CreateCostlyReadLimit());
+            AddLimitPerIp(options, VisitorSupportPolicy, CreateVisitorSupportLimit());
+            AddLimitPerIp(options, TwoFactorSupportLinkPolicy, CreateAccountRecoveryLimit());
         });
 
         return services;

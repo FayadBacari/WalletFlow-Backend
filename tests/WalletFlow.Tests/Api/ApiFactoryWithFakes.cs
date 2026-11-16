@@ -3,12 +3,14 @@ using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using WalletFlow.Application.Administration;
 using WalletFlow.Application.Bags;
 using WalletFlow.Application.BankConnections;
 using WalletFlow.Application.Categories;
 using WalletFlow.Application.Emails;
 using WalletFlow.Application.Security;
 using WalletFlow.Application.Suggestions;
+using WalletFlow.Application.Support;
 using WalletFlow.Application.Transactions;
 using WalletFlow.Application.TwoFactorAuthentication;
 using WalletFlow.Application.UserAccounts;
@@ -35,6 +37,8 @@ public class ApiFactoryWithFakes : WebApplicationFactory<Program>
     public EmailRequestWakeUp EmailWakeUp { get; } = new EmailRequestWakeUp();
     public FakeEmailRequestRepository EmailRequests { get; }
     public FakeAlertRepository AlertRepository { get; } = new FakeAlertRepository();
+    public FakeSupportRequestRepository SupportRepository { get; }
+    public FakeAdministrationRepository AdministrationRepository { get; }
     public FakeBankDataProvider BankProvider { get; } = new FakeBankDataProvider();
     public FakeDatabaseUnitOfWork UnitOfWork { get; }
     public FakeEmailSender EmailSender { get; } = new FakeEmailSender();
@@ -56,7 +60,10 @@ public class ApiFactoryWithFakes : WebApplicationFactory<Program>
         AlertRepository.Categories = CategoryRepository;
         AlertRepository.Bags = BagRepository;
         AlertRepository.Connections = BankRepository;
-        OwnershipRepository = new FakeResourceOwnershipRepository(CategoryRepository, BankRepository, BagRepository, SuggestionRepository);
+        SupportRepository = new FakeSupportRequestRepository(AccountRepository.SavedUsers);
+        AdministrationRepository = new FakeAdministrationRepository(SupportRepository, BankRepository);
+        OwnershipRepository = new FakeResourceOwnershipRepository(
+            CategoryRepository, BankRepository, BagRepository, SuggestionRepository, SupportRepository);
         EmailRequests = new FakeEmailRequestRepository(EmailWakeUp);
         UnitOfWork = new FakeDatabaseUnitOfWork(
             AccountRepository,
@@ -69,7 +76,9 @@ public class ApiFactoryWithFakes : WebApplicationFactory<Program>
             BagRepository,
             SuggestionRepository,
             EmailRequests,
-            AlertRepository);
+            AlertRepository,
+            SupportRepository,
+            AdministrationRepository);
     }
 
     // Remplace les services avant le démarrage de l'API (nom imposé par le framework).
@@ -92,6 +101,8 @@ public class ApiFactoryWithFakes : WebApplicationFactory<Program>
             services.AddSingleton<IResourceOwnershipRepository>(OwnershipRepository);
             services.AddSingleton<IEmailRequestRepository>(EmailRequests);
             services.AddSingleton<IAlertRepository>(AlertRepository);
+            services.AddSingleton<ISupportRequestRepository>(SupportRepository);
+            services.AddSingleton<IAdministrationRepository>(AdministrationRepository);
             services.AddSingleton(EmailWakeUp);
             services.AddSingleton<IBankDataProvider>(BankProvider);
             services.AddSingleton<IEmailSender>(EmailSender);

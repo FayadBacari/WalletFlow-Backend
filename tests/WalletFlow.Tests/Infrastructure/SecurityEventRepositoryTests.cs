@@ -1,6 +1,7 @@
 using System.Net;
 using Microsoft.EntityFrameworkCore;
 using WalletFlow.Domain.UsersAndSecurity;
+using WalletFlow.Infrastructure.Persistence;
 using WalletFlow.Infrastructure.Persistence.Repositories;
 using static WalletFlow.Tests.Infrastructure.LocalTestDatabase;
 
@@ -173,5 +174,103 @@ public class SecurityEventRepositoryTests
         Assert.Equal(SecurityEventType.Login, reloadedEvent.Type);
         Assert.Equal(SecurityEventResult.Failure, reloadedEvent.Result);
         Assert.Equal(EventDate, reloadedEvent.OccurredAt);
+    }
+
+    // Le compte qu'une action de l'administrateur vise a pu être effacé entre-temps : l'action est gardée, sans lui, avec
+    // l'administrateur et son adresse IP (DD §4.5).
+    [Fact]
+    public async Task AdminActionWhoseTargetWasErasedMeanwhileIsKeptWithoutIt()
+    {
+        await using var databaseContext = CreateDatabaseContext();
+        await using var transaction = await databaseContext.Database.BeginTransactionAsync();
+        var administrator = await BankTestRows.SaveAccountAsync(databaseContext, "test-journal-administrateur@exemple.test");
+        var savedEvent = new SecurityEvent
+        {
+            Type = SecurityEventType.AdminAction,
+            Result = SecurityEventResult.Success,
+            OccurredAt = EventDate,
+            IpAddress = IPAddress.Parse("203.0.113.8"),
+            UserId = administrator.Id,
+            TargetUserId = Guid.NewGuid()
+        };
+
+        await new SecurityEventRepository(databaseContext).SaveEventAsync(savedEvent);
+
+        databaseContext.ChangeTracker.Clear();
+        var reloadedEvent = await databaseContext.SecurityEvents.SingleAsync(row => row.Id == savedEvent.Id);
+        Assert.Equal(
+            ((Guid?)administrator.Id, (Guid?)null, IPAddress.Parse("203.0.113.8")),
+            (reloadedEvent.UserId, reloadedEvent.TargetUserId, reloadedEvent.IpAddress));
+    }
+
+    // L'administrateur qui agit a pu être effacé entre-temps : l'action est gardée comme celles d'un compte supprimé, sans lui ni
+    // son adresse IP, mais avec le compte qu'elle vise (DD §4.5).
+    [Fact]
+    public async Task AdminActionOfAnErasedAdministratorKeepsItsTarget()
+    {
+        await using var databaseContext = CreateDatabaseContext();
+        await using var transaction = await databaseContext.Database.BeginTransactionAsync();
+        var target = await BankTestRows.SaveAccountAsync(databaseContext, "test-journal-vise@exemple.test");
+        var savedEvent = new SecurityEvent
+        {
+            Type = SecurityEventType.AdminAction,
+            Result = SecurityEventResult.Success,
+            OccurredAt = EventDate,
+            IpAddress = IPAddress.Parse("203.0.113.9"),
+            UserId = Guid.NewGuid(),
+            TargetUserId = target.Id
+        };
+
+        await new SecurityEventRepository(databaseContext).SaveEventAsync(savedEvent);
+
+        databaseContext.ChangeTracker.Clear();
+        var reloadedEvent = await databaseContext.SecurityEvents.SingleAsync(row => row.Id == savedEvent.Id);
+        Assert.Equal(
+            ((Guid?)null, (Guid?)target.Id, (IPAddress?)null),
+            (reloadedEvent.UserId, reloadedEvent.TargetUserId, reloadedEvent.IpAddress));
+    }
+
+    // Une action préparée avec d'autres changements, dont le compte visé est effacé au même instant, est refusée par la base :
+    // c'est un conflit à rejouer, et le passage suivant ne trouve plus le compte.
+    [Fact]
+    public async Task PreparedAdminActionOnAnAccountErasedMeanwhileIsAConflict()
+    {
+        await using var databaseContext = CreateDatabaseContext();
+        await using var transaction = await databaseContext.Database.BeginTransactionAsync();
+        var administrator = await BankTestRows.SaveAccountAsync(databaseContext, "test-journal-administrateur-conflit@exemple.test");
+        new SecurityEventRepository(databaseContext).PrepareEvent(new SecurityEvent
+        {
+            Type = SecurityEventType.AdminAction,
+            Result = SecurityEventResult.Success,
+            OccurredAt = EventDate,
+            UserId = administrator.Id,
+            TargetUserId = Guid.NewGuid()
+        });
+
+        var exception = await Assert.ThrowsAsync<DbUpdateException>(() => databaseContext.SaveChangesAsync());
+
+        Assert.True(PostgresErrors.IsConflict(exception));
+    }
+
+    // Le dernier événement réussi d'un type pour un compte : ni un échec, ni un autre type, ni un autre compte ne compte.
+    // Un compte sans un tel événement n'en a pas.
+    [Fact]
+    public async Task LastSuccessIsTheLatestSuccessfulEventOfThisTypeAndAccount()
+    {
+        await using var databaseContext = CreateDatabaseContext();
+        await using var transaction = await databaseContext.Database.BeginTransactionAsync();
+        var account = await BankTestRows.SaveAccountAsync(databaseContext, "test-journal-dernier@exemple.test");
+        var otherAccount = await BankTestRows.SaveAccountAsync(databaseContext, "test-journal-dernier-autre@exemple.test");
+        var repository = new SecurityEventRepository(databaseContext);
+        databaseContext.SecurityEvents.AddRange(
+            new SecurityEvent { Type = SecurityEventType.PasswordChange, Result = SecurityEventResult.Success, OccurredAt = EventDate.AddDays(-10), UserId = account.Id },
+            new SecurityEvent { Type = SecurityEventType.PasswordChange, Result = SecurityEventResult.Success, OccurredAt = EventDate.AddDays(-3), UserId = account.Id },
+            new SecurityEvent { Type = SecurityEventType.PasswordChange, Result = SecurityEventResult.Failure, OccurredAt = EventDate.AddDays(-1), UserId = account.Id },
+            new SecurityEvent { Type = SecurityEventType.Login, Result = SecurityEventResult.Success, OccurredAt = EventDate, UserId = account.Id },
+            new SecurityEvent { Type = SecurityEventType.PasswordChange, Result = SecurityEventResult.Success, OccurredAt = EventDate, UserId = otherAccount.Id });
+        await databaseContext.SaveChangesAsync();
+
+        Assert.Equal(EventDate.AddDays(-3), await repository.FindLastSuccessAsync(SecurityEventType.PasswordChange, account.Id));
+        Assert.Null(await repository.FindLastSuccessAsync(SecurityEventType.PasswordChange, Guid.NewGuid()));
     }
 }

@@ -6,7 +6,7 @@ namespace WalletFlow.Application.Notifications;
 // Les objets lus sont suivis, sauf mention contraire, et les méthodes « Prepare… » n'écrivent rien (voir IDatabaseUnitOfWork).
 public interface IAlertRepository
 {
-    // Donne les 8 types d'alerte. Rien n'est suivi.
+    // Donne les 10 types d'alerte. Rien n'est suivi.
     Task<List<AlertType>> FindTypesAsync();
 
     // Donne les choix enregistrés de l'utilisateur. Un type sans choix enregistré est activé. Rien n'est suivi.

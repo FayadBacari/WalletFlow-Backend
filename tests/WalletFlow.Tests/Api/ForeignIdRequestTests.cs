@@ -11,6 +11,7 @@ using Microsoft.Extensions.DependencyInjection;
 using WalletFlow.Api.Configuration;
 using WalletFlow.Domain.AccountsAndCategories;
 using WalletFlow.Domain.BagsAndSuggestions;
+using WalletFlow.Domain.NotificationsAndSupport;
 using WalletFlow.Domain.UsersAndSecurity;
 using WalletFlow.Tests.Fakes;
 using static WalletFlow.Tests.Api.LoginRequestTestValues;
@@ -26,11 +27,16 @@ namespace WalletFlow.Tests.Api;
 public class ForeignIdRequestTests
 {
     private const string OtherUserEmail = "autre-utilisateur@exemple.test";
+
+    // Les routes d'administration agissent sur tous les comptes : un identifiant qu'elles reçoivent n'est jamais celui « d'un
+    // autre » (GR Admin). Elles sont réservées à l'administrateur, ce que vérifient leurs propres tests (AdministrationEndpointTests).
+    private const string AdministrationRoutePrefix = "api/admin/";
     private const string ChartPeriod = "from=2026-11-01&to=2026-11-30";
     private static readonly DateOnly September = new DateOnly(2026, 9, 1);
 
     // Les ressources d'un utilisateur, une de chaque sorte qu'une requête peut viser.
-    private sealed record OwnedIds(Guid Category, Guid Transaction, Guid Connection, Guid BankAccount, Guid Bag, Guid Suggestion);
+    private sealed record OwnedIds(
+        Guid Category, Guid Transaction, Guid Connection, Guid BankAccount, Guid Bag, Guid Suggestion, Guid SupportRequest);
 
     // Un utilisateur connecté : son navigateur, son jeton anti-CSRF, son compte et ses ressources.
     private sealed record LoggedInUser(HttpClient Client, string CsrfToken, User Account, OwnedIds Ids);
@@ -93,7 +99,9 @@ public class ForeignIdRequestTests
         NotFound("POST api/bank-connections/{connectionId:guid}/renew", "connectionId", ids => ids.Connection,
             (own, id) => Post("/api/bank-connections/" + id + "/renew", null)),
         NotFound("DELETE api/bank-connections/{connectionId:guid}", "connectionId", ids => ids.Connection,
-            (own, id) => Delete("/api/bank-connections/" + id))
+            (own, id) => Delete("/api/bank-connections/" + id)),
+        NotFound("GET api/support-requests/{requestId:guid}", "requestId", ids => ids.SupportRequest,
+            (own, id) => Get("/api/support-requests/" + id))
     };
 
     // Les noms des cas, pour que chaque identifiant apparaisse comme un test à part.
@@ -193,7 +201,7 @@ public class ForeignIdRequestTests
         Assert.Equal(received, covered);
     }
 
-    // Lit dans l'API chaque identifiant qu'une requête peut envoyer, nommé comme un cas.
+    // Lit dans l'API chaque identifiant qu'une requête peut envoyer, nommé comme un cas, sauf sur les routes d'administration.
     private static List<string> ReadIdsReceivedByRoutes()
     {
         using var api = new ApiFactoryWithFakes();
@@ -202,6 +210,11 @@ public class ForeignIdRequestTests
 
         foreach (var route in routeProvider.ActionDescriptors.Items)
         {
+            if (route.AttributeRouteInfo!.Template!.StartsWith(AdministrationRoutePrefix, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
             var httpMethod = route.EndpointMetadata.OfType<IHttpMethodMetadata>().SelectMany(metadata => metadata.HttpMethods).Single();
 
             foreach (var parameter in route.Parameters)
@@ -282,7 +295,7 @@ public class ForeignIdRequestTests
     }
 
     // Ajoute un compte avec ses catégories par défaut et le connecte. Lui connecte par l'API une banque avec une opération,
-    // puis lui garde un sac de 10 000 centimes et une suggestion de septembre. Septembre est noté comme calculé : le 4 novembre
+    // puis lui garde un sac de 10 000 centimes, une suggestion de septembre et une demande de support. Septembre est noté comme calculé : le 4 novembre
     // de la fausse horloge, la liste des suggestions le montre sans rien recalculer.
     private static async Task<LoggedInUser> LogInWithResourcesAsync(ApiFactoryWithFakes api, string email, string stableId)
     {
@@ -319,6 +332,8 @@ public class ForeignIdRequestTests
             UserId = account.Id
         };
         api.SuggestionRepository.SavedSuggestions.Add(suggestion);
+        var supportRequest = SupportRequest.FromUser(account.Id, "Où est mon sac ?", api.Clock.GetUtcNow().UtcDateTime);
+        api.SupportRepository.SavedRequests.Add(supportRequest);
 
         var leisure = api.CategoryRepository.SavedCategories.Single(category => category.UserId == account.Id && category.Name == "Loisirs");
         var ids = new OwnedIds(
@@ -327,7 +342,8 @@ public class ForeignIdRequestTests
             connectionId,
             transaction.GetProperty("accountId").GetGuid(),
             bag.Id,
-            suggestion.Id);
+            suggestion.Id,
+            supportRequest.Id);
 
         return new LoggedInUser(client, csrfToken, account, ids);
     }
@@ -365,7 +381,8 @@ public class ForeignIdRequestTests
         var addresses = new List<string>
         {
             "/api/categories", "/api/transactions", "/api/bank-connections", "/api/balance", "/api/bags",
-            "/api/bags/" + user.Ids.Bag + "/movements", "/api/suggestions"
+            "/api/bags/" + user.Ids.Bag + "/movements", "/api/suggestions", "/api/support-requests",
+            "/api/support-requests/" + user.Ids.SupportRequest
         };
         var view = new StringBuilder();
 

@@ -383,13 +383,18 @@ public class AccountSettingsEndpointTests
     // --- Inventaire
 
     // Toute route qui peut recevoir un corps (POST, PUT, DELETE) déclare une des limites de taille de l'API :
-    // une nouvelle route ne peut pas l'oublier, ni en choisir une plus grande.
+    // une nouvelle route ne peut pas l'oublier, ni en choisir une plus grande. Seules les trois routes qui reçoivent un texte
+    // du support ont droit à la plus grande : un message ou une réponse y compte jusqu'à 5 000 caractères.
     [Fact]
     public void EveryWriteRouteDeclaresASizeLimit()
     {
         using var api = new ApiFactoryWithFakes();
         var routeProvider = api.Services.GetRequiredService<IActionDescriptorCollectionProvider>();
         var allowedLimits = new List<long?> { RequestSizeConfiguration.MaximumAccountRequestBytes, RequestSizeConfiguration.MaximumCategoryRequestBytes };
+        var supportRoutes = new List<string>
+        {
+            "api/support-requests", "api/support-requests/visitor", "api/admin/support-requests/{requestId:guid}/responses"
+        };
         var writeMethods = new List<string> { HttpMethods.Post, HttpMethods.Put, HttpMethods.Delete };
         var routesWithoutLimit = new List<string>();
         var writeRouteCount = 0;
@@ -403,7 +408,10 @@ public class AccountSettingsEndpointTests
             {
                 writeRouteCount = writeRouteCount + 1;
 
-                if (!allowedLimits.Contains(sizeLimit?.MaxRequestBodySize))
+                var isSupportRouteWithItsLimit = supportRoutes.Contains(route.AttributeRouteInfo!.Template!)
+                    && sizeLimit?.MaxRequestBodySize == RequestSizeConfiguration.MaximumSupportRequestBytes;
+
+                if (!allowedLimits.Contains(sizeLimit?.MaxRequestBodySize) && !isSupportRouteWithItsLimit)
                 {
                     routesWithoutLimit.Add(route.AttributeRouteInfo!.Template!);
                 }

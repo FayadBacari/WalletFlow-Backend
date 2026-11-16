@@ -1,13 +1,17 @@
 using System.Net;
+using WalletFlow.Application.Emails;
 using WalletFlow.Application.Persistence;
 using WalletFlow.Application.Security;
 using WalletFlow.Application.UserAccounts;
+using WalletFlow.Domain.NotificationsAndSupport;
 using WalletFlow.Domain.UsersAndSecurity;
 
 namespace WalletFlow.Application.TwoFactorAuthentication;
 
 // Cas d'utilisation : un utilisateur connecté désactive la double authentification avec son mot de passe et un code (GR Auth, SS §2).
 // Le code peut être un code de secours : c'est le seul moyen de changer de téléphone après en avoir perdu un.
+// La désactivation envoie l'alerte de sécurité qui l'annonce (GR Notif). Les codes de secours sont alors effacés : un code
+// de secours qui a servi ici n'envoie pas sa propre alerte, la désactivation dit déjà tout.
 public class TwoFactorDeactivationService
 {
     private readonly IUserAccountRepository accountRepository;
@@ -16,6 +20,8 @@ public class TwoFactorDeactivationService
     private readonly SecurityJournalService securityJournal;
     private readonly IPasswordHasher passwordHasher;
     private readonly TwoFactorCodeCheckingService codeCheckingService;
+    private readonly IEmailRequestRepository emailRequests;
+    private readonly TimeProvider clock;
 
     // Reçoit les outils dont la désactivation a besoin.
     public TwoFactorDeactivationService(
@@ -24,7 +30,9 @@ public class TwoFactorDeactivationService
         DatabaseChangesSavingService savingService,
         SecurityJournalService securityJournal,
         IPasswordHasher passwordHasher,
-        TwoFactorCodeCheckingService codeCheckingService)
+        TwoFactorCodeCheckingService codeCheckingService,
+        IEmailRequestRepository emailRequests,
+        TimeProvider clock)
     {
         this.accountRepository = accountRepository;
         this.twoFactorRepository = twoFactorRepository;
@@ -32,6 +40,8 @@ public class TwoFactorDeactivationService
         this.securityJournal = securityJournal;
         this.passwordHasher = passwordHasher;
         this.codeCheckingService = codeCheckingService;
+        this.emailRequests = emailRequests;
+        this.clock = clock;
     }
 
     // Vérifie le mot de passe puis le code : un mauvais mot de passe ne consomme donc pas le code. Si tout est bon, désactive.
@@ -88,7 +98,8 @@ public class TwoFactorDeactivationService
     }
 
     // Un passage : lit le compte et vérifie que le mot de passe et le secret qui viennent d'être contrôlés sont encore les bons,
-    // car une récupération a pu passer entre-temps. Puis prépare le secret oublié, les codes de secours effacés et l'événement du journal.
+    // car une récupération a pu passer entre-temps. Puis prépare le secret oublié, les codes de secours effacés, l'événement
+    // du journal et l'alerte : l'alerte n'entre dans la file qu'avec la désactivation.
     private async Task<PreparedChanges<TwoFactorDeactivationResult?>> PrepareDeactivationAsync(
         Guid userId,
         string passwordHash,
@@ -111,6 +122,7 @@ public class TwoFactorDeactivationService
         account.DeactivateTwoFactor();
         await twoFactorRepository.PrepareBackupCodesRemovalAsync(userId);
         securityJournal.PrepareEvent(SecurityEventType.TwoFactorDeactivation, SecurityEventResult.Success, userId, ipAddress);
+        emailRequests.PrepareRequest(EmailRequest.ForTwoFactorDeactivation(userId, ipAddress, clock.GetUtcNow().UtcDateTime));
 
         return PreparedChanges<TwoFactorDeactivationResult?>.SaveThenReturn(new TwoFactorDeactivationResult.TwoFactorDeactivated());
     }

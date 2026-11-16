@@ -73,4 +73,20 @@ public class FrenchAccountEmailsTests
             Assert.DoesNotContain("#token=", email.Body);
         }
     }
+
+    // Le lien du support dit tout ce qu'il demande et quand il ne marche pas : le mot de passe, 24 heures, 7 jours sans
+    // changement, 5 essais, et la fermeture des sessions. Il finit par la page de support, seule sur sa ligne (SS §2, §9).
+    [Fact]
+    public void SupportLinkEmailSaysWhatTheLinkNeeds()
+    {
+        var email = recoveryEmails.CreateTwoFactorDeactivationLinkEmail(Recipient, Link, "https://walletflow.test/support");
+
+        Assert.Equal(Recipient, email.RecipientAddress);
+        Assert.Equal("Désactive la double authentification de ton compte WalletFlow", email.Subject);
+        Assert.Contains("puis saisis ton mot de passe :\n" + Link + "\n", email.Body);
+        Assert.Contains("Ce lien est valable 24 heures et ne sert qu'une seule fois.", email.Body);
+        Assert.Contains("Il ne marche pas si ton mot de passe a changé il y a moins de 7 jours, et 5 mauvais mots de passe l'annulent.", email.Body);
+        Assert.Contains("ferme toutes les sessions de ton compte", email.Body);
+        Assert.EndsWith("Écris aussi au support de WalletFlow :\nhttps://walletflow.test/support", email.Body);
+    }
 }

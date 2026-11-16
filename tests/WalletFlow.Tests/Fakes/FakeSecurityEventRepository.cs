@@ -37,6 +37,25 @@ public class FakeSecurityEventRepository : ISecurityEventRepository, ITransactio
     }
 
     // Note l'effacement demandé, ou lance la panne simulée.
+    // Donne la date du dernier événement réussi de ce type pour ce compte, comme la vraie requête.
+    public Task<DateTime?> FindLastSuccessAsync(SecurityEventType type, Guid accountId)
+    {
+        if (IsDown)
+        {
+            throw new InvalidOperationException(FailureDetail);
+        }
+
+        lock (pendingChangesLock)
+        {
+            var times = SavedSecurityEvents
+                .Where(securityEvent => securityEvent.UserId == accountId && securityEvent.Type == type && securityEvent.Result == SecurityEventResult.Success)
+                .Select(securityEvent => (DateTime?)securityEvent.OccurredAt)
+                .ToList();
+
+            return Task.FromResult(times.Max());
+        }
+    }
+
     public Task<int> DeleteExpiredEventsAsync()
     {
         if (IsDown)

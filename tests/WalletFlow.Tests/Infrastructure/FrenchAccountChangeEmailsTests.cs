@@ -6,6 +6,7 @@ namespace WalletFlow.Tests.Infrastructure;
 public class FrenchAccountChangeEmailsTests
 {
     private const string Link = "https://walletflow.test/confirm-email-change#token=jeton-du-lien";
+    private const string SupportPage = "https://walletflow.test/support";
 
     private readonly FrenchAccountChangeEmails emails = new FrenchAccountChangeEmails();
 
@@ -31,14 +32,22 @@ public class FrenchAccountChangeEmailsTests
         Assert.DoesNotContain("http", email.Body);
     }
 
-    // SS §9 : l'e-mail à l'ancienne adresse ne cite aucune adresse, et invite à écrire au support.
+    // SS §9 : l'e-mail à l'ancienne adresse ne cite aucune adresse e-mail, et invite à écrire au support, avec l'adresse
+    // de la page de support seule sur sa ligne. C'est son seul lien.
     [Fact]
-    public void OldAddressEmailQuotesNoAddressAndPointsToTheSupport()
+    public void OldAddressEmailQuotesNoAddressAndPointsToTheSupportPage()
     {
-        var email = emails.CreateEmailChangedEmail("ancienne@exemple.test");
+        var email = emails.CreateEmailChangedEmail("ancienne@exemple.test", SupportPage);
 
         Assert.Equal("ancienne@exemple.test", email.RecipientAddress);
         Assert.DoesNotContain("@", email.Body);
-        Assert.Contains("support", email.Body);
+        Assert.Contains("écris tout de suite au support de WalletFlow :\n" + SupportPage, email.Body);
+        Assert.Equal(1, CountOccurrences(email.Body, "http"));
+    }
+
+    // Compte les fois où ce morceau apparaît dans le texte.
+    private static int CountOccurrences(string text, string part)
+    {
+        return (text.Length - text.Replace(part, string.Empty).Length) / part.Length;
     }
 }
