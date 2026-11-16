@@ -384,6 +384,25 @@ public class TwoFactorLoginServiceTests
         Assert.Equal(9, backupCodes.Count);
         var usedCode = services.TwoFactorRepository.SavedBackupCodes[3];
         Assert.Equal(services.Clock.GetUtcNow().UtcDateTime, usedCode.UsedAt);
+
+        // GR Notif : l'alerte de l'utilisation d'un code de secours part avec la session.
+        var alert = Assert.Single(services.EmailRequests.SavedRequests, request => request.Type == EmailRequestType.BackupCodeUse);
+        Assert.Equal(activatedAccount.UserAccount.Id, alert.UserId);
+        Assert.Equal(IpAddress, alert.IpAddress);
+        Assert.Equal(services.Clock.GetUtcNow().UtcDateTime, alert.RequestedAt);
+    }
+
+    // Un code de l'application n'est pas un code de secours : aucune alerte de code de secours ne part.
+    [Fact]
+    public async Task AuthenticatorCodeSendsNoBackupCodeAlert()
+    {
+        var activatedAccount = services.AddActivatedAccount();
+        var waitingLoginToken = await services.LogInThenGetWaitingLoginTokenAsync();
+
+        var result = await services.FinishLoginAsync(waitingLoginToken, services.CalculateCurrentCode(activatedAccount.Secret));
+
+        Assert.IsType<TwoFactorLoginResult.LoggedIn>(result);
+        Assert.DoesNotContain(services.EmailRequests.SavedRequests, request => request.Type == EmailRequestType.BackupCodeUse);
     }
 
     [Fact]
@@ -397,6 +416,7 @@ public class TwoFactorLoginServiceTests
 
         Assert.IsType<TwoFactorLoginResult.WrongCode>(secondUseResult);
         Assert.Single(services.SessionRepository.SavedSessions);
+        Assert.Single(services.EmailRequests.SavedRequests, request => request.Type == EmailRequestType.BackupCodeUse);
     }
 
     [Theory]

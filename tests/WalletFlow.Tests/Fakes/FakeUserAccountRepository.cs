@@ -16,7 +16,7 @@ public class FakeUserAccountRepository : IUserAccountRepository, ITransactionalF
     private readonly ReadCopies<EmailToken> readTokens = new ReadCopies<EmailToken>();
     private readonly List<User> accountsUnderCheck = new List<User>();
     private readonly List<EmailToken> preparedSignupTokens = new List<EmailToken>();
-    private readonly List<Guid> accountsLosingRecoveryAndUnlockLinks = new List<Guid>();
+    private readonly List<Guid> accountsLosingOldAddressLinks = new List<Guid>();
     private Action? concurrentChanges = null;
 
     // Ce que la fausse base contient.
@@ -57,6 +57,10 @@ public class FakeUserAccountRepository : IUserAccountRepository, ITransactionalF
 
     // D'autres requêtes comptent leur essai juste avant l'enregistrement : un conflit chacune.
     public int LoginCounterConflicts { get; set; } = 0;
+
+    // D'autres requêtes comptent leur propre essai du mot de passe sur le même lien du support juste avant l'enregistrement :
+    // un conflit chacune, et un essai de plus sur le lien (DD §4.2).
+    public int SupportLinkTryConflicts { get; set; } = 0;
 
     // Le compte est effacé pendant la connexion : au-delà de ce nombre de recherches par identifiant, il n'existe plus.
     public int? SearchesBeforeAccountDisappears { get; set; } = null;
@@ -172,12 +176,12 @@ public class FakeUserAccountRepository : IUserAccountRepository, ITransactionalF
         return Task.CompletedTask;
     }
 
-    // Garde de côté l'effacement des liens de récupération et de déblocage : il ne se fera qu'avec les autres changements.
-    public Task PrepareRecoveryAndUnlockLinksRemovalAsync(Guid accountId)
+    // Garde de côté l'effacement des liens partis vers l'ancienne adresse : il ne se fera qu'avec les autres changements.
+    public Task PrepareOldAddressLinksRemovalAsync(Guid accountId)
     {
         lock (pendingChangesLock)
         {
-            accountsLosingRecoveryAndUnlockLinks.Add(accountId);
+            accountsLosingOldAddressLinks.Add(accountId);
         }
 
         return Task.CompletedTask;
@@ -229,6 +233,15 @@ public class FakeUserAccountRepository : IUserAccountRepository, ITransactionalF
             // Une nouvelle inscription remplace le lien de confirmation qui vient de servir.
             if (usedToken != null && usedToken.Type == EmailTokenType.SignupConfirmation && ReplaceTokenBeforeConfirmation)
             {
+                return true;
+            }
+
+            // Une autre requête compte son propre essai sur le même lien du support : le lien a changé de version.
+            var triedToken = readTokens.FindChangedSinceRead((copy, current) => copy.PasswordTryCount != current.PasswordTryCount);
+            if (triedToken != null && SupportLinkTryConflicts > 0)
+            {
+                SupportLinkTryConflicts = SupportLinkTryConflicts - 1;
+                concurrentChanges = () => triedToken.CountPasswordTry();
                 return true;
             }
 
@@ -317,11 +330,13 @@ public class FakeUserAccountRepository : IUserAccountRepository, ITransactionalF
                 SavedEmailTokens.Add(newSignupToken);
             }
 
-            foreach (var accountId in accountsLosingRecoveryAndUnlockLinks)
+            foreach (var accountId in accountsLosingOldAddressLinks)
             {
                 SavedEmailTokens.RemoveAll(token =>
                     token.UserId == accountId
-                    && (token.Type == EmailTokenType.PasswordRecovery || token.Type == EmailTokenType.AccountUnlock));
+                    && (token.Type == EmailTokenType.PasswordRecovery
+                        || token.Type == EmailTokenType.AccountUnlock
+                        || token.Type == EmailTokenType.TwoFactorDeactivation));
             }
 
             ClearTracking();
@@ -394,7 +409,7 @@ public class FakeUserAccountRepository : IUserAccountRepository, ITransactionalF
         readAccounts.Clear();
         readTokens.Clear();
         preparedSignupTokens.Clear();
-        accountsLosingRecoveryAndUnlockLinks.Clear();
+        accountsLosingOldAddressLinks.Clear();
         accountsUnderCheck.Clear();
     }
 }

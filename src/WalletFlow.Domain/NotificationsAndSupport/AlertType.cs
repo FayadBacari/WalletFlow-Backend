@@ -1,6 +1,6 @@
 namespace WalletFlow.Domain.NotificationsAndSupport;
 
-// Type d'alerte, parmi une liste fixe de 8 types.
+// Type d'alerte, parmi une liste fixe de 10 types.
 // Correspond à la table type_alerte du MPD (DD §9.1).
 public class AlertType
 {

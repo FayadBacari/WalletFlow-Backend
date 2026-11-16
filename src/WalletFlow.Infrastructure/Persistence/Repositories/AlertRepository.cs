@@ -17,7 +17,7 @@ public class AlertRepository : IAlertRepository
         this.databaseContext = databaseContext;
     }
 
-    // Donne les 8 types d'alerte, que le script SQL a remplis.
+    // Donne les 10 types d'alerte, que le script SQL a remplis.
     public async Task<List<AlertType>> FindTypesAsync()
     {
         return await databaseContext.AlertTypes.AsNoTracking().ToListAsync();

@@ -38,15 +38,17 @@ public class FrenchAccountChangeEmails : IAccountChangeEmails
         return new EmailMessage(recipient, "Ton adresse e-mail est déjà utilisée sur WalletFlow", body);
     }
 
-    // Crée l'e-mail qui prévient l'ancienne adresse que le changement est fait. Il ne cite jamais la nouvelle (SS §9).
-    public EmailMessage CreateEmailChangedEmail(string recipient)
+    // Crée l'e-mail qui prévient l'ancienne adresse que le changement est fait. Il ne cite jamais la nouvelle, et finit par
+    // l'adresse de la page de support, seule sur sa ligne (SS §9).
+    public EmailMessage CreateEmailChangedEmail(string recipient, string supportPageAddress)
     {
-        var body = """
+        var body = $"""
             Bonjour,
 
             L'adresse e-mail de ton compte WalletFlow vient d'être changée : cette adresse ne sert plus à te connecter.
 
-            Si ce n'est pas toi qui as fait ce changement, écris tout de suite au support de WalletFlow.
+            Si ce n'est pas toi qui as fait ce changement, écris tout de suite au support de WalletFlow :
+            {supportPageAddress}
             """;
 
         return new EmailMessage(recipient, "L'adresse e-mail de ton compte WalletFlow a changé", body);

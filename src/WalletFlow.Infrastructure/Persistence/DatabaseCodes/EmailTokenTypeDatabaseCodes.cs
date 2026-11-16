@@ -14,5 +14,6 @@ public static class EmailTokenTypeDatabaseCodes
                 { EmailTokenType.PasswordRecovery, "recuperation_mdp" },
                 { EmailTokenType.AccountUnlock, "deblocage" },
                 { EmailTokenType.EmailChange, "changement_email" },
+                { EmailTokenType.TwoFactorDeactivation, "desactivation_double_auth" },
             });
 }

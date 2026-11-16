@@ -19,5 +19,7 @@ public static class AlertKindDatabaseCodes
                 { AlertKind.AccountLocked, "compte_bloque" },
                 { AlertKind.PasswordChange, "changement_mdp" },
                 { AlertKind.EmailChange, "changement_email" },
+                { AlertKind.TwoFactorDeactivation, "desactivation_double_auth" },
+                { AlertKind.BackupCodeUse, "utilisation_code_secours" },
             });
 }

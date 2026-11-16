@@ -53,6 +53,11 @@ public static class PostgresErrors
     public const string AlertBagForeignKey = "alerte_id_sac_fkey";
     public const string AlertConnectionForeignKey = "alerte_id_connexion_fkey";
 
+    // Noms donnés par PostgreSQL aux clés étrangères vers le compte qu'une action de l'administrateur vise, et vers la demande
+    // d'une nouvelle réponse : une autre requête peut effacer ce compte, ou la tâche d'effacement cette demande, au même instant.
+    public const string SecurityEventTargetForeignKey = "evenement_securite_id_utilisateur_vise_fkey";
+    public const string ResponseRequestForeignKey = "reponse_support_id_demande_fkey";
+
     // Nom de la contrainte du script SQL : un mouvement garde au moins un sac. L'application ne crée jamais un mouvement
     // sans sac : cette contrainte refuse seulement deux suppressions simultanées de deux sacs reliés par un mouvement,
     // qui viderait chacune un côté de ce mouvement. La seconde suppression recommence, et le déclencheur efface alors ce mouvement.
@@ -74,7 +79,8 @@ public static class PostgresErrors
     {
         BankAccountConnectionForeignKey, TransactionAccountForeignKey, TransactionCategoryForeignKey, RuleCategoryForeignKey,
         MovementSourceBagForeignKey, MovementDestinationBagForeignKey, SuggestionCategoryForeignKey,
-        AlertCategoryForeignKey, AlertBagForeignKey, AlertConnectionForeignKey
+        AlertCategoryForeignKey, AlertBagForeignKey, AlertConnectionForeignKey,
+        SecurityEventTargetForeignKey, ResponseRequestForeignKey
     };
 
     // Renvoie vrai si l'erreur vient de l'unicité de l'adresse e-mail : un autre compte utilise déjà cette adresse.

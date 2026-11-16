@@ -16,6 +16,10 @@ public static class EmailRequestTypeDatabaseCodes
                 { EmailRequestType.EmailChangedNotice, "avis_ancienne_adresse" },
                 { EmailRequestType.NewDevice, "nouvel_appareil" },
                 { EmailRequestType.PasswordChange, "changement_mdp" },
+                { EmailRequestType.TwoFactorDeactivation, "desactivation_double_auth" },
+                { EmailRequestType.BackupCodeUse, "utilisation_code_secours" },
+                { EmailRequestType.TwoFactorDeactivationLink, "lien_double_auth" },
+                { EmailRequestType.SupportResponse, "reponse_support" },
                 { EmailRequestType.Alert, "alerte" },
             });
 }

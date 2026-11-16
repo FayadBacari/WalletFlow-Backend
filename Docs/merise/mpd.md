@@ -9,18 +9,18 @@ Le choix de PostgreSQL ne vient pas des règles de gestion : il a été fait au 
 
 ### 1.1 Types
 
-| Dictionnaire              | PostgreSQL         | Utilisation                                                                |
-|---------------------------|--------------------|----------------------------------------------------------------------------|
-| AN 36 (UUID)              | UUID               | Identifiants, générés par `gen_random_uuid()`                              |
-| AN n                      | VARCHAR(n)         | Textes                                                                     |
-| AN 64 (empreinte SHA-256) | CHAR(64)           | `empreinte_jeton`, `jeton_appareil`, `id_session`                          |
-| AN 45 (adresse IP)        | INET               | `adresse_ip_evenement`, `adresse_ip_demande`, format IPv4 ou IPv6 vérifié  |
-| N (montant, 10 chiffres)  | INTEGER            | Montants en centimes                                                       |
-| N 1, N 3                  | SMALLINT           | `nb_tentatives_echouees`, `nb_blocages`, `nb_essais_envoi`, `seuil_alerte` |
-| D                         | DATE               | `date_transaction`, `date_objectif`                                        |
-| DH                        | TIMESTAMPTZ        | Dates et heures, avec fuseau horaire                                       |
-| B                         | BOOLEAN            | Booléens                                                                   |
-| Liste de valeurs          | VARCHAR(n) + CHECK | Codes courts (`role_utilisateur`, statuts…)                                |
+| Dictionnaire              | PostgreSQL         | Utilisation                                                                                   |
+|---------------------------|--------------------|-----------------------------------------------------------------------------------------------|
+| AN 36 (UUID)              | UUID               | Identifiants, générés par `gen_random_uuid()`                                                 |
+| AN n                      | VARCHAR(n)         | Textes                                                                                        |
+| AN 64 (empreinte SHA-256) | CHAR(64)           | `empreinte_jeton`, `jeton_appareil`, `id_session`                                             |
+| AN 45 (adresse IP)        | INET               | `adresse_ip_evenement`, `adresse_ip_demande`, format IPv4 ou IPv6 vérifié                     |
+| N (montant, 10 chiffres)  | INTEGER            | Montants en centimes                                                                          |
+| N 1, N 3                  | SMALLINT           | `nb_tentatives_echouees`, `nb_blocages`, `nb_essais_envoi`, `nb_essais_jeton`, `seuil_alerte` |
+| D                         | DATE               | `date_transaction`, `date_objectif`                                                           |
+| DH                        | TIMESTAMPTZ        | Dates et heures, avec fuseau horaire                                                          |
+| B                         | BOOLEAN            | Booléens                                                                                      |
+| Liste de valeurs          | VARCHAR(n) + CHECK | Codes courts (`role_utilisateur`, statuts…)                                                   |
 
 Les montants tiennent dans un INTEGER : le dictionnaire les limite à 1 000 000 000 centimes en valeur absolue. Les sommes (solde total, totaux des sacs) sont calculées par PostgreSQL en BIGINT, sans risque de dépassement.
 
@@ -31,22 +31,24 @@ Les montants tiennent dans un INTEGER : le dictionnaire les limite à 1 000 000 
 
 ### 1.3 Suppressions
 
-| Clé étrangère                      | ON DELETE           | Raison                                           |
-|------------------------------------|---------------------|--------------------------------------------------|
-| Vers utilisateur, sauf le journal  | CASCADE             | Effacement définitif du compte                   |
-| evenement_securite.id_utilisateur  | SET NULL            | Événements gardés, sans identifiant              |
-| compte_bancaire.id_connexion       | CASCADE             | Comptes supprimés avec leur connexion            |
-| transaction.id_compte              | CASCADE             | Transactions supprimées avec leur compte         |
-| transaction.id_categorie           | NO ACTION, différée | Transactions déplacées dans « Autres » avant     |
-| regle_classement.id_categorie      | CASCADE             | Une règle n'a plus d'objet sans sa catégorie     |
-| suggestion.id_categorie            | SET NULL            | Les économies déjà réalisées restent comptées    |
-| mouvement_sac (les deux sacs)      | SET NULL            | L'autre sac garde son solde                      |
-| mouvement_sac.id_suggestion        | SET NULL            | Le mouvement reste dans l'historique du sac      |
-| reponse_support.id_demande         | CASCADE             | Les réponses suivent leur demande                |
-| parametrer.code_type_alerte        | NO ACTION           | Les types d'alerte forment une liste fixe        |
-| alerte.code_type_alerte            | NO ACTION           | Les types d'alerte forment une liste fixe        |
-| alerte (catégorie, sac, connexion) | CASCADE             | Une alerte n'a plus d'objet sans ce qu'elle vise |
-| demande_email.id_alerte            | CASCADE             | L'e-mail d'une alerte effacée ne part plus       |
+| Clé étrangère                          | ON DELETE           | Raison                                           |
+|----------------------------------------|---------------------|--------------------------------------------------|
+| Vers utilisateur, sauf le journal      | CASCADE             | Effacement définitif du compte                   |
+| evenement_securite.id_utilisateur      | SET NULL            | Événements gardés, sans identifiant              |
+| evenement_securite.id_utilisateur_vise | SET NULL            | Événement gardé, sans le compte visé             |
+| compte_bancaire.id_connexion           | CASCADE             | Comptes supprimés avec leur connexion            |
+| transaction.id_compte                  | CASCADE             | Transactions supprimées avec leur compte         |
+| transaction.id_categorie               | NO ACTION, différée | Transactions déplacées dans « Autres » avant     |
+| regle_classement.id_categorie          | CASCADE             | Une règle n'a plus d'objet sans sa catégorie     |
+| suggestion.id_categorie                | SET NULL            | Les économies déjà réalisées restent comptées    |
+| mouvement_sac (les deux sacs)          | SET NULL            | L'autre sac garde son solde                      |
+| mouvement_sac.id_suggestion            | SET NULL            | Le mouvement reste dans l'historique du sac      |
+| reponse_support.id_demande             | CASCADE             | Les réponses suivent leur demande                |
+| parametrer.code_type_alerte            | NO ACTION           | Les types d'alerte forment une liste fixe        |
+| alerte.code_type_alerte                | NO ACTION           | Les types d'alerte forment une liste fixe        |
+| alerte (catégorie, sac, connexion)     | CASCADE             | Une alerte n'a plus d'objet sans ce qu'elle vise |
+| demande_email.id_alerte                | CASCADE             | L'e-mail d'une alerte effacée ne part plus       |
+| demande_email.id_reponse               | CASCADE             | L'e-mail d'une réponse effacée ne part plus      |
 
 Ces choix appliquent les règles de gestion sur la suppression d'un compte, la déconnexion d'une banque, la suppression d'une catégorie et celle d'un sac (GR Suppression, GR Comptes, GR Dépenses, GR Sacs), ainsi que la liste des données effacées de la stratégie de sécurité (SS §7).
 
@@ -106,13 +108,17 @@ CREATE TABLE jeton (
     date_expiration_jeton  TIMESTAMPTZ  NOT NULL,
     date_utilisation_jeton TIMESTAMPTZ,
     nouvel_email           VARCHAR(254),
+    nb_essais_jeton        SMALLINT     NOT NULL DEFAULT 0,
     id_utilisateur         UUID         NOT NULL
         REFERENCES utilisateur (id_utilisateur) ON DELETE CASCADE,
     CONSTRAINT ck_jeton_type CHECK (type_jeton IN (
-        'confirmation_inscription', 'recuperation_mdp', 'deblocage', 'changement_email')),
+        'confirmation_inscription', 'recuperation_mdp', 'deblocage', 'changement_email',
+        'desactivation_double_auth')),
     CONSTRAINT ck_jeton_nouvel_email CHECK (
         (type_jeton = 'changement_email') = (nouvel_email IS NOT NULL)),
-    CONSTRAINT ck_jeton_nouvel_email_minuscules CHECK (nouvel_email = lower(nouvel_email))
+    CONSTRAINT ck_jeton_nouvel_email_minuscules CHECK (nouvel_email = lower(nouvel_email)),
+    CONSTRAINT ck_jeton_essais CHECK (nb_essais_jeton BETWEEN 0 AND 5),
+    CONSTRAINT ck_jeton_essais_type CHECK (nb_essais_jeton = 0 OR type_jeton = 'desactivation_double_auth')
 );
 
 CREATE TABLE appareil (
@@ -138,12 +144,15 @@ CREATE TABLE evenement_securite (
     adresse_ip_evenement INET,
     id_utilisateur       UUID
         REFERENCES utilisateur (id_utilisateur) ON DELETE SET NULL,
+    id_utilisateur_vise  UUID
+        REFERENCES utilisateur (id_utilisateur) ON DELETE SET NULL,
     CONSTRAINT ck_evenement_type CHECK (type_evenement IN (
         'connexion', 'blocage', 'deblocage', 'recuperation_mdp', 'changement_mdp',
         'changement_email', 'activation_double_auth', 'desactivation_double_auth',
         'connexion_banque', 'deconnexion_banque', 'export_donnees', 'demande_suppression',
         'action_admin', 'changement_role', 'acces_refuse')),
-    CONSTRAINT ck_evenement_resultat CHECK (resultat_evenement IN ('succes', 'echec'))
+    CONSTRAINT ck_evenement_resultat CHECK (resultat_evenement IN ('succes', 'echec')),
+    CONSTRAINT ck_evenement_vise CHECK (type_evenement = 'action_admin' OR id_utilisateur_vise IS NULL)
 );
 
 -- 2. Banques, comptes, transactions et catégories (GR Comptes, GR Dépenses)
@@ -334,10 +343,34 @@ CREATE UNIQUE INDEX ux_alerte_sac ON alerte (id_sac)
 CREATE UNIQUE INDEX ux_alerte_autorisation ON alerte (id_connexion)
     WHERE code_type_alerte = 'autorisation_bancaire';
 
+CREATE TABLE demande_support (
+    id_demande      UUID          PRIMARY KEY DEFAULT gen_random_uuid(),
+    message_demande VARCHAR(5000) NOT NULL,
+    email_contact   VARCHAR(254),
+    statut_demande  VARCHAR(10)   NOT NULL DEFAULT 'envoyee',
+    date_demande    TIMESTAMPTZ   NOT NULL DEFAULT now(),
+    id_utilisateur  UUID
+        REFERENCES utilisateur (id_utilisateur) ON DELETE CASCADE,
+    CONSTRAINT ck_demande_message CHECK (char_length(message_demande) >= 1),
+    CONSTRAINT ck_demande_contact CHECK (id_utilisateur IS NOT NULL OR email_contact IS NOT NULL),
+    CONSTRAINT ck_demande_statut CHECK (statut_demande IN ('envoyee', 'en_cours', 'resolue'))
+);
+
+CREATE TABLE reponse_support (
+    id_reponse      UUID          PRIMARY KEY DEFAULT gen_random_uuid(),
+    contenu_reponse VARCHAR(5000) NOT NULL,
+    date_reponse    TIMESTAMPTZ   NOT NULL DEFAULT now(),
+    id_demande      UUID          NOT NULL
+        REFERENCES demande_support (id_demande) ON DELETE CASCADE,
+    CONSTRAINT ck_reponse_contenu CHECK (char_length(contenu_reponse) >= 1)
+);
+
 -- La file d'e-mails (DD §9.4) : aucun secret, chaque lien est créé au moment de l'envoi. Une récupération ne vise aucun
--- compte : elle entre dans la file avant de savoir si l'adresse en a un. Tout autre e-mail vise un compte. Seuls la
+-- compte : elle entre dans la file avant de savoir si l'adresse en a un. Une réponse au support n'en vise pas non
+-- plus : elle part à l'adresse lue dans sa demande au moment de l'envoi. Tout autre e-mail vise un compte. Seuls la
 -- récupération, le lien vers la nouvelle adresse et l'avis à l'ancienne gardent une adresse, en minuscules comme
--- celle du compte. Un e-mail d'alerte, et lui seul, est lié à son alerte.
+-- celle du compte. Un e-mail d'alerte, et lui seul, est lié à son alerte ; une réponse au support, et elle seule, à
+-- sa réponse.
 CREATE TABLE demande_email (
     id_demande_email      UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
     type_demande_email    VARCHAR(30)  NOT NULL,
@@ -350,37 +383,22 @@ CREATE TABLE demande_email (
         REFERENCES utilisateur (id_utilisateur) ON DELETE CASCADE,
     id_alerte             UUID         UNIQUE
         REFERENCES alerte (id_alerte) ON DELETE CASCADE,
+    id_reponse            UUID         UNIQUE
+        REFERENCES reponse_support (id_reponse) ON DELETE CASCADE,
     CONSTRAINT ck_demande_email_type CHECK (type_demande_email IN (
         'recuperation_mdp', 'deblocage', 'changement_email', 'avis_ancienne_adresse',
-        'nouvel_appareil', 'changement_mdp', 'alerte')),
+        'nouvel_appareil', 'changement_mdp', 'desactivation_double_auth', 'utilisation_code_secours',
+        'lien_double_auth', 'reponse_support', 'alerte')),
     CONSTRAINT ck_demande_email_essais CHECK (nb_essais_envoi BETWEEN 0 AND 5),
     CONSTRAINT ck_demande_email_compte CHECK (
-        (type_demande_email = 'recuperation_mdp') = (id_utilisateur IS NULL)),
+        (type_demande_email IN ('recuperation_mdp', 'reponse_support')) = (id_utilisateur IS NULL)),
     CONSTRAINT ck_demande_email_adresse CHECK (
         (type_demande_email IN ('recuperation_mdp', 'changement_email', 'avis_ancienne_adresse'))
         = (adresse_email_demande IS NOT NULL)),
     CONSTRAINT ck_demande_email_minuscules CHECK (adresse_email_demande = lower(adresse_email_demande)),
-    CONSTRAINT ck_demande_email_alerte CHECK ((type_demande_email = 'alerte') = (id_alerte IS NOT NULL))
-);
-
-CREATE TABLE demande_support (
-    id_demande      UUID          PRIMARY KEY DEFAULT gen_random_uuid(),
-    message_demande VARCHAR(5000) NOT NULL,
-    email_contact   VARCHAR(254),
-    statut_demande  VARCHAR(10)   NOT NULL DEFAULT 'envoyee',
-    id_utilisateur  UUID
-        REFERENCES utilisateur (id_utilisateur) ON DELETE CASCADE,
-    CONSTRAINT ck_demande_message CHECK (char_length(message_demande) >= 1),
-    CONSTRAINT ck_demande_contact CHECK (id_utilisateur IS NOT NULL OR email_contact IS NOT NULL),
-    CONSTRAINT ck_demande_statut CHECK (statut_demande IN ('envoyee', 'en_cours', 'resolue'))
-);
-
-CREATE TABLE reponse_support (
-    id_reponse      UUID          PRIMARY KEY DEFAULT gen_random_uuid(),
-    contenu_reponse VARCHAR(5000) NOT NULL,
-    id_demande      UUID          NOT NULL
-        REFERENCES demande_support (id_demande) ON DELETE CASCADE,
-    CONSTRAINT ck_reponse_contenu CHECK (char_length(contenu_reponse) >= 1)
+    CONSTRAINT ck_demande_email_alerte CHECK ((type_demande_email = 'alerte') = (id_alerte IS NOT NULL)),
+    CONSTRAINT ck_demande_email_reponse CHECK (
+        (type_demande_email = 'reponse_support') = (id_reponse IS NOT NULL))
 );
 
 -- 5. Index sur les clés étrangères et les recherches fréquentes
@@ -390,6 +408,7 @@ CREATE INDEX ix_jeton_utilisateur ON jeton (id_utilisateur);
 CREATE INDEX ix_appareil_utilisateur ON appareil (id_utilisateur);
 CREATE INDEX ix_session_utilisateur ON session (id_utilisateur);
 CREATE INDEX ix_evenement_utilisateur ON evenement_securite (id_utilisateur);
+CREATE INDEX ix_evenement_vise ON evenement_securite (id_utilisateur_vise);
 CREATE INDEX ix_evenement_date ON evenement_securite (date_evenement);
 CREATE INDEX ix_connexion_utilisateur ON connexion_bancaire (id_utilisateur);
 CREATE INDEX ix_categorie_utilisateur ON categorie (id_utilisateur);
@@ -405,22 +424,25 @@ CREATE INDEX ix_alerte_utilisateur ON alerte (id_utilisateur);
 CREATE INDEX ix_alerte_categorie ON alerte (id_categorie);
 CREATE INDEX ix_alerte_sac ON alerte (id_sac);
 CREATE INDEX ix_alerte_connexion ON alerte (id_connexion);
+CREATE INDEX ix_demande_utilisateur ON demande_support (id_utilisateur);
+CREATE INDEX ix_demande_statut_date ON demande_support (statut_demande, date_demande);
+CREATE INDEX ix_reponse_demande ON reponse_support (id_demande);
 CREATE INDEX ix_demande_email_utilisateur ON demande_email (id_utilisateur);
 CREATE INDEX ix_demande_email_essai ON demande_email (date_prochain_essai);
-CREATE INDEX ix_demande_utilisateur ON demande_support (id_utilisateur);
-CREATE INDEX ix_reponse_demande ON reponse_support (id_demande);
 
--- 6. Données de référence : les 8 types d'alerte (GR Notif)
+-- 6. Données de référence : les 10 types d'alerte (GR Notif)
 
 INSERT INTO type_alerte (code_type_alerte, libelle_type_alerte, est_desactivable) VALUES
-    ('budget_atteint',        'Budget d''une catégorie atteint',      TRUE),
-    ('nouvelle_suggestion',   'Nouvelle suggestion d''épargne',       TRUE),
-    ('objectif_sac_atteint',  'Objectif d''un sac atteint',           TRUE),
-    ('autorisation_bancaire', 'Autorisation bancaire à renouveler',   TRUE),
-    ('nouvel_appareil',       'Connexion depuis un nouvel appareil',  FALSE),
-    ('compte_bloque',         'Compte bloqué',                        FALSE),
-    ('changement_mdp',        'Changement de mot de passe',           FALSE),
-    ('changement_email',      'Changement d''adresse e-mail',         FALSE);
+    ('budget_atteint',            'Budget d''une catégorie atteint',             TRUE),
+    ('nouvelle_suggestion',       'Nouvelle suggestion d''épargne',              TRUE),
+    ('objectif_sac_atteint',      'Objectif d''un sac atteint',                  TRUE),
+    ('autorisation_bancaire',     'Autorisation bancaire à renouveler',          TRUE),
+    ('nouvel_appareil',           'Connexion depuis un nouvel appareil',         FALSE),
+    ('compte_bloque',             'Compte bloqué',                               FALSE),
+    ('changement_mdp',            'Changement de mot de passe',                  FALSE),
+    ('changement_email',          'Changement d''adresse e-mail',                FALSE),
+    ('desactivation_double_auth', 'Désactivation de la double authentification', FALSE),
+    ('utilisation_code_secours',  'Utilisation d''un code de secours',           FALSE);
 
 -- 7. Déclencheurs
 
@@ -498,11 +520,42 @@ BEGIN
 END;
 $$;
 
+-- SS §8 : le rôle d'un utilisateur ne change que par cette fonction, lancée avec un compte administrateur de
+-- PostgreSQL. Elle ne donne aucun droit de plus : elle s'exécute avec les droits de celui qui la lance, et
+-- l'application ne peut pas la lancer (section 8). Elle refuse un compte non confirmé et un rôle que le compte a
+-- déjà, et écrit le changement au journal de sécurité.
+CREATE FUNCTION fn_changer_role(adresse VARCHAR, nouveau_role VARCHAR) RETURNS void LANGUAGE plpgsql
+    SET search_path = public AS $$
+DECLARE
+    compte      UUID;
+    role_actuel VARCHAR;
+BEGIN
+    SELECT id_utilisateur, role_utilisateur INTO compte, role_actuel
+    FROM utilisateur
+    WHERE email_utilisateur = lower(adresse) AND email_confirme
+    FOR UPDATE;
+
+    IF compte IS NULL THEN
+        RAISE EXCEPTION 'Aucun compte confirmé n''utilise l''adresse %', adresse;
+    END IF;
+
+    IF role_actuel = nouveau_role THEN
+        RAISE EXCEPTION 'Ce compte a déjà le rôle %', nouveau_role;
+    END IF;
+
+    UPDATE utilisateur SET role_utilisateur = nouveau_role WHERE id_utilisateur = compte;
+
+    INSERT INTO evenement_securite (type_evenement, resultat_evenement, id_utilisateur)
+    VALUES ('changement_role', 'succes', compte);
+END;
+$$;
+
 -- 8. Utilisateur de base de données de l'application (SS §7)
 -- Il lit et écrit les données, mais ne peut ni supprimer de table ni modifier
 -- les types d'alerte. Son mot de passe se définit à part, jamais dans ce script.
 -- Il ne peut ni choisir ni changer le rôle d'un utilisateur : le rôle administrateur
--- ne s'attribue que depuis le serveur, avec un compte administrateur de PostgreSQL (SS §8 et §14).
+-- ne s'attribue que depuis le serveur, par la fonction fn_changer_role lancée avec un compte
+-- administrateur de PostgreSQL (SS §8 et §14). Il ne peut pas lancer cette fonction.
 -- Il ne peut qu'ajouter des événements au journal de sécurité, jamais les modifier
 -- ni les effacer (SS §11). Seule la fonction fn_effacer_vieux_evenements efface ceux de plus d'un an.
 
@@ -525,6 +578,7 @@ GRANT UPDATE (
     ON utilisateur TO walletflow_app;
 REVOKE EXECUTE ON FUNCTION fn_effacer_vieux_evenements() FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION fn_effacer_vieux_evenements() TO walletflow_app;
+REVOKE EXECUTE ON FUNCTION fn_changer_role(VARCHAR, VARCHAR) FROM PUBLIC;
 
 COMMIT;
 ```
@@ -534,16 +588,17 @@ COMMIT;
 
 **Vérifié par la base de données**
 - Les valeurs possibles, les longueurs minimales et les bornes des montants (contraintes `ck_`).
-- Le secret TOTP rempli seulement quand la double authentification est activée ; la nouvelle adresse seulement pour un jeton de changement d'e-mail.
+- Le secret TOTP rempli seulement quand la double authentification est activée ; la nouvelle adresse seulement pour un jeton de changement d'e-mail ; des essais comptés, 5 au plus, seulement pour le lien qui désactive la double authentification.
 - La date d'objectif seulement avec un montant ; un ou deux sacs, différents, pour chaque mouvement.
 - Une seule catégorie « Autres » par utilisateur (`ux_categorie_autres`).
 - Une seule suggestion par règle et par mois, et par catégorie pour le dépassement (`ux_suggestion_categorie_mois`, `ux_suggestion_regle_mois`).
 - Une alerte qui ne part qu'une fois, avec exactement ce que son type demande (`ux_alerte_budget`, `ux_alerte_suggestion`, `ux_alerte_sac`, `ux_alerte_autorisation`, `ck_alerte_contenu`).
-- Une demande d'e-mail qui vise un compte, sauf une récupération qui n'en vise aucun, qui ne garde une adresse, en minuscules, que pour une récupération, un changement d'adresse ou l'avis à l'ancienne adresse, et qui n'est liée à une alerte que pour un e-mail d'alerte (`ck_demande_email_compte`, `ck_demande_email_adresse`, `ck_demande_email_minuscules`, `ck_demande_email_alerte`).
+- Une demande d'e-mail qui vise un compte, sauf une récupération ou une réponse au support, qui n'en visent aucun, qui ne garde une adresse, en minuscules, que pour une récupération, un changement d'adresse ou l'avis à l'ancienne adresse, et qui n'est liée à une alerte que pour un e-mail d'alerte, et à une réponse que pour une réponse au support (`ck_demande_email_compte`, `ck_demande_email_adresse`, `ck_demande_email_minuscules`, `ck_demande_email_alerte`, `ck_demande_email_reponse`).
+- Un compte visé seulement pour une action de l'administrateur (`ck_evenement_vise`).
 - Chaque compte et chaque opération reçus de la banque, enregistrés une seule fois (`ux_compte_externe`, `ux_transaction_externe`).
 - Une alerte non désactivable toujours activée (`tg_parametrer_controle`).
 - La suppression d'un sac et l'effacement d'un compte utilisateur (`tg_sac_avant_suppression`, `tg_utilisateur_avant_suppression` et les règles ON DELETE).
-- Le rôle d'un utilisateur, que l'application ne peut ni choisir ni changer, et le journal de sécurité, auquel elle ne peut qu'ajouter des événements (droits de `walletflow_app`, section 8 du script). Seule la fonction `fn_effacer_vieux_evenements` efface les événements de plus d'un an.
+- Le rôle d'un utilisateur, que l'application ne peut ni choisir ni changer, et le journal de sécurité, auquel elle ne peut qu'ajouter des événements (droits de `walletflow_app`, section 8 du script). Seule la fonction `fn_effacer_vieux_evenements` efface les événements de plus d'un an. Le rôle ne change que par la fonction `fn_changer_role`, lancée avec le compte administrateur de PostgreSQL : elle refuse un compte non confirmé ou qui a déjà ce rôle, et écrit le changement au journal (SS §8).
 
 **Vérifié par l'application**
 - L'appartenance au même utilisateur : la catégorie d'une transaction et son compte, les deux sacs d'un mouvement (SS §4).
@@ -552,11 +607,13 @@ COMMIT;
 - La catégorie « Autres » ni renommée ni supprimée, et les transactions d'une catégorie déplacées dans « Autres » avant sa suppression (GR Dépenses).
 - La création des 8 catégories par défaut, dans la même transaction SQL que l'utilisateur (cardinalité 1,n de DISPOSER).
 - Le hachage des mots de passe et des codes de secours, et le chiffrement du secret TOTP, avant l'enregistrement (SS §2).
-- Les durées : expiration des jetons, fermeture des sessions après 30 minutes d'inactivité, mise à jour des comptes jusqu'à 4 fois par jour, rappel 7 jours avant la fin d'une autorisation bancaire, effacement des comptes 30 jours après la demande, effacement des comptes non confirmés une fois leur lien expiré, conservation du journal un an (la tâche appelle `fn_effacer_vieux_evenements`). Ce sont des tâches planifiées.
+- Les durées : expiration des jetons, fermeture des sessions après 30 minutes d'inactivité, mise à jour des comptes jusqu'à 4 fois par jour, rappel 7 jours avant la fin d'une autorisation bancaire, effacement des comptes 30 jours après la demande, effacement des comptes non confirmés une fois leur lien expiré, effacement des demandes de support un an après leur envoi, avec leurs réponses, conservation du journal un an (la tâche appelle `fn_effacer_vieux_evenements`). Ce sont des tâches planifiées.
 - Le calcul des suggestions une fois par mois, la pause de 30 jours après une suggestion ignorée, et l'effacement des suggestions dépassées, au moment du calcul (GR Sacs).
 - Les alertes : la préférence de l'utilisateur, le passage des seuils de budget après chaque changement des dépenses du mois ou du budget, l'objectif d'un sac après chaque mouvement ou changement d'objectif, et l'effacement de l'alerte d'un sac quand le montant de son objectif change ou disparaît, ou d'une connexion quand son autorisation est renouvelée (GR Notif, GR Dépenses, GR Sacs, GR Comptes).
 - La file d'e-mails : les essais d'envoi, 5 au plus (1 min, 5 min, 30 min, puis 2 h d'attente), et l'effacement d'une demande une fois l'e-mail parti. L'effacement des alertes de budget et de suggestion deux mois après leur mois, et le calcul des suggestions de chaque utilisateur à partir du 5, avec son alerte, sont des tâches planifiées (SS §7, §9).
 - La révocation de l'autorisation chez le prestataire, quand l'utilisateur déconnecte une banque ou demande la suppression de son compte (GR Comptes, GR Suppression).
+- Le support : une demande passe « en cours » à sa première réponse, et seul l'administrateur y répond ou la passe « résolue ». Chaque réponse part par e-mail, à l'adresse lue dans la demande au moment de l'envoi (GR Admin).
+- L'administration : la double authentification activée pour l'administrateur, la recherche d'un compte par son adresse exacte seulement, et le lien qui désactive la double authentification. Ce lien ne sert que si le mot de passe n'a pas changé depuis au moins 7 jours, d'après les événements `changement_mdp` réussis du journal, et ferme alors toutes les sessions du compte. Chaque essai du mot de passe y est enregistré avant sa vérification, en vérifiant la version du jeton (`xmin`) : même lancés en même temps, 5 essais au plus sont vérifiés (GR Admin, GR Auth).
 
 
 ## 4. Mise en place
@@ -564,3 +621,4 @@ COMMIT;
 1. Créer une base vide, puis y exécuter le script de la section 2 avec un compte administrateur de PostgreSQL.
 2. Définir le mot de passe de `walletflow_app` à part, par exemple avec `ALTER ROLE walletflow_app PASSWORD '…'`, et le ranger dans les secrets de l'application (SS §7).
 3. Configurer l'application pour qu'elle se connecte avec `walletflow_app`, jamais avec le compte administrateur.
+4. Une fois le compte du responsable créé et confirmé dans l'application, lui donner le rôle d'administrateur avec le compte administrateur de PostgreSQL : `SELECT fn_changer_role('adresse du compte', 'administrateur');` (SS §8).

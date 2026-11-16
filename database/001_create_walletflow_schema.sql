@@ -51,13 +51,17 @@ CREATE TABLE jeton (
     date_expiration_jeton  TIMESTAMPTZ  NOT NULL,
     date_utilisation_jeton TIMESTAMPTZ,
     nouvel_email           VARCHAR(254),
+    nb_essais_jeton        SMALLINT     NOT NULL DEFAULT 0,
     id_utilisateur         UUID         NOT NULL
         REFERENCES utilisateur (id_utilisateur) ON DELETE CASCADE,
     CONSTRAINT ck_jeton_type CHECK (type_jeton IN (
-        'confirmation_inscription', 'recuperation_mdp', 'deblocage', 'changement_email')),
+        'confirmation_inscription', 'recuperation_mdp', 'deblocage', 'changement_email',
+        'desactivation_double_auth')),
     CONSTRAINT ck_jeton_nouvel_email CHECK (
         (type_jeton = 'changement_email') = (nouvel_email IS NOT NULL)),
-    CONSTRAINT ck_jeton_nouvel_email_minuscules CHECK (nouvel_email = lower(nouvel_email))
+    CONSTRAINT ck_jeton_nouvel_email_minuscules CHECK (nouvel_email = lower(nouvel_email)),
+    CONSTRAINT ck_jeton_essais CHECK (nb_essais_jeton BETWEEN 0 AND 5),
+    CONSTRAINT ck_jeton_essais_type CHECK (nb_essais_jeton = 0 OR type_jeton = 'desactivation_double_auth')
 );
 
 CREATE TABLE appareil (
@@ -83,12 +87,15 @@ CREATE TABLE evenement_securite (
     adresse_ip_evenement INET,
     id_utilisateur       UUID
         REFERENCES utilisateur (id_utilisateur) ON DELETE SET NULL,
+    id_utilisateur_vise  UUID
+        REFERENCES utilisateur (id_utilisateur) ON DELETE SET NULL,
     CONSTRAINT ck_evenement_type CHECK (type_evenement IN (
         'connexion', 'blocage', 'deblocage', 'recuperation_mdp', 'changement_mdp',
         'changement_email', 'activation_double_auth', 'desactivation_double_auth',
         'connexion_banque', 'deconnexion_banque', 'export_donnees', 'demande_suppression',
         'action_admin', 'changement_role', 'acces_refuse')),
-    CONSTRAINT ck_evenement_resultat CHECK (resultat_evenement IN ('succes', 'echec'))
+    CONSTRAINT ck_evenement_resultat CHECK (resultat_evenement IN ('succes', 'echec')),
+    CONSTRAINT ck_evenement_vise CHECK (type_evenement = 'action_admin' OR id_utilisateur_vise IS NULL)
 );
 
 -- 2. Banques, comptes, transactions et catégories (GR Comptes, GR Dépenses)
@@ -279,10 +286,34 @@ CREATE UNIQUE INDEX ux_alerte_sac ON alerte (id_sac)
 CREATE UNIQUE INDEX ux_alerte_autorisation ON alerte (id_connexion)
     WHERE code_type_alerte = 'autorisation_bancaire';
 
+CREATE TABLE demande_support (
+    id_demande      UUID          PRIMARY KEY DEFAULT gen_random_uuid(),
+    message_demande VARCHAR(5000) NOT NULL,
+    email_contact   VARCHAR(254),
+    statut_demande  VARCHAR(10)   NOT NULL DEFAULT 'envoyee',
+    date_demande    TIMESTAMPTZ   NOT NULL DEFAULT now(),
+    id_utilisateur  UUID
+        REFERENCES utilisateur (id_utilisateur) ON DELETE CASCADE,
+    CONSTRAINT ck_demande_message CHECK (char_length(message_demande) >= 1),
+    CONSTRAINT ck_demande_contact CHECK (id_utilisateur IS NOT NULL OR email_contact IS NOT NULL),
+    CONSTRAINT ck_demande_statut CHECK (statut_demande IN ('envoyee', 'en_cours', 'resolue'))
+);
+
+CREATE TABLE reponse_support (
+    id_reponse      UUID          PRIMARY KEY DEFAULT gen_random_uuid(),
+    contenu_reponse VARCHAR(5000) NOT NULL,
+    date_reponse    TIMESTAMPTZ   NOT NULL DEFAULT now(),
+    id_demande      UUID          NOT NULL
+        REFERENCES demande_support (id_demande) ON DELETE CASCADE,
+    CONSTRAINT ck_reponse_contenu CHECK (char_length(contenu_reponse) >= 1)
+);
+
 -- La file d'e-mails (DD §9.4) : aucun secret, chaque lien est créé au moment de l'envoi. Une récupération ne vise aucun
--- compte : elle entre dans la file avant de savoir si l'adresse en a un. Tout autre e-mail vise un compte. Seuls la
+-- compte : elle entre dans la file avant de savoir si l'adresse en a un. Une réponse au support n'en vise pas non
+-- plus : elle part à l'adresse lue dans sa demande au moment de l'envoi. Tout autre e-mail vise un compte. Seuls la
 -- récupération, le lien vers la nouvelle adresse et l'avis à l'ancienne gardent une adresse, en minuscules comme
--- celle du compte. Un e-mail d'alerte, et lui seul, est lié à son alerte.
+-- celle du compte. Un e-mail d'alerte, et lui seul, est lié à son alerte ; une réponse au support, et elle seule, à
+-- sa réponse.
 CREATE TABLE demande_email (
     id_demande_email      UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
     type_demande_email    VARCHAR(30)  NOT NULL,
@@ -295,37 +326,22 @@ CREATE TABLE demande_email (
         REFERENCES utilisateur (id_utilisateur) ON DELETE CASCADE,
     id_alerte             UUID         UNIQUE
         REFERENCES alerte (id_alerte) ON DELETE CASCADE,
+    id_reponse            UUID         UNIQUE
+        REFERENCES reponse_support (id_reponse) ON DELETE CASCADE,
     CONSTRAINT ck_demande_email_type CHECK (type_demande_email IN (
         'recuperation_mdp', 'deblocage', 'changement_email', 'avis_ancienne_adresse',
-        'nouvel_appareil', 'changement_mdp', 'alerte')),
+        'nouvel_appareil', 'changement_mdp', 'desactivation_double_auth', 'utilisation_code_secours',
+        'lien_double_auth', 'reponse_support', 'alerte')),
     CONSTRAINT ck_demande_email_essais CHECK (nb_essais_envoi BETWEEN 0 AND 5),
     CONSTRAINT ck_demande_email_compte CHECK (
-        (type_demande_email = 'recuperation_mdp') = (id_utilisateur IS NULL)),
+        (type_demande_email IN ('recuperation_mdp', 'reponse_support')) = (id_utilisateur IS NULL)),
     CONSTRAINT ck_demande_email_adresse CHECK (
         (type_demande_email IN ('recuperation_mdp', 'changement_email', 'avis_ancienne_adresse'))
         = (adresse_email_demande IS NOT NULL)),
     CONSTRAINT ck_demande_email_minuscules CHECK (adresse_email_demande = lower(adresse_email_demande)),
-    CONSTRAINT ck_demande_email_alerte CHECK ((type_demande_email = 'alerte') = (id_alerte IS NOT NULL))
-);
-
-CREATE TABLE demande_support (
-    id_demande      UUID          PRIMARY KEY DEFAULT gen_random_uuid(),
-    message_demande VARCHAR(5000) NOT NULL,
-    email_contact   VARCHAR(254),
-    statut_demande  VARCHAR(10)   NOT NULL DEFAULT 'envoyee',
-    id_utilisateur  UUID
-        REFERENCES utilisateur (id_utilisateur) ON DELETE CASCADE,
-    CONSTRAINT ck_demande_message CHECK (char_length(message_demande) >= 1),
-    CONSTRAINT ck_demande_contact CHECK (id_utilisateur IS NOT NULL OR email_contact IS NOT NULL),
-    CONSTRAINT ck_demande_statut CHECK (statut_demande IN ('envoyee', 'en_cours', 'resolue'))
-);
-
-CREATE TABLE reponse_support (
-    id_reponse      UUID          PRIMARY KEY DEFAULT gen_random_uuid(),
-    contenu_reponse VARCHAR(5000) NOT NULL,
-    id_demande      UUID          NOT NULL
-        REFERENCES demande_support (id_demande) ON DELETE CASCADE,
-    CONSTRAINT ck_reponse_contenu CHECK (char_length(contenu_reponse) >= 1)
+    CONSTRAINT ck_demande_email_alerte CHECK ((type_demande_email = 'alerte') = (id_alerte IS NOT NULL)),
+    CONSTRAINT ck_demande_email_reponse CHECK (
+        (type_demande_email = 'reponse_support') = (id_reponse IS NOT NULL))
 );
 
 -- 5. Index sur les clés étrangères et les recherches fréquentes
@@ -335,6 +351,7 @@ CREATE INDEX ix_jeton_utilisateur ON jeton (id_utilisateur);
 CREATE INDEX ix_appareil_utilisateur ON appareil (id_utilisateur);
 CREATE INDEX ix_session_utilisateur ON session (id_utilisateur);
 CREATE INDEX ix_evenement_utilisateur ON evenement_securite (id_utilisateur);
+CREATE INDEX ix_evenement_vise ON evenement_securite (id_utilisateur_vise);
 CREATE INDEX ix_evenement_date ON evenement_securite (date_evenement);
 CREATE INDEX ix_connexion_utilisateur ON connexion_bancaire (id_utilisateur);
 CREATE INDEX ix_categorie_utilisateur ON categorie (id_utilisateur);
@@ -350,22 +367,25 @@ CREATE INDEX ix_alerte_utilisateur ON alerte (id_utilisateur);
 CREATE INDEX ix_alerte_categorie ON alerte (id_categorie);
 CREATE INDEX ix_alerte_sac ON alerte (id_sac);
 CREATE INDEX ix_alerte_connexion ON alerte (id_connexion);
+CREATE INDEX ix_demande_utilisateur ON demande_support (id_utilisateur);
+CREATE INDEX ix_demande_statut_date ON demande_support (statut_demande, date_demande);
+CREATE INDEX ix_reponse_demande ON reponse_support (id_demande);
 CREATE INDEX ix_demande_email_utilisateur ON demande_email (id_utilisateur);
 CREATE INDEX ix_demande_email_essai ON demande_email (date_prochain_essai);
-CREATE INDEX ix_demande_utilisateur ON demande_support (id_utilisateur);
-CREATE INDEX ix_reponse_demande ON reponse_support (id_demande);
 
--- 6. Données de référence : les 8 types d'alerte (GR Notif)
+-- 6. Données de référence : les 10 types d'alerte (GR Notif)
 
 INSERT INTO type_alerte (code_type_alerte, libelle_type_alerte, est_desactivable) VALUES
-    ('budget_atteint',        'Budget d''une catégorie atteint',      TRUE),
-    ('nouvelle_suggestion',   'Nouvelle suggestion d''épargne',       TRUE),
-    ('objectif_sac_atteint',  'Objectif d''un sac atteint',           TRUE),
-    ('autorisation_bancaire', 'Autorisation bancaire à renouveler',   TRUE),
-    ('nouvel_appareil',       'Connexion depuis un nouvel appareil',  FALSE),
-    ('compte_bloque',         'Compte bloqué',                        FALSE),
-    ('changement_mdp',        'Changement de mot de passe',           FALSE),
-    ('changement_email',      'Changement d''adresse e-mail',         FALSE);
+    ('budget_atteint',            'Budget d''une catégorie atteint',             TRUE),
+    ('nouvelle_suggestion',       'Nouvelle suggestion d''épargne',              TRUE),
+    ('objectif_sac_atteint',      'Objectif d''un sac atteint',                  TRUE),
+    ('autorisation_bancaire',     'Autorisation bancaire à renouveler',          TRUE),
+    ('nouvel_appareil',           'Connexion depuis un nouvel appareil',         FALSE),
+    ('compte_bloque',             'Compte bloqué',                               FALSE),
+    ('changement_mdp',            'Changement de mot de passe',                  FALSE),
+    ('changement_email',          'Changement d''adresse e-mail',                FALSE),
+    ('desactivation_double_auth', 'Désactivation de la double authentification', FALSE),
+    ('utilisation_code_secours',  'Utilisation d''un code de secours',           FALSE);
 
 -- 7. Déclencheurs
 
@@ -443,11 +463,42 @@ BEGIN
 END;
 $$;
 
+-- SS §8 : le rôle d'un utilisateur ne change que par cette fonction, lancée avec un compte administrateur de
+-- PostgreSQL. Elle ne donne aucun droit de plus : elle s'exécute avec les droits de celui qui la lance, et
+-- l'application ne peut pas la lancer (section 8). Elle refuse un compte non confirmé et un rôle que le compte a
+-- déjà, et écrit le changement au journal de sécurité.
+CREATE FUNCTION fn_changer_role(adresse VARCHAR, nouveau_role VARCHAR) RETURNS void LANGUAGE plpgsql
+    SET search_path = public AS $$
+DECLARE
+    compte      UUID;
+    role_actuel VARCHAR;
+BEGIN
+    SELECT id_utilisateur, role_utilisateur INTO compte, role_actuel
+    FROM utilisateur
+    WHERE email_utilisateur = lower(adresse) AND email_confirme
+    FOR UPDATE;
+
+    IF compte IS NULL THEN
+        RAISE EXCEPTION 'Aucun compte confirmé n''utilise l''adresse %', adresse;
+    END IF;
+
+    IF role_actuel = nouveau_role THEN
+        RAISE EXCEPTION 'Ce compte a déjà le rôle %', nouveau_role;
+    END IF;
+
+    UPDATE utilisateur SET role_utilisateur = nouveau_role WHERE id_utilisateur = compte;
+
+    INSERT INTO evenement_securite (type_evenement, resultat_evenement, id_utilisateur)
+    VALUES ('changement_role', 'succes', compte);
+END;
+$$;
+
 -- 8. Utilisateur de base de données de l'application (SS §7)
 -- Il lit et écrit les données, mais ne peut ni supprimer de table ni modifier
 -- les types d'alerte. Son mot de passe se définit à part, jamais dans ce script.
 -- Il ne peut ni choisir ni changer le rôle d'un utilisateur : le rôle administrateur
--- ne s'attribue que depuis le serveur, avec un compte administrateur de PostgreSQL (SS §8 et §14).
+-- ne s'attribue que depuis le serveur, par la fonction fn_changer_role lancée avec un compte
+-- administrateur de PostgreSQL (SS §8 et §14). Il ne peut pas lancer cette fonction.
 -- Il ne peut qu'ajouter des événements au journal de sécurité, jamais les modifier
 -- ni les effacer (SS §11). Seule la fonction fn_effacer_vieux_evenements efface ceux de plus d'un an.
 
@@ -470,5 +521,6 @@ GRANT UPDATE (
     ON utilisateur TO walletflow_app;
 REVOKE EXECUTE ON FUNCTION fn_effacer_vieux_evenements() FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION fn_effacer_vieux_evenements() TO walletflow_app;
+REVOKE EXECUTE ON FUNCTION fn_changer_role(VARCHAR, VARCHAR) FROM PUBLIC;
 
 COMMIT;

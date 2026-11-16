@@ -1,6 +1,5 @@
 using System.Net;
 using System.Net.Http.Json;
-using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using Microsoft.AspNetCore.Hosting;
@@ -19,7 +18,7 @@ namespace WalletFlow.Tests.Api;
 // ne voyagent qu'en HTTPS. Le certificat est créé pour le test, et le client n'accepte que lui.
 public class CategoryRequestSizeLimitTests : IDisposable
 {
-    private readonly X509Certificate2 certificate = CreateThrowawayCertificate();
+    private readonly X509Certificate2 certificate = ThrowawayHttpsCertificate.Create();
     private readonly ApiFactoryInProduction api = new ApiFactoryInProduction();
 
     // Démarre la vraie API sur un port libre, en HTTPS avec le certificat du test.
@@ -34,22 +33,6 @@ public class CategoryRequestSizeLimitTests : IDisposable
     {
         api.Dispose();
         certificate.Dispose();
-    }
-
-    // Crée un certificat jetable pour 127.0.0.1, valable une heure, avec sa clé privée.
-    private static X509Certificate2 CreateThrowawayCertificate()
-    {
-        using var key = RSA.Create(2048);
-        var request = new CertificateRequest("CN=127.0.0.1", key, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
-        var alternativeNames = new SubjectAlternativeNameBuilder();
-        alternativeNames.AddIpAddress(IPAddress.Loopback);
-        request.CertificateExtensions.Add(alternativeNames.Build());
-        request.CertificateExtensions.Add(new X509EnhancedKeyUsageExtension(new OidCollection { new Oid("1.3.6.1.5.5.7.3.1") }, false));
-
-        using var selfSigned = request.CreateSelfSigned(DateTimeOffset.UtcNow.AddMinutes(-5), DateTimeOffset.UtcNow.AddHours(1));
-
-        // macOS ne sert en HTTPS qu'un certificat dont la clé est rangée avec lui : un passage par PKCS#12 l'y range.
-        return X509CertificateLoader.LoadPkcs12(selfSigned.Export(X509ContentType.Pkcs12), null);
     }
 
     // Crée un navigateur qui parle HTTPS à la vraie API, garde les cookies, et n'accepte que le certificat du test.

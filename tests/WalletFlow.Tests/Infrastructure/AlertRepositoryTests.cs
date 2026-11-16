@@ -79,7 +79,7 @@ public class AlertRepositoryTests
     // Le type de chaque alerte a le code de la table type_alerte, que remplit le script, et seuls les quatre premiers
     // peuvent être désactivés.
     [Fact]
-    public async Task TypesAreTheEightOfTheScriptWithTheirRule()
+    public async Task TypesAreTheTenOfTheScriptWithTheirRule()
     {
         await using var databaseContext = CreateDatabaseContext();
 

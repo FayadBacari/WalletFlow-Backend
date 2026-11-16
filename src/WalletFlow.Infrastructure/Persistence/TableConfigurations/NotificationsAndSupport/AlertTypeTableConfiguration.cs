@@ -13,7 +13,7 @@ public class AlertTypeTableConfiguration : IEntityTypeConfiguration<AlertType>
     {
         builder.ToTable("type_alerte");
 
-        // Les 8 types d'alerte sont insérés par le script SQL : leur code sert d'identifiant.
+        // Les 10 types d'alerte sont insérés par le script SQL : leur code sert d'identifiant.
         builder.HasKey(nameof(AlertType.Kind));
         builder.Property(nameof(AlertType.Kind)).HasColumnName("code_type_alerte")
             .HasConversion(AlertKindDatabaseCodes.Table.Converter)

@@ -34,6 +34,7 @@
 | date_expiration_jeton  |                  |
 | date_utilisation_jeton |                  |
 | nouvel_email           |                  |
+| nb_essais_jeton        |                  |
 | #id_utilisateur        | FK → UTILISATEUR |
 
 | APPAREIL        | Clé              |
@@ -57,6 +58,7 @@
 | date_evenement       |                               |
 | adresse_ip_evenement |                               |
 | #id_utilisateur      | FK → UTILISATEUR, facultative |
+| #id_utilisateur_vise | FK → UTILISATEUR, facultative |
 
 | CONNEXION_BANCAIRE           | Clé              |
 |------------------------------|------------------|
@@ -153,17 +155,18 @@
 | #id_sac           | FK → SAC, facultative, unique                |
 | #id_connexion     | FK → CONNEXION_BANCAIRE, facultative, unique |
 
-| DEMANDE_EMAIL         | Clé                              |
-|-----------------------|----------------------------------|
-| **id_demande_email**  | PK                               |
-| type_demande_email    |                                  |
-| adresse_email_demande |                                  |
-| adresse_ip_demande    |                                  |
-| date_demande_email    |                                  |
-| nb_essais_envoi       |                                  |
-| date_prochain_essai   |                                  |
-| #id_utilisateur       | FK → UTILISATEUR, facultative    |
-| #id_alerte            | FK → ALERTE, facultative, unique |
+| DEMANDE_EMAIL         | Clé                                       |
+|-----------------------|-------------------------------------------|
+| **id_demande_email**  | PK                                        |
+| type_demande_email    |                                           |
+| adresse_email_demande |                                           |
+| adresse_ip_demande    |                                           |
+| date_demande_email    |                                           |
+| nb_essais_envoi       |                                           |
+| date_prochain_essai   |                                           |
+| #id_utilisateur       | FK → UTILISATEUR, facultative             |
+| #id_alerte            | FK → ALERTE, facultative, unique          |
+| #id_reponse           | FK → REPONSE_SUPPORT, facultative, unique |
 
 | DEMANDE_SUPPORT | Clé                           |
 |-----------------|-------------------------------|
@@ -171,41 +174,45 @@
 | message_demande |                               |
 | email_contact   |                               |
 | statut_demande  |                               |
+| date_demande    |                               |
 | #id_utilisateur | FK → UTILISATEUR, facultative |
 
 | REPONSE_SUPPORT | Clé                  |
 |-----------------|----------------------|
 | **id_reponse**  | PK                   |
 | contenu_reponse |                      |
+| date_reponse    |                      |
 | #id_demande     | FK → DEMANDE_SUPPORT |
 
-| Relation           | Clé étrangère    | Référence          | Obligatoire  | Association  |
-|--------------------|------------------|--------------------|--------------|--------------|
-| CODE_SECOURS       | id_utilisateur   | UTILISATEUR        | Oui          | OBTENIR      |
-| JETON              | id_utilisateur   | UTILISATEUR        | Oui          | DEMANDER     |
-| APPAREIL           | id_utilisateur   | UTILISATEUR        | Oui          | UTILISER     |
-| SESSION            | id_utilisateur   | UTILISATEUR        | Oui          | OUVRIR       |
-| EVENEMENT_SECURITE | id_utilisateur   | UTILISATEUR        | Non          | TRACER       |
-| CONNEXION_BANCAIRE | id_utilisateur   | UTILISATEUR        | Oui          | AUTORISER    |
-| COMPTE_BANCAIRE    | id_connexion     | CONNEXION_BANCAIRE | Oui          | FOURNIR      |
-| CATEGORIE          | id_utilisateur   | UTILISATEUR        | Oui          | DISPOSER     |
-| TRANSACTION        | id_compte        | COMPTE_BANCAIRE    | Oui          | CONTENIR     |
-| TRANSACTION        | id_categorie     | CATEGORIE          | Oui          | CLASSER      |
-| REGLE_CLASSEMENT   | id_categorie     | CATEGORIE          | Oui          | VISER        |
-| SAC                | id_utilisateur   | UTILISATEUR        | Oui          | DETENIR      |
-| SUGGESTION         | id_utilisateur   | UTILISATEUR        | Oui          | RECEVOIR     |
-| SUGGESTION         | id_categorie     | CATEGORIE          | Non          | PORTER_SUR   |
-| MOUVEMENT_SAC      | id_sac_depart    | SAC                | Non          | DEBITER      |
-| MOUVEMENT_SAC      | id_sac_arrivee   | SAC                | Non          | CREDITER     |
-| MOUVEMENT_SAC      | id_suggestion    | SUGGESTION         | Non (unique) | GENERER      |
-| PARAMETRER         | id_utilisateur   | UTILISATEUR        | Oui          | PARAMETRER   |
-| PARAMETRER         | code_type_alerte | TYPE_ALERTE        | Oui          | PARAMETRER   |
-| ALERTE             | id_utilisateur   | UTILISATEUR        | Oui          | PREVENIR     |
-| ALERTE             | code_type_alerte | TYPE_ALERTE        | Oui          | CORRESPONDRE |
-| ALERTE             | id_categorie     | CATEGORIE          | Non          | SURVEILLER   |
-| ALERTE             | id_sac           | SAC                | Non (unique) | ATTEINDRE    |
-| ALERTE             | id_connexion     | CONNEXION_BANCAIRE | Non (unique) | RAPPELER     |
-| DEMANDE_EMAIL      | id_utilisateur   | UTILISATEUR        | Non          | ATTENDRE     |
-| DEMANDE_EMAIL      | id_alerte        | ALERTE             | Non (unique) | ANNONCER     |
-| DEMANDE_SUPPORT    | id_utilisateur   | UTILISATEUR        | Non          | EMETTRE      |
-| REPONSE_SUPPORT    | id_demande       | DEMANDE_SUPPORT    | Oui          | REPONDRE     |
+| Relation           | Clé étrangère       | Référence          | Obligatoire  | Association  |
+|--------------------|---------------------|--------------------|--------------|--------------|
+| CODE_SECOURS       | id_utilisateur      | UTILISATEUR        | Oui          | OBTENIR      |
+| JETON              | id_utilisateur      | UTILISATEUR        | Oui          | DEMANDER     |
+| APPAREIL           | id_utilisateur      | UTILISATEUR        | Oui          | UTILISER     |
+| SESSION            | id_utilisateur      | UTILISATEUR        | Oui          | OUVRIR       |
+| EVENEMENT_SECURITE | id_utilisateur      | UTILISATEUR        | Non          | TRACER       |
+| EVENEMENT_SECURITE | id_utilisateur_vise | UTILISATEUR        | Non          | CONCERNER    |
+| CONNEXION_BANCAIRE | id_utilisateur      | UTILISATEUR        | Oui          | AUTORISER    |
+| COMPTE_BANCAIRE    | id_connexion        | CONNEXION_BANCAIRE | Oui          | FOURNIR      |
+| CATEGORIE          | id_utilisateur      | UTILISATEUR        | Oui          | DISPOSER     |
+| TRANSACTION        | id_compte           | COMPTE_BANCAIRE    | Oui          | CONTENIR     |
+| TRANSACTION        | id_categorie        | CATEGORIE          | Oui          | CLASSER      |
+| REGLE_CLASSEMENT   | id_categorie        | CATEGORIE          | Oui          | VISER        |
+| SAC                | id_utilisateur      | UTILISATEUR        | Oui          | DETENIR      |
+| SUGGESTION         | id_utilisateur      | UTILISATEUR        | Oui          | RECEVOIR     |
+| SUGGESTION         | id_categorie        | CATEGORIE          | Non          | PORTER_SUR   |
+| MOUVEMENT_SAC      | id_sac_depart       | SAC                | Non          | DEBITER      |
+| MOUVEMENT_SAC      | id_sac_arrivee      | SAC                | Non          | CREDITER     |
+| MOUVEMENT_SAC      | id_suggestion       | SUGGESTION         | Non (unique) | GENERER      |
+| PARAMETRER         | id_utilisateur      | UTILISATEUR        | Oui          | PARAMETRER   |
+| PARAMETRER         | code_type_alerte    | TYPE_ALERTE        | Oui          | PARAMETRER   |
+| ALERTE             | id_utilisateur      | UTILISATEUR        | Oui          | PREVENIR     |
+| ALERTE             | code_type_alerte    | TYPE_ALERTE        | Oui          | CORRESPONDRE |
+| ALERTE             | id_categorie        | CATEGORIE          | Non          | SURVEILLER   |
+| ALERTE             | id_sac              | SAC                | Non (unique) | ATTEINDRE    |
+| ALERTE             | id_connexion        | CONNEXION_BANCAIRE | Non (unique) | RAPPELER     |
+| DEMANDE_EMAIL      | id_utilisateur      | UTILISATEUR        | Non          | ATTENDRE     |
+| DEMANDE_EMAIL      | id_alerte           | ALERTE             | Non (unique) | ANNONCER     |
+| DEMANDE_EMAIL      | id_reponse          | REPONSE_SUPPORT    | Non (unique) | TRANSMETTRE  |
+| DEMANDE_SUPPORT    | id_utilisateur      | UTILISATEUR        | Non          | EMETTRE      |
+| REPONSE_SUPPORT    | id_demande          | DEMANDE_SUPPORT    | Oui          | REPONDRE     |

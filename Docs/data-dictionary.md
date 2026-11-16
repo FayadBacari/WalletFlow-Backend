@@ -123,23 +123,27 @@ Ces données sont techniques. Elles figurent dans le MCD comme les autres entit�
 
 ### 4.2 Jetons (liens envoyés par e-mail)
 
-| Code                   | Désignation                  | Type | Taille | Oblig. | Source         |
-|------------------------|------------------------------|------|--------|--------|----------------|
-| id_jeton               | Identifiant du jeton         | AN   | 36     | Oui    | SS §2          |
-| type_jeton             | Usage du jeton               | AN   | 30     | Oui    | GR Auth, SS §2 |
-| empreinte_jeton        | Empreinte du jeton           | AN   | 64     | Oui    | SS §2          |
-| date_expiration_jeton  | Date d'expiration du jeton   | DH   | —      | Oui    | GR Auth, SS §2 |
-| date_utilisation_jeton | Date d'utilisation du jeton  | DH   | —      | Non    | SS §2          |
-| nouvel_email           | Nouvelle adresse à confirmer | AN   | 254    | Non    | GR Perso       |
+| Code                   | Désignation                        | Type | Taille | Oblig. | Source         |
+|------------------------|------------------------------------|------|--------|--------|----------------|
+| id_jeton               | Identifiant du jeton               | AN   | 36     | Oui    | SS §2          |
+| type_jeton             | Usage du jeton                     | AN   | 30     | Oui    | GR Auth, SS §2 |
+| empreinte_jeton        | Empreinte du jeton                 | AN   | 64     | Oui    | SS §2          |
+| date_expiration_jeton  | Date d'expiration du jeton         | DH   | —      | Oui    | GR Auth, SS §2 |
+| date_utilisation_jeton | Date d'utilisation du jeton        | DH   | —      | Non    | SS §2          |
+| nouvel_email           | Nouvelle adresse à confirmer       | AN   | 254    | Non    | GR Perso       |
+| nb_essais_jeton        | Essais du mot de passe sur ce lien | N    | 1      | Oui    | GR Auth, SS §2 |
 
 **Contraintes**
 
 - `id_jeton` : UUID.
-- `type_jeton` : `confirmation_inscription`, `recuperation_mdp`, `deblocage` ou `changement_email`.
+- `type_jeton` : `confirmation_inscription`, `recuperation_mdp`, `deblocage`, `changement_email` ou `desactivation_double_auth`.
 - `empreinte_jeton` : SHA-256, unique. Le jeton lui-même n'est jamais stocké.
-- `date_expiration_jeton` : création + 24 h (inscription, changement d'e-mail), + 30 min (récupération), + 1 h (déblocage).
+- `date_expiration_jeton` : création + 24 h (inscription, changement d'e-mail, désactivation de la double authentification), + 30 min (récupération), + 1 h (déblocage).
 - `date_utilisation_jeton` : vide tant que le jeton n'a pas servi. Usage unique.
 - `nouvel_email` : seulement pour le type `changement_email`.
+- `nb_essais_jeton` : de 0 à 5, 0 par défaut, seulement pour le type `desactivation_double_auth`. Chaque essai compte avant la vérification du mot de passe ; après 5 mauvais mots de passe, le lien ne sert plus (GR Auth).
+
+Seul l'administrateur fait envoyer le lien `desactivation_double_auth` (GR Admin). Il ne sert que si le mot de passe n'a pas changé depuis au moins 7 jours, d'après le journal de sécurité (GR Auth).
 
 ### 4.3 Appareils
 
@@ -186,6 +190,8 @@ Ces données sont techniques. Elles figurent dans le MCD comme les autres entit�
 - `adresse_ip_evenement` : IPv4 ou IPv6. Effacée quand le compte de l'utilisateur est supprimé.
 
 Un événement n'est pas toujours rattaché à un utilisateur : une connexion échouée avec une adresse inconnue est enregistrée quand même. Quand un compte est supprimé, ses événements restent, mais sans lien vers l'utilisateur ni adresse IP.
+
+Une action de l'administrateur (`action_admin`) est rattachée à l'administrateur, et liée aussi au compte sur lequel il agit (SS §8, §11). Aucun autre événement n'a ce lien, qui disparaît quand ce compte est effacé. Ce lien est l'association CONCERNER du MCD. Une recherche de compte est notée même quand aucun compte n'a cette adresse : l'action n'a alors pas de compte visé.
 
 
 ## 5. Comptes bancaires et transactions
@@ -366,16 +372,18 @@ Une suggestion proposée est effacée au calcul du mois suivant, ou quand sa cat
 - `libelle_type_alerte` : 1 à 100 caractères.
 - `est_desactivable` : faux pour les alertes de sécurité.
 
-| code_type_alerte      | Libellé                             | Désactivable |
-|-----------------------|-------------------------------------|--------------|
-| budget_atteint        | Budget d'une catégorie atteint      | Oui          |
-| nouvelle_suggestion   | Nouvelle suggestion d'épargne       | Oui          |
-| objectif_sac_atteint  | Objectif d'un sac atteint           | Oui          |
-| autorisation_bancaire | Autorisation bancaire à renouveler  | Oui          |
-| nouvel_appareil       | Connexion depuis un nouvel appareil | Non          |
-| compte_bloque         | Compte bloqué                       | Non          |
-| changement_mdp        | Changement de mot de passe          | Non          |
-| changement_email      | Changement d'adresse e-mail         | Non          |
+| code_type_alerte          | Libellé                                     | Désactivable |
+|---------------------------|---------------------------------------------|--------------|
+| budget_atteint            | Budget d'une catégorie atteint              | Oui          |
+| nouvelle_suggestion       | Nouvelle suggestion d'épargne               | Oui          |
+| objectif_sac_atteint      | Objectif d'un sac atteint                   | Oui          |
+| autorisation_bancaire     | Autorisation bancaire à renouveler          | Oui          |
+| nouvel_appareil           | Connexion depuis un nouvel appareil         | Non          |
+| compte_bloque             | Compte bloqué                               | Non          |
+| changement_mdp            | Changement de mot de passe                  | Non          |
+| changement_email          | Changement d'adresse e-mail                 | Non          |
+| desactivation_double_auth | Désactivation de la double authentification | Non          |
+| utilisation_code_secours  | Utilisation d'un code de secours            | Non          |
 
 ### 9.2 Préférence d'alerte
 
@@ -428,8 +436,8 @@ Une alerte est liée à son utilisateur et à son type, et selon son type à une
 **Contraintes**
 
 - `id_demande_email` : UUID.
-- `type_demande_email` : `recuperation_mdp`, `deblocage`, `changement_email`, `avis_ancienne_adresse`, `nouvel_appareil`, `changement_mdp` ou `alerte`.
-- `adresse_email_demande` : seulement quand l'e-mail ne part pas à l'adresse actuelle du compte : l'adresse saisie pour une récupération, la nouvelle adresse à confirmer, ou l'ancienne adresse prévenue. En minuscules, comme l'adresse d'un compte.
+- `type_demande_email` : `recuperation_mdp`, `deblocage`, `changement_email`, `avis_ancienne_adresse`, `nouvel_appareil`, `changement_mdp`, `desactivation_double_auth`, `utilisation_code_secours`, `lien_double_auth`, `reponse_support` ou `alerte`.
+- `adresse_email_demande` : seulement quand l'e-mail ne part pas à l'adresse actuelle du compte : l'adresse saisie pour une récupération, la nouvelle adresse à confirmer, ou l'ancienne adresse prévenue. En minuscules, comme l'adresse d'un compte. Une réponse au support lit la sienne dans sa demande.
 - `adresse_ip_demande` : IPv4 ou IPv6, celle de la requête qui a demandé l'e-mail, pour le journal de sécurité.
 - `date_demande_email` : renseignée automatiquement.
 - `nb_essais_envoi` : de 0 à 5, 0 par défaut.
@@ -437,7 +445,7 @@ Une alerte est liée à son utilisateur et à son type, et selon son type à une
 
 La file d'e-mails est gardée en base : un redémarrage du serveur ne perd aucune demande. Elle ne contient aucun secret : chaque lien est créé au moment de l'envoi. Une demande est effacée dès que l'e-mail est parti, ou après son 5e échec, noté dans le journal technique (SS §9).
 
-Une récupération ne vise aucun compte : elle est mise dans la file avec l'adresse saisie, avant de savoir si un compte l'utilise. Toute autre demande vise un compte. Une demande de type `alerte` est liée à son alerte (§9.3). Ces liens sont les associations ATTENDRE et ANNONCER du MCD.
+Une récupération ne vise aucun compte : elle est mise dans la file avec l'adresse saisie, avant de savoir si un compte l'utilise. Une réponse au support n'en vise pas non plus : elle est liée à sa réponse (§10.2), et part à l'adresse lue dans la demande au moment de l'envoi, celle du compte ou celle du visiteur. Toute autre demande vise un compte. Une demande de type `alerte` est liée à son alerte (§9.3). Ces liens sont les associations ATTENDRE, ANNONCER et TRANSMETTRE du MCD.
 
 
 ## 10. Support
@@ -450,13 +458,15 @@ Une récupération ne vise aucun compte : elle est mise dans la file avec l'adre
 | message_demande | Message de la demande     | AN   | 5000   | Oui    | GR Admin, SS §5, §8 |
 | email_contact   | Adresse où répondre       | AN   | 254    | Non    | GR Admin            |
 | statut_demande  | État de la demande        | AN   | 10     | Oui    | GR Admin            |
+| date_demande    | Date de la demande        | DH   | —      | Oui    | GR Admin            |
 
 **Contraintes**
 
 - `id_demande` : UUID.
-- `message_demande` : 1 à 5 000 caractères. Toujours affiché comme du texte, y compris dans l'interface d'administration.
+- `message_demande` : 1 à 5 000 caractères, sans caractère invisible autre que le retour à la ligne. Toujours affiché comme du texte, y compris dans l'interface d'administration.
 - `email_contact` : obligatoire si la demande vient d'un visiteur.
-- `statut_demande` : `envoyee`, `en_cours` ou `resolue`, `envoyee` par défaut.
+- `statut_demande` : `envoyee`, `en_cours` ou `resolue`, `envoyee` par défaut. Passe à `en_cours` à chaque réponse, même depuis `resolue` ; l'administrateur la passe à `resolue`, avec ou sans réponse.
+- `date_demande` : renseignée automatiquement. La demande est effacée un an après, avec ses réponses (GR Admin).
 
 ### 10.2 Réponse au support
 
@@ -464,11 +474,15 @@ Une récupération ne vise aucun compte : elle est mise dans la file avec l'adre
 |-----------------|---------------------------|------|--------|--------|----------|
 | id_reponse      | Identifiant de la réponse | AN   | 36     | Oui    | SS §4    |
 | contenu_reponse | Texte de la réponse       | AN   | 5000   | Oui    | GR Admin |
+| date_reponse    | Date de la réponse        | DH   | —      | Oui    | GR Admin |
 
 **Contraintes**
 
 - `id_reponse` : UUID.
-- `contenu_reponse` : 1 à 5 000 caractères.
+- `contenu_reponse` : 1 à 5 000 caractères, sans caractère invisible autre que le retour à la ligne.
+- `date_reponse` : renseignée automatiquement.
+
+Seul l'administrateur écrit une réponse. Elle part par e-mail, avec son texte, à l'adresse du compte ou à l'adresse de contact du visiteur (GR Admin).
 
 
 ## 11. Données calculées
@@ -489,7 +503,7 @@ Ces données ne sont **pas stockées** : elles sont recalculées à chaque affic
 | duree_blocage            | 15 minutes × 2^(nb_blocages − 1), 24 heures au plus       | GR Auth        |
 | etat_compte              | État déduit de trois données (voir ci-dessous)            | GR Auth, SS §8 |
 | date_effacement          | date_demande_suppression + 30 jours                       | GR Suppression |
-| statistiques_admin       | Nombre d'utilisateurs…                                    | GR Admin       |
+| statistiques_admin       | Comptes par état, connexions actives, demandes par état   | GR Admin       |
 
 **Précisions**
 
@@ -498,7 +512,8 @@ Ces données ne sont **pas stockées** : elles sont recalculées à chaque affic
 - `depenses_categorie_mois` : total net de la catégorie sur le mois, quand il est négatif : un remboursement réduit la dépense. Un total positif est un revenu.
 - `moyenne_categorie_3_mois` : porte sur les 3 mois complets avant le mois en cours, divisés par 3, et n'existe qu'avec 3 mois complets d'historique. Sert aussi à comparer le mois en cours avec les 3 derniers mois, catégorie par catégorie (GR Dépenses).
 - `taux_budget` : arrondi vers le bas : 80 % n'est atteint qu'une fois 80 % vraiment dépensés.
-- `etat_compte` : vaut `non_confirme`, `actif`, `bloque` ou `en_suppression`, d'après email_confirme, date_fin_blocage et date_demande_suppression.
+- `etat_compte` : vaut `non_confirme`, `actif`, `bloque` ou `en_suppression`, d'après email_confirme, date_fin_blocage et date_demande_suppression, dans cet ordre : `en_suppression` dès qu'une suppression est demandée, sinon `non_confirme`, sinon `bloque` tant que date_fin_blocage n'est pas passée, sinon `actif`.
+- `statistiques_admin` : les comptes par état (`etat_compte`), les connexions bancaires actives et les demandes de support par état. Aucun chiffre ne porte sur l'argent (GR Admin).
 
 
 ## 12. Paramètres de l'application
@@ -515,6 +530,9 @@ Ces valeurs sont les mêmes pour tous les utilisateurs. Elles relèvent de la co
 | Validité du lien de récupération             | 30 minutes                       | GR Auth        |
 | Validité des liens de confirmation           | 24 heures (inscription, e-mail)  | SS §2          |
 | Validité du lien de déblocage                | 1 heure                          | SS §2          |
+| Lien de désactivation de la double auth.     | 24 heures                        | SS §2          |
+| Mot de passe inchangé avant ce lien          | 7 jours au moins                 | GR Auth        |
+| Mauvais mots de passe sur ce lien            | 5, puis il est annulé            | GR Auth        |
 | Nombre de codes de secours                   | 10                               | GR Auth, SS §2 |
 | Durée d'une autorisation bancaire            | 180 jours au plus                | GR Comptes     |
 | Rappel avant la fin de l'autorisation        | 7 jours                          | GR Comptes     |
@@ -524,6 +542,7 @@ Ces valeurs sont les mêmes pour tous les utilisateurs. Elles relèvent de la co
 | Sacs par utilisateur                         | 100 au plus                      | SS §6          |
 | Déplacements d'argent par utilisateur        | 1 000 sur 24 heures glissantes   | SS §6          |
 | Lectures coûteuses par session               | 60 par minute                    | SS §6          |
+| Demandes de support par utilisateur          | 10 sur 24 heures glissantes      | SS §6          |
 | Règles de classement communes                | Liste fournie par l'application  | GR Dépenses    |
 | Seuil de dépassement d'une catégorie         | Moyenne sur 3 mois + 20 %        | GR Sacs        |
 | Historique minimal (suggestions par moyenne) | 3 mois                           | GR Sacs        |
@@ -536,6 +555,7 @@ Ces valeurs sont les mêmes pour tous les utilisateurs. Elles relèvent de la co
 | Attente entre deux essais d'envoi            | 1 min, 5 min, 30 min, 2 h        | SS §9          |
 | Conservation d'une alerte de budget          | 2 mois après son mois            | SS §7          |
 | Conservation d'une alerte de suggestion      | 2 mois après son mois            | SS §7          |
+| Conservation d'une demande de support        | 1 an après son envoi             | GR Admin       |
 | Durée d'une période de graphique             | 10 ans au plus                   | SS §6          |
 | Délai avant effacement d'un compte           | 30 jours                         | GR Suppression |
 | Effacement d'un compte non confirmé          | À l'expiration de son lien       | GR Auth        |

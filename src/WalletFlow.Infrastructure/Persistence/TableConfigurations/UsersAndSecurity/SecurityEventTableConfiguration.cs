@@ -24,11 +24,18 @@ public class SecurityEventTableConfiguration : IEntityTypeConfiguration<Security
         builder.Property(nameof(SecurityEvent.OccurredAt)).HasColumnName("date_evenement");
         builder.Property(nameof(SecurityEvent.IpAddress)).HasColumnName("adresse_ip_evenement");
         builder.Property(nameof(SecurityEvent.UserId)).HasColumnName("id_utilisateur");
+        builder.Property(nameof(SecurityEvent.TargetUserId)).HasColumnName("id_utilisateur_vise");
 
         // Un événement reste dans le journal quand son utilisateur est supprimé,
         // mais perd le lien vers lui (ON DELETE SET NULL).
         builder.HasOne<User>().WithMany()
             .HasForeignKey(nameof(SecurityEvent.UserId))
+            .OnDelete(DeleteBehavior.SetNull);
+
+        // Une action de l'administrateur reste aussi quand le compte qu'elle vise est effacé, sans le lien vers lui
+        // (ON DELETE SET NULL).
+        builder.HasOne<User>().WithMany()
+            .HasForeignKey(nameof(SecurityEvent.TargetUserId))
             .OnDelete(DeleteBehavior.SetNull);
     }
 }

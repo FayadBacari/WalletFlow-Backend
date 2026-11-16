@@ -87,7 +87,7 @@ public class FrenchAlertEmails : IAlertEmails
         var body = $"""
             Bonjour,
 
-            L'autorisation qui permet à WalletFlow de lire tes comptes chez « {authorization.BankName} » est à renouveler. Sa date de fin est le {WriteDay(endDay)}.
+            L'autorisation qui permet à WalletFlow de lire tes comptes chez « {authorization.BankName} » est à renouveler. Sa date de fin est le {FrenchDates.WriteDay(endDay)}.
 
             Pour continuer à voir tes soldes et tes opérations, ouvre WalletFlow et renouvelle-la. Cet e-mail ne contient aucun lien : ne renouvelle jamais ton autorisation depuis un lien reçu par e-mail.
 
@@ -110,13 +110,5 @@ public class FrenchAlertEmails : IAlertEmails
         var preposition = "aeiou".Contains(monthName[0]) ? "d'" : "de ";
 
         return $"{preposition}{WriteMonth(month)}";
-    }
-
-    // Écrit le jour : « 1er novembre 2026 », « 22 novembre 2026 ».
-    private static string WriteDay(DateOnly day)
-    {
-        var dayNumber = day.Day == 1 ? "1er" : day.Day.ToString(French);
-
-        return $"{dayNumber} {French.DateTimeFormat.GetMonthName(day.Month)} {day.Year}";
     }
 }

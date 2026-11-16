@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using WalletFlow.Application.Security;
 using WalletFlow.Domain.BagsAndSuggestions;
+using WalletFlow.Domain.NotificationsAndSupport;
 using WalletFlow.Infrastructure.Persistence.Repositories;
 using static WalletFlow.Tests.Infrastructure.BankTestRows;
 using static WalletFlow.Tests.Infrastructure.LocalTestDatabase;
@@ -28,6 +29,10 @@ public class ResourceOwnershipRepositoryTests
         var otherSuggestion = new SavingsSuggestion { Rule = SuggestionRule.UnallocatedMoney, Month = new DateOnly(2026, 10, 1), MonthlySavingsInCents = 500, UserId = otherUser.Id };
         databaseContext.Bags.AddRange(bag, otherBag);
         databaseContext.SavingsSuggestions.AddRange(suggestion, otherSuggestion);
+        var supportRequest = SupportRequest.FromUser(user.Id, "Bonjour", Now);
+        var otherSupportRequest = SupportRequest.FromUser(otherUser.Id, "Bonjour", Now);
+        var visitorSupportRequest = SupportRequest.FromVisitor("visiteur@exemple.test", "Bonjour", Now);
+        databaseContext.SupportRequests.AddRange(supportRequest, otherSupportRequest, visitorSupportRequest);
         await databaseContext.SaveChangesAsync();
         var repository = new ResourceOwnershipRepository(databaseContext);
 
@@ -39,6 +44,11 @@ public class ResourceOwnershipRepositoryTests
         Assert.Equal(otherUser.Id, await repository.FindOwnerAsync(OwnedResource.Bag, otherBag.Id));
         Assert.Equal(user.Id, await repository.FindOwnerAsync(OwnedResource.Suggestion, suggestion.Id));
         Assert.Equal(otherUser.Id, await repository.FindOwnerAsync(OwnedResource.Suggestion, otherSuggestion.Id));
+        Assert.Equal(user.Id, await repository.FindOwnerAsync(OwnedResource.SupportRequest, supportRequest.Id));
+        Assert.Equal(otherUser.Id, await repository.FindOwnerAsync(OwnedResource.SupportRequest, otherSupportRequest.Id));
+
+        // La demande d'un visiteur n'est à personne : la lire depuis un compte ne laisse donc aucune trace au journal.
+        Assert.Null(await repository.FindOwnerAsync(OwnedResource.SupportRequest, visitorSupportRequest.Id));
     }
 
     // Un identifiant inconnu, ou celui d'une ressource d'une autre sorte, n'a pas de propriétaire.
@@ -59,5 +69,6 @@ public class ResourceOwnershipRepositoryTests
         Assert.Null(await repository.FindOwnerAsync(OwnedResource.Bag, account.Id));
         Assert.Null(await repository.FindOwnerAsync(OwnedResource.Suggestion, account.Id));
         Assert.Null(await repository.FindOwnerAsync(OwnedResource.Transaction, connection.Id));
+        Assert.Null(await repository.FindOwnerAsync(OwnedResource.SupportRequest, account.Id));
     }
 }

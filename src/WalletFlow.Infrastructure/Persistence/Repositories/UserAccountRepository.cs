@@ -119,12 +119,14 @@ public class UserAccountRepository : IUserAccountRepository
 
     // Prépare l'effacement des liens de récupération et de déblocage du compte : ils sont partis vers l'ancienne adresse (SS §2).
     // EF Core suit ces liens : si l'un d'eux vient de servir ou d'être remplacé, l'enregistrement échoue et le passage recommence.
-    public async Task PrepareRecoveryAndUnlockLinksRemovalAsync(Guid accountId)
+    public async Task PrepareOldAddressLinksRemovalAsync(Guid accountId)
     {
         var links = await databaseContext.EmailTokens
             .Where(token =>
                 token.UserId == accountId
-                && (token.Type == EmailTokenType.PasswordRecovery || token.Type == EmailTokenType.AccountUnlock))
+                && (token.Type == EmailTokenType.PasswordRecovery
+                    || token.Type == EmailTokenType.AccountUnlock
+                    || token.Type == EmailTokenType.TwoFactorDeactivation))
             .ToListAsync();
 
         databaseContext.EmailTokens.RemoveRange(links);

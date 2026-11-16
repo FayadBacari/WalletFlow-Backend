@@ -42,11 +42,15 @@ public class EmailRequest
         init => nextTryAt = value;
     }
 
-    // id_utilisateur : vide pour une récupération, qui entre dans la file avant de savoir si l'adresse a un compte.
+    // id_utilisateur : vide pour une récupération, qui entre dans la file avant de savoir si l'adresse a un compte,
+    // et pour une réponse au support, qui lit son adresse dans sa demande.
     public Guid? UserId { get; init; }
 
     // id_alerte : seulement pour un e-mail d'alerte, lié à l'alerte qu'il annonce.
     public Guid? AlertId { get; init; }
+
+    // id_reponse : seulement pour une réponse au support, liée à la réponse qu'elle envoie.
+    public Guid? SupportResponseId { get; init; }
 
     // Le visiteur demande à retrouver son mot de passe, avec cette adresse, déjà vérifiée et en minuscules (GR Auth).
     public static EmailRequest ForPasswordRecovery(string emailAddress, IPAddress? ipAddress, DateTime now)
@@ -82,6 +86,38 @@ public class EmailRequest
     public static EmailRequest ForPasswordChange(Guid userId, IPAddress? ipAddress, DateTime now)
     {
         return Create(EmailRequestType.PasswordChange, userId, null, ipAddress, now);
+    }
+
+    // La double authentification du compte vient d'être désactivée (GR Notif).
+    public static EmailRequest ForTwoFactorDeactivation(Guid userId, IPAddress? ipAddress, DateTime now)
+    {
+        return Create(EmailRequestType.TwoFactorDeactivation, userId, null, ipAddress, now);
+    }
+
+    // Un code de secours du compte vient de servir (GR Notif).
+    public static EmailRequest ForBackupCodeUse(Guid userId, IPAddress? ipAddress, DateTime now)
+    {
+        return Create(EmailRequestType.BackupCodeUse, userId, null, ipAddress, now);
+    }
+
+    // L'administrateur fait envoyer au compte le lien qui désactive sa double authentification (GR Admin).
+    public static EmailRequest ForTwoFactorDeactivationLink(Guid userId, IPAddress? ipAddress, DateTime now)
+    {
+        return Create(EmailRequestType.TwoFactorDeactivationLink, userId, null, ipAddress, now);
+    }
+
+    // L'administrateur vient d'écrire cette réponse. Elle ne vise aucun compte, et ne garde aucune adresse : elle part à
+    // l'adresse lue dans sa demande au moment de l'envoi, celle du compte ou celle du visiteur (DD §9.4).
+    public static EmailRequest ForSupportResponse(SupportResponse response, IPAddress? ipAddress)
+    {
+        return new EmailRequest
+        {
+            Type = EmailRequestType.SupportResponse,
+            SupportResponseId = response.Id,
+            IpAddress = ipAddress,
+            RequestedAt = response.SentAt,
+            NextTryAt = response.SentAt
+        };
     }
 
     // Une alerte vient d'être créée pour l'utilisateur (DD §9.3). Aucune requête ne la demande : elle n'a pas d'adresse IP.

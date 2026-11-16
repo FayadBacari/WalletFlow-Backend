@@ -72,16 +72,18 @@ L'objectif est de fermer tous les axes d'attaque réalistes pour une application
 - Un code vaut pour la période de 30 secondes en cours, la précédente et la suivante, et ne sert qu'une seule fois.
 - Après le bon mot de passe, la connexion attend le code 5 minutes au plus, sans ouvrir de session. 5 mauvais codes obligent à recommencer la connexion.
 - Le secret est chiffré en AES-256-GCM. Sa clé est rangée avec les autres secrets (§7).
+- Si l'utilisateur a perdu son téléphone et ses codes de secours, seul l'administrateur peut faire envoyer à l'adresse du compte un lien qui désactive la double authentification (règle de gestion). Ce lien demande le mot de passe, et ne marche que si celui-ci n'a pas changé depuis au moins 7 jours, d'après le journal (§11) : un voleur de la boîte mail qui vient de réinitialiser le mot de passe ne peut pas s'en servir. Chaque essai du mot de passe compte avant sa vérification : après 5 mauvais mots de passe, le lien est annulé, et il faut en redemander un au support. Un voleur de la boîte mail ne peut donc pas essayer plus de 5 mots de passe par lien, même depuis plusieurs adresses IP à la fois. La désactivation ferme toutes les sessions du compte, et une alerte de sécurité part (§9).
 
 ### Liens envoyés par e-mail (jetons)
-Tous les liens (confirmation, récupération, déblocage, changement d'e-mail) suivent les mêmes règles :
+Tous les liens (confirmation, récupération, déblocage, changement d'e-mail, désactivation de la double authentification) suivent les mêmes règles :
 - jeton aléatoire d'au moins 128 bits, généré par un générateur cryptographique ;
 - seule son empreinte (SHA-256) est stockée en base, jamais le jeton lui-même ;
 - usage unique, et invalidé dès qu'un nouveau jeton du même type est demandé ;
 - le lien ouvre une page avec un bouton de confirmation : l'action n'a lieu qu'au clic. Sinon, les antivirus de messagerie qui ouvrent les liens automatiquement « consomment » le jeton à la place de l'utilisateur ;
 - la page de confirmation de l'inscription demande aussi le mot de passe : ouvrir le lien sans le connaître n'active rien ;
 - la page de confirmation d'un changement d'adresse demande aussi le mot de passe : une faute de frappe ne donne pas le compte à un inconnu ;
-- confirmer une nouvelle adresse annule les liens de récupération et de déblocage encore valables : ils sont partis vers l'ancienne.
+- la page de désactivation de la double authentification demande aussi le mot de passe : la boîte mail seule ne suffit pas ;
+- confirmer une nouvelle adresse annule les liens de récupération, de déblocage et de désactivation de la double authentification encore valables : ils sont partis vers l'ancienne.
 
 | Lien                                  | Durée de validité             |
 |---------------------------------------|-------------------------------|
@@ -89,6 +91,7 @@ Tous les liens (confirmation, récupération, déblocage, changement d'e-mail) s
 | Récupération du mot de passe          | 30 minutes (règle de gestion) |
 | Déblocage du compte                   | 1 heure                       |
 | Confirmation d'un changement d'e-mail | 24 heures                     |
+| Désactivation de la double auth.      | 24 heures                     |
 
 ### Actions sensibles
 Ces actions redemandent le mot de passe, même si l'utilisateur est déjà connecté :
@@ -145,7 +148,7 @@ Toute donnée est validée **côté serveur**, même si l'interface la valide d�
 | Nom de compte, de sac ou de catégorie | 1 à 50 caractères                                                                                            |
 | Date d'une transaction                | À partir du 01/01/2000                                                                                       |
 | Adresse e-mail                        | Format valide, 254 caractères au plus                                                                        |
-| Message au support                    | 1 à 5 000 caractères                                                                                         |
+| Message au support ou réponse         | 1 à 5 000 caractères, sans caractère invisible autre que le retour à la ligne                                |
 
 ### Injections
 - **SQL** : uniquement des requêtes paramétrées ou un ORM, jamais de requête construite en collant des morceaux de texte. Pour la recherche par libellé, les caractères spéciaux `%` et `_` saisis par l'utilisateur sont neutralisés.
@@ -181,7 +184,9 @@ Les valeurs ci-dessous sont des points de départ, à ajuster selon l'usage rée
 | Changement de mot de passe                 | 10 par heure et par adresse IP                                                           |
 | Changement d'adresse e-mail                | 3 par heure et par nouvelle adresse, 10 par heure et par adresse IP                      |
 | Lien de changement d'adresse               | 10 essais par heure et par adresse IP                                                    |
+| Lien de désactivation de la double auth.   | 10 essais par heure et par adresse IP                                                    |
 | Formulaire de support (visiteur)           | 3 par heure et par adresse IP                                                            |
+| Demande de support (utilisateur)           | 10 sur 24 heures glissantes, par utilisateur                                             |
 | Mise à jour des comptes                    | 1 par minute et par utilisateur                                                          |
 | Recherche, graphiques, sacs et suggestions | 60 par minute et par session, toutes ces lectures ensemble                               |
 
@@ -195,6 +200,7 @@ Une période de graphique couvre au plus 10 ans : une requête ne peut pas faire
 
 ### Actions forcées (CSRF)
 - Les cookies en `SameSite=Lax`, plus un jeton anti-CSRF sur toutes les requêtes qui modifient des données. Les frameworks le fournissent.
+- Sur les routes d'administration, le jeton anti-CSRF est vérifié avant le rôle : une écriture sans jeton est refusée sans lire le compte ni rien noter au journal. L'adresse d'un compte cherché passe dans le corps de la requête, jamais dans son adresse (§7).
 - Les routes appelées sans session (inscription, confirmation, connexion) n'ont pas besoin de ce jeton : elles n'agissent au nom de personne, et n'acceptent que du JSON, qu'un site piégé ne peut pas envoyer sans autorisation.
 - Aucune requête `GET` ne modifie de données.
 
@@ -226,6 +232,7 @@ Aucun script tiers (publicité, traceur, outil d'analyse externe) sur les pages 
 - WalletFlow ne voit jamais les identifiants ni le mot de passe de la banque : l'utilisateur s'identifie sur la page de sa banque (règle de gestion).
 - Une alerte envoyée n'est gardée que pour ne pas l'envoyer deux fois : une alerte de budget ou de suggestion est effacée deux mois après son mois, une alerte de sac ou de connexion bancaire part avec eux.
 - Une demande de la file d'e-mails est effacée dès que l'e-mail est parti, ou après son dernier essai raté.
+- Une demande de support est effacée un an après son envoi, avec ses réponses (règle de gestion).
 
 ### Connexion bancaire
 - Le prestataire est agréé pour lire les comptes (DSP2), hébergé dans l'Union européenne, et lié à WalletFlow par un contrat de sous-traitance (article 28 du RGPD).
@@ -260,7 +267,7 @@ Aucun script tiers (publicité, traceur, outil d'analyse externe) sur les pages 
 ### Suppression de compte
 - Pendant les 30 jours de délai (règle de gestion), le compte est inaccessible, sauf pour annuler la suppression.
 - Dès la demande, l'autorisation donnée à la banque est révoquée chez le prestataire (règle de gestion).
-- Passé ce délai, sont effacés : l'utilisateur, ses connexions bancaires, ses comptes bancaires et leurs transactions, ses catégories et ses règles de classement, ses sacs et leurs mouvements, ses suggestions, ses préférences d'alerte, ses alertes envoyées, ses e-mails en attente, ses demandes de support et leurs réponses, ses appareils, ses sessions, ses jetons et ses codes de secours. Dans le journal de sécurité, ses événements restent, mais sans son identifiant ni son adresse IP.
+- Passé ce délai, sont effacés : l'utilisateur, ses connexions bancaires, ses comptes bancaires et leurs transactions, ses catégories et ses règles de classement, ses sacs et leurs mouvements, ses suggestions, ses préférences d'alerte, ses alertes envoyées, ses e-mails en attente, ses demandes de support et leurs réponses, ses appareils, ses sessions, ses jetons et ses codes de secours. Dans le journal de sécurité, ses événements restent, mais sans son identifiant ni son adresse IP, et les actions d'un administrateur sur son compte ne le désignent plus.
 - Les données disparaissent des sauvegardes au plus tard 30 jours plus tard, quand la dernière sauvegarde qui les contient expire. C'est à indiquer dans la politique de confidentialité.
 
 ### Journaux
@@ -271,12 +278,14 @@ Les journaux techniques ne contiennent jamais de mot de passe, de jeton, de code
 
 - L'administrateur **ne voit ni les comptes, ni les transactions, ni les soldes, ni les sacs** des utilisateurs. Il voit uniquement :
   - l'adresse e-mail ;
-  - l'état du compte (non confirmé, actif, bloqué, en cours de suppression) ;
+  - l'état du compte (non confirmé, actif, bloqué, en cours de suppression), et si la double authentification est activée ;
   - les demandes de support ;
-  - des statistiques globales.
-- L'administrateur peut débloquer un compte. Il ne peut ni changer le mot de passe ou l'e-mail d'un utilisateur, ni se connecter à sa place.
-- Un compte administrateur ne se crée pas depuis l'application. Seul le responsable du projet attribue ou retire le rôle, avec une commande exécutée sur le serveur, à un compte dont l'adresse e-mail est confirmée.
-- Chaque action d'un administrateur est enregistrée dans le journal (§11).
+  - des statistiques globales et anonymes : les comptes par état, les connexions bancaires actives et les demandes de support par état, sans aucun chiffre sur l'argent.
+- L'administrateur retrouve un compte par son adresse exacte : il ne peut pas parcourir la liste des utilisateurs.
+- L'administrateur doit avoir activé la double authentification : sans elle, les routes d'administration répondent « interdit » (403). Un utilisateur qui n'est pas administrateur reçoit aussi « interdit », et son essai est noté comme un accès refusé. Un administrateur sans double authentification n'est pas noté. Le rôle et la double authentification sont relus en base à chaque requête.
+- L'administrateur peut débloquer un compte, et faire envoyer à l'adresse du compte le lien qui désactive la double authentification (§2), sans voir ce lien ni le mot de passe. Il ne peut pas le faire envoyer si le mot de passe a changé il y a moins de 7 jours : il en est prévenu, et la règle est vérifiée de nouveau quand le lien sert. Il ne peut ni changer le mot de passe ou l'e-mail d'un utilisateur, ni se connecter à sa place.
+- Un compte administrateur ne se crée pas depuis l'application. Seul le responsable du projet attribue ou retire le rôle, avec la fonction `fn_changer_role` de la base, lancée sur le serveur avec le compte administrateur de PostgreSQL, à un compte dont l'adresse e-mail est confirmée. Le changement est écrit au journal (§11).
+- Chaque action d'un administrateur qui change quelque chose, et chaque recherche d'un compte, même sans résultat, est enregistrée dans le journal, avec le compte qu'elle vise (§11). Lire les demandes et les statistiques n'y est pas noté. Un déblocage par l'administrateur est noté deux fois : le déblocage du compte et l'action de l'administrateur.
 - Les messages au support, surtout ceux des visiteurs, sont du contenu non fiable. Ils sont affichés comme du texte dans l'interface d'administration (§5) : un script caché dans un message viserait directement l'administrateur.
 
 
@@ -286,8 +295,9 @@ Les journaux techniques ne contiennent jamais de mot de passe, de jeton, de code
 - Les e-mails ne contiennent jamais de mot de passe, ni de solde, ni de liste de transactions.
 - Les liens pointent uniquement vers le domaine de WalletFlow, en HTTPS.
 - L'e-mail qui rappelle de renouveler l'autorisation bancaire ne contient aucun lien vers une banque : il invite seulement à ouvrir WalletFlow. Un e-mail qui propose de reconnecter sa banque en un clic est exactement ce qu'imiterait un hameçonnage.
-- Chaque e-mail de sécurité (connexion depuis un nouvel appareil, changement de mot de passe ou d'e-mail, blocage) indique quoi faire si ce n'est pas l'utilisateur qui a agi.
-- L'e-mail qui prévient l'ancienne adresse ne cite pas la nouvelle, et invite à écrire au support si ce n'est pas l'utilisateur qui a agi.
+- Chaque e-mail de sécurité (connexion depuis un nouvel appareil, changement de mot de passe ou d'e-mail, blocage, désactivation de la double authentification, utilisation d'un code de secours) indique quoi faire si ce n'est pas l'utilisateur qui a agi. Quand il invite à écrire au support, il donne le lien de la page de support.
+- L'e-mail qui prévient l'ancienne adresse ne cite pas la nouvelle, et invite à écrire au support, avec le lien de la page de support, si ce n'est pas l'utilisateur qui a agi.
+- Une réponse du support part par e-mail avec son texte, à l'adresse du compte ou à l'adresse de contact du visiteur (règle de gestion). Elle part en texte brut : un message piégé qu'elle citerait ne devient pas du HTML.
 - Le contenu des notifications sur téléphone reste général (par exemple « Ton budget Loisirs est presque atteint ») : il peut s'afficher sur un écran verrouillé.
 - Une alerte ne cite aucun montant, par e-mail comme sur le téléphone (règle de gestion).
 - Tant que l'application mobile n'existe pas, toutes les alertes partent par e-mail (règle de gestion).
@@ -317,12 +327,12 @@ Les journaux techniques ne contiennent jamais de mot de passe, de jeton, de code
 - changements d'adresse e-mail, activation et désactivation de la double authentification ;
 - connexions, renouvellements et déconnexions d'une banque ;
 - exports de données et demandes de suppression ;
-- actions des administrateurs, et attribution ou retrait du rôle d'administrateur ;
+- actions des administrateurs, avec le compte qu'elles visent, et attribution ou retrait du rôle d'administrateur ;
 - tentatives d'accès à une ressource d'un autre utilisateur.
 
-Pour chaque événement, le journal note la date, l'identifiant de l'utilisateur, l'adresse IP, l'événement et son résultat.
+Pour chaque événement, le journal note la date, l'identifiant de l'utilisateur, l'adresse IP, l'événement et son résultat ; pour une action d'un administrateur, aussi le compte qu'elle vise.
 
-**Conservation** : 1 an, dans la fourchette de 6 mois à 1 an que recommande la CNIL. Chaque jour, les événements plus anciens sont effacés par une fonction de la base, la seule à pouvoir effacer le journal. Quand un compte est supprimé, ses événements restent, mais sans son identifiant ni son adresse IP (§7).
+**Conservation** : 1 an, dans la fourchette de 6 mois à 1 an que recommande la CNIL. Chaque jour, les événements plus anciens sont effacés par une fonction de la base, la seule à pouvoir effacer le journal. Quand un compte est supprimé, ses événements restent, mais sans son identifiant ni son adresse IP, et les actions qui le visaient ne le désignent plus (§7).
 
 
 ## 12. En cas d'incident

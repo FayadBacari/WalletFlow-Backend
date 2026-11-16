@@ -7,6 +7,7 @@ using WalletFlow.Application.Emails;
 using WalletFlow.Application.Notifications;
 using WalletFlow.Application.Persistence;
 using WalletFlow.Application.Security;
+using WalletFlow.Application.Support;
 using WalletFlow.Application.UserAccounts;
 using WalletFlow.Domain.NotificationsAndSupport;
 using WalletFlow.Domain.UsersAndSecurity;
@@ -28,6 +29,7 @@ public class EmailRequestsBackgroundServiceTests
     private readonly EmailRequestWakeUp wakeUp = new EmailRequestWakeUp();
     private readonly FakeEmailRequestRepository emailRequests;
     private readonly FakeAlertRepository alertRepository = new FakeAlertRepository();
+    private readonly FakeSupportRequestRepository supportRepository = new FakeSupportRequestRepository();
     private readonly FakeDatabaseUnitOfWork unitOfWork;
     private readonly FakeEmailSender emailSender = new FakeEmailSender();
     private readonly FakeTimeProvider clock = new FakeTimeProvider();
@@ -37,7 +39,7 @@ public class EmailRequestsBackgroundServiceTests
     public EmailRequestsBackgroundServiceTests()
     {
         emailRequests = new FakeEmailRequestRepository(wakeUp);
-        unitOfWork = new FakeDatabaseUnitOfWork(accountRepository, securityEventRepository, emailRequests, alertRepository);
+        unitOfWork = new FakeDatabaseUnitOfWork(accountRepository, securityEventRepository, emailRequests, alertRepository, supportRepository);
     }
 
     private DateTime Now => clock.GetUtcNow().UtcDateTime;
@@ -50,6 +52,7 @@ public class EmailRequestsBackgroundServiceTests
         services.AddSingleton<ISecurityEventRepository>(securityEventRepository);
         services.AddSingleton<IEmailRequestRepository>(emailRequests);
         services.AddSingleton<IAlertRepository>(alertRepository);
+        services.AddSingleton<ISupportRequestRepository>(supportRepository);
         services.AddSingleton<IDatabaseUnitOfWork>(unitOfWork);
         services.AddSingleton<ISecureTokenGenerator>(new FakeSecureTokenGenerator());
         services.AddSingleton<IEmailSender>(emailSender);

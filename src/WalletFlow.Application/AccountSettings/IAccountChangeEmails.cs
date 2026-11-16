@@ -12,6 +12,7 @@ public interface IAccountChangeEmails
     // Crée l'e-mail qui prévient le propriétaire d'une adresse déjà utilisée qu'un autre compte a demandé à la prendre (SS §2).
     EmailMessage CreateAddressAlreadyUsedEmail(string recipient);
 
-    // Crée l'e-mail qui prévient l'ancienne adresse que le changement est fait. Il ne cite jamais la nouvelle (SS §9).
-    EmailMessage CreateEmailChangedEmail(string recipient);
+    // Crée l'e-mail qui prévient l'ancienne adresse que le changement est fait. Il ne cite jamais la nouvelle, et donne
+    // l'adresse de la page de support (SS §9).
+    EmailMessage CreateEmailChangedEmail(string recipient, string supportPageAddress);
 }

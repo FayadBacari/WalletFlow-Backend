@@ -10,19 +10,22 @@ public class FakeResourceOwnershipRepository : IResourceOwnershipRepository
     private readonly FakeBankConnectionRepository bankRepository;
     private readonly FakeBagRepository bagRepository;
     private readonly FakeSuggestionRepository? suggestionRepository;
+    private readonly FakeSupportRequestRepository? supportRepository;
 
     // Reçoit les faux dépôts où chercher : les catégories et les opérations, les connexions et leurs comptes, les sacs,
-    // et les suggestions si le test en a.
+    // et les suggestions et les demandes de support si le test en a.
     public FakeResourceOwnershipRepository(
         FakeCategoryRepository categoryRepository,
         FakeBankConnectionRepository bankRepository,
         FakeBagRepository bagRepository,
-        FakeSuggestionRepository? suggestionRepository = null)
+        FakeSuggestionRepository? suggestionRepository = null,
+        FakeSupportRequestRepository? supportRepository = null)
     {
         this.categoryRepository = categoryRepository;
         this.bankRepository = bankRepository;
         this.bagRepository = bagRepository;
         this.suggestionRepository = suggestionRepository;
+        this.supportRepository = supportRepository;
     }
 
     // Cherche la ressource dans le faux dépôt de sa sorte. Un compte et une opération sont à l'utilisateur de leur connexion.
@@ -36,6 +39,8 @@ public class FakeResourceOwnershipRepository : IResourceOwnershipRepository
                 return Task.FromResult(categoryRepository.SavedCategories.SingleOrDefault(category => category.Id == resourceId)?.UserId);
             case OwnedResource.Suggestion:
                 return Task.FromResult(suggestionRepository?.SavedSuggestions.SingleOrDefault(suggestion => suggestion.Id == resourceId)?.UserId);
+            case OwnedResource.SupportRequest:
+                return Task.FromResult(supportRepository?.SavedRequests.SingleOrDefault(request => request.Id == resourceId)?.UserId);
             case OwnedResource.Bag:
                 return Task.FromResult(bagRepository.SavedBags.SingleOrDefault(bag => bag.Id == resourceId)?.UserId);
             case OwnedResource.BankConnection:

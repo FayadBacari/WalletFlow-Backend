@@ -160,7 +160,11 @@ public class EmailChangeRequestServiceTests
         Assert.IsType<EmailChangeRequestResult.RequestAccepted>(firstResult);
         Assert.IsType<EmailChangeRequestResult.WrongPasswordOrCode>(secondResult);
         Assert.Single(tools.TwoFactorRepository.SavedBackupCodes, savedCode => savedCode.UsedAt != null);
-        Assert.Single(tools.EmailRequests.SavedRequests);
+
+        // GR Notif : la demande et l'alerte du code de secours partent ensemble, une seule fois.
+        Assert.Equal(
+            new List<EmailRequestType> { EmailRequestType.EmailChange, EmailRequestType.BackupCodeUse },
+            tools.EmailRequests.SavedRequests.Select(request => request.Type).Order().ToList());
     }
 
     // Le code de secours et la demande partent ensemble : si la demande ne peut pas entrer dans la file, le code reste valable.

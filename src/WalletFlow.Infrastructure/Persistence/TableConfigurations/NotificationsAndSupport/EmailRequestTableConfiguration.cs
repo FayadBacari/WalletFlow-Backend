@@ -27,6 +27,7 @@ public class EmailRequestTableConfiguration : IEntityTypeConfiguration<EmailRequ
         builder.Property(nameof(EmailRequest.NextTryAt)).HasColumnName("date_prochain_essai");
         builder.Property(nameof(EmailRequest.UserId)).HasColumnName("id_utilisateur");
         builder.Property(nameof(EmailRequest.AlertId)).HasColumnName("id_alerte");
+        builder.Property(nameof(EmailRequest.SupportResponseId)).HasColumnName("id_reponse");
 
         // Un essai raté ou une sortie de la file vérifie que personne n'a changé ni sorti la demande depuis sa lecture.
         RowVersionConfiguration.AddRowVersion(builder);
@@ -39,6 +40,11 @@ public class EmailRequestTableConfiguration : IEntityTypeConfiguration<EmailRequ
         // L'e-mail d'une alerte effacée ne part plus (ON DELETE CASCADE).
         builder.HasOne<Alert>().WithMany()
             .HasForeignKey(nameof(EmailRequest.AlertId))
+            .OnDelete(DeleteBehavior.Cascade);
+
+        // L'e-mail d'une réponse effacée ne part plus (ON DELETE CASCADE).
+        builder.HasOne<SupportResponse>().WithMany()
+            .HasForeignKey(nameof(EmailRequest.SupportResponseId))
             .OnDelete(DeleteBehavior.Cascade);
     }
 }

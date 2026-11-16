@@ -21,11 +21,13 @@ public class EmailRequestProcessingServiceTests
     private const string NewEmail = "nouvelle@exemple.test";
 
     private static readonly IPAddress IpAddress = IPAddress.Parse("203.0.113.7");
+    private const string SupportPage = "https://walletflow.test/support";
 
     private readonly FakeUserAccountRepository accountRepository = new FakeUserAccountRepository();
     private readonly FakeSecurityEventRepository securityEventRepository = new FakeSecurityEventRepository();
     private readonly FakeEmailRequestRepository emailRequests = new FakeEmailRequestRepository();
     private readonly FakeAlertRepository alertRepository = new FakeAlertRepository();
+    private readonly FakeSupportRequestRepository supportRepository;
     private readonly FakeDatabaseUnitOfWork unitOfWork;
     private readonly RandomSecureTokenGenerator tokenGenerator = new RandomSecureTokenGenerator();
     private readonly FakeEmailSender emailSender = new FakeEmailSender();
@@ -35,7 +37,8 @@ public class EmailRequestProcessingServiceTests
     // Relie les faux accès à la fausse unité de travail, qui garde leurs changements ensemble.
     public EmailRequestProcessingServiceTests()
     {
-        unitOfWork = new FakeDatabaseUnitOfWork(accountRepository, securityEventRepository, emailRequests, alertRepository);
+        supportRepository = new FakeSupportRequestRepository(accountRepository.SavedUsers);
+        unitOfWork = new FakeDatabaseUnitOfWork(accountRepository, securityEventRepository, emailRequests, alertRepository, supportRepository);
     }
 
     private DateTime Now => clock.GetUtcNow().UtcDateTime;
@@ -47,6 +50,7 @@ public class EmailRequestProcessingServiceTests
             emailRequests,
             accountRepository,
             alertRepository,
+            supportRepository,
             unitOfWork,
             new SecurityJournalService(securityEventRepository, clock),
             tokenGenerator,
@@ -55,6 +59,7 @@ public class EmailRequestProcessingServiceTests
             changeEmails,
             new FrenchSecurityAlertEmails(),
             new FrenchAlertEmails(),
+            new FrenchSupportEmails(),
             new PublicWebsiteSettings("https://walletflow.test"),
             clock);
     }
@@ -556,7 +561,7 @@ public class EmailRequestProcessingServiceTests
         var email = Assert.Single(emailSender.SentEmails);
         Assert.Equal(AccountEmail, email.RecipientAddress);
         Assert.DoesNotContain(NewEmail, email.Body);
-        Assert.Contains("support", email.Body);
+        Assert.EndsWith("au support de WalletFlow :\n" + SupportPage, email.Body);
     }
 
     // --- Alertes de sécurité (GR Notif)
@@ -608,13 +613,52 @@ public class EmailRequestProcessingServiceTests
         Assert.Equal(NewEmail, Assert.Single(emailSender.SentEmails).RecipientAddress);
     }
 
-    [Fact]
-    public async Task ErasedAccountReceivesNoSecurityAlert()
+    // Chaque alerte de sécurité part à l'adresse du compte, avec l'heure de ce qui s'est passé, et finit par l'adresse de la page
+    // de support du site : c'est son seul lien (SS §9).
+    [Theory]
+    [InlineData(EmailRequestType.NewDevice, "Nouvelle connexion à ton compte WalletFlow")]
+    [InlineData(EmailRequestType.PasswordChange, "Le mot de passe de ton compte WalletFlow a changé")]
+    [InlineData(EmailRequestType.TwoFactorDeactivation, "La double authentification de ton compte WalletFlow est désactivée")]
+    [InlineData(EmailRequestType.BackupCodeUse, "Un code de secours de ton compte WalletFlow a servi")]
+    public async Task EachSecurityAlertEndsWithTheSupportPageOfTheWebsite(EmailRequestType type, string subject)
     {
-        var outcome = await QueueThenProcessAsync(EmailRequest.ForNewDevice(Guid.NewGuid(), IpAddress, Now));
+        var account = AddAccount();
+
+        await QueueThenProcessAsync(CreateSecurityAlertRequest(type, account.Id));
+
+        var email = Assert.Single(emailSender.SentEmails);
+        Assert.Equal(AccountEmail, email.RecipientAddress);
+        Assert.Equal(subject, email.Subject);
+        Assert.Contains("le 4 novembre 2026 à 13 h 00 (heure de Paris)", email.Body);
+        Assert.EndsWith(" :\n" + SupportPage, email.Body);
+        Assert.Equal(email.Body.IndexOf("https://", StringComparison.Ordinal), email.Body.LastIndexOf("https://", StringComparison.Ordinal));
+        Assert.DoesNotContain(IpAddress.ToString(), email.Body);
+    }
+
+    [Theory]
+    [InlineData(EmailRequestType.NewDevice)]
+    [InlineData(EmailRequestType.PasswordChange)]
+    [InlineData(EmailRequestType.TwoFactorDeactivation)]
+    [InlineData(EmailRequestType.BackupCodeUse)]
+    public async Task ErasedAccountReceivesNoSecurityAlert(EmailRequestType type)
+    {
+        var outcome = await QueueThenProcessAsync(CreateSecurityAlertRequest(type, Guid.NewGuid()));
 
         Assert.IsType<EmailRequestOutcome.Finished>(outcome);
         Assert.Empty(emailSender.SentEmails);
+    }
+
+    // Crée la demande d'une alerte de sécurité de ce type, pour ce compte, à l'heure de la fausse horloge.
+    private EmailRequest CreateSecurityAlertRequest(EmailRequestType type, Guid accountId)
+    {
+        return type switch
+        {
+            EmailRequestType.NewDevice => EmailRequest.ForNewDevice(accountId, IpAddress, Now),
+            EmailRequestType.PasswordChange => EmailRequest.ForPasswordChange(accountId, IpAddress, Now),
+            EmailRequestType.TwoFactorDeactivation => EmailRequest.ForTwoFactorDeactivation(accountId, IpAddress, Now),
+            EmailRequestType.BackupCodeUse => EmailRequest.ForBackupCodeUse(accountId, IpAddress, Now),
+            _ => throw new ArgumentOutOfRangeException(nameof(type))
+        };
     }
 
     // Les alertes de sécurité n'ajoutent rien au journal : la connexion et le changement y sont déjà.
@@ -761,5 +805,111 @@ public class EmailRequestProcessingServiceTests
         Assert.Equal(EmailRequestType.Alert, retry.Type);
         Assert.Equal(account.Id, retry.UserId);
         Assert.Equal(request, Assert.Single(emailRequests.SavedRequests));
+    }
+
+    // --- Lien du support qui désactive la double authentification (GR Admin, GR Auth)
+
+    // Le lien part à l'adresse actuelle du compte, avec le lien du site et la page de support. Seule son empreinte est gardée,
+    // pour 24 heures, sans aucun essai compté. Il remplace un lien plus ancien du même type.
+    [Fact]
+    public async Task SupportLinkGoesToTheAccountWithItsHashKeptForTwentyFourHours()
+    {
+        var account = AddAccount();
+        account.ActivateTwoFactor("secret-chiffre");
+        accountRepository.SavedEmailTokens.Add(new EmailToken
+        {
+            Type = EmailTokenType.TwoFactorDeactivation,
+            TokenHash = "ancienne-empreinte",
+            ExpiresAt = Now.AddHours(1),
+            UserId = account.Id
+        });
+
+        await QueueThenProcessAsync(EmailRequest.ForTwoFactorDeactivationLink(account.Id, IpAddress, Now));
+
+        var email = Assert.Single(emailSender.SentEmails);
+        Assert.Equal(AccountEmail, email.RecipientAddress);
+        Assert.Contains("https://walletflow.test/disable-two-factor#token=", email.Body);
+        Assert.EndsWith(" :\n" + SupportPage, email.Body);
+        var token = Assert.Single(accountRepository.SavedEmailTokens);
+        Assert.Equal(
+            (EmailTokenType.TwoFactorDeactivation, account.Id, tokenGenerator.HashToken(ReadConfirmationToken(email.Body)), Now.AddHours(24), (short)0),
+            (token.Type, token.UserId, token.TokenHash, token.ExpiresAt, token.PasswordTryCount));
+    }
+
+    // Un compte effacé, ou dont la double authentification est déjà désactivée, ne reçoit rien : il n'y a plus rien à désactiver.
+    [Fact]
+    public async Task SupportLinkIsNotSentWhenThereIsNothingToDeactivate()
+    {
+        var accountWithoutTwoFactor = AddAccount();
+
+        var withoutTwoFactor = await QueueThenProcessAsync(EmailRequest.ForTwoFactorDeactivationLink(accountWithoutTwoFactor.Id, IpAddress, Now));
+        var erased = await QueueThenProcessAsync(EmailRequest.ForTwoFactorDeactivationLink(Guid.NewGuid(), IpAddress, Now));
+
+        Assert.IsType<EmailRequestOutcome.Finished>(withoutTwoFactor);
+        Assert.IsType<EmailRequestOutcome.Finished>(erased);
+        Assert.Empty(emailSender.SentEmails);
+        Assert.Empty(accountRepository.SavedEmailTokens);
+    }
+
+    // --- Réponse du support (GR Admin)
+
+    // La réponse part avec son texte à l'adresse du compte au moment de l'envoi : après un changement d'adresse, la nouvelle.
+    [Fact]
+    public async Task SupportResponseGoesToTheCurrentAddressOfTheAccount()
+    {
+        var account = AddAccount();
+        var request = SupportRequest.FromUser(account.Id, "Bonjour", Now.AddDays(-2));
+        var response = SupportResponse.Create(request.Id, "Voici la marche à suivre.\nBonne journée.", Now);
+        supportRepository.SavedRequests.Add(request);
+        supportRepository.SavedResponses.Add(response);
+        account.ReplaceEmail(NewEmail);
+
+        await QueueThenProcessAsync(EmailRequest.ForSupportResponse(response, IpAddress));
+
+        var email = Assert.Single(emailSender.SentEmails);
+        Assert.Equal(NewEmail, email.RecipientAddress);
+        Assert.Equal("Réponse du support de WalletFlow", email.Subject);
+        Assert.Contains("Voici la marche à suivre.\nBonne journée.", email.Body);
+        Assert.EndsWith(" :\n" + SupportPage, email.Body);
+    }
+
+    // Le jour de la demande est celui de Paris : une demande envoyée à 23 h 30 en UTC, un soir d'hiver, date du lendemain.
+    [Fact]
+    public async Task SupportResponseGivesTheDayOfTheRequestInParis()
+    {
+        var request = SupportRequest.FromVisitor("visiteur@exemple.test", "Bonjour", new DateTime(2026, 11, 14, 23, 30, 0, DateTimeKind.Utc));
+        var response = SupportResponse.Create(request.Id, "Réponse", Now);
+        supportRepository.SavedRequests.Add(request);
+        supportRepository.SavedResponses.Add(response);
+
+        await QueueThenProcessAsync(EmailRequest.ForSupportResponse(response, IpAddress));
+
+        Assert.Contains("ta demande du 15 novembre 2026 :", Assert.Single(emailSender.SentEmails).Body);
+    }
+
+    // La réponse à un visiteur part à son adresse de contact.
+    [Fact]
+    public async Task SupportResponseToAVisitorGoesToItsContactAddress()
+    {
+        var request = SupportRequest.FromVisitor("visiteur@exemple.test", "Mon compte est bloqué.", Now.AddDays(-1));
+        var response = SupportResponse.Create(request.Id, "Ton compte est débloqué.", Now);
+        supportRepository.SavedRequests.Add(request);
+        supportRepository.SavedResponses.Add(response);
+
+        await QueueThenProcessAsync(EmailRequest.ForSupportResponse(response, IpAddress));
+
+        Assert.Equal("visiteur@exemple.test", Assert.Single(emailSender.SentEmails).RecipientAddress);
+    }
+
+    // Une réponse effacée depuis, avec sa demande, ne part plus.
+    [Fact]
+    public async Task ErasedResponseIsNotSent()
+    {
+        var response = SupportResponse.Create(Guid.NewGuid(), "Réponse", Now);
+
+        var outcome = await QueueThenProcessAsync(EmailRequest.ForSupportResponse(response, IpAddress));
+
+        Assert.IsType<EmailRequestOutcome.Finished>(outcome);
+        Assert.Empty(emailSender.SentEmails);
     }
 }

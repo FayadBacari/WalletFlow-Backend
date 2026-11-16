@@ -22,7 +22,11 @@ public class SupportRequestTableConfiguration : IEntityTypeConfiguration<Support
         builder.Property(nameof(SupportRequest.ContactEmail)).HasColumnName("email_contact");
         builder.Property(nameof(SupportRequest.Status)).HasColumnName("statut_demande")
             .HasConversion(SupportRequestStatusDatabaseCodes.Table.Converter);
+        builder.Property(nameof(SupportRequest.SentAt)).HasColumnName("date_demande");
         builder.Property(nameof(SupportRequest.UserId)).HasColumnName("id_utilisateur");
+
+        // Une réponse ou une demande résolue vérifie que personne n'a changé la demande depuis sa lecture.
+        RowVersionConfiguration.AddRowVersion(builder);
 
         // La demande d'un utilisateur disparaît avec lui (ON DELETE CASCADE).
         // Celle d'un visiteur n'a pas d'utilisateur.

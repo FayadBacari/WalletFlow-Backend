@@ -64,7 +64,8 @@ public class AccountSettingsRepositoryTests
         return linkTypes;
     }
 
-    // SS §2 : confirmer une nouvelle adresse annule les liens de récupération et de déblocage partis vers l'ancienne.
+    // SS §2 : confirmer une nouvelle adresse annule les liens de récupération, de déblocage et de désactivation de la double
+    // authentification partis vers l'ancienne.
     [Fact]
     public async Task RecoveryAndUnlockLinksOfTheAccountAreRemovedWithTheOtherChanges()
     {
@@ -74,16 +75,20 @@ public class AccountSettingsRepositoryTests
         var otherAccount = await SaveConfirmedAccountAsync(databaseContext, "test-liens-autre-compte@exemple.test");
         await SaveLinkAsync(databaseContext, account, EmailTokenType.PasswordRecovery, null);
         await SaveLinkAsync(databaseContext, account, EmailTokenType.AccountUnlock, null);
+        await SaveLinkAsync(databaseContext, account, EmailTokenType.TwoFactorDeactivation, null);
         await SaveLinkAsync(databaseContext, account, EmailTokenType.EmailChange, "nouvelle-adresse@exemple.test");
         await SaveLinkAsync(databaseContext, otherAccount, EmailTokenType.PasswordRecovery, null);
+        await SaveLinkAsync(databaseContext, otherAccount, EmailTokenType.TwoFactorDeactivation, null);
 
-        await new UserAccountRepository(databaseContext).PrepareRecoveryAndUnlockLinksRemovalAsync(account.Id);
+        await new UserAccountRepository(databaseContext).PrepareOldAddressLinksRemovalAsync(account.Id);
         var saved = await TrySaveChangesAsync(databaseContext);
 
         Assert.True(saved);
         databaseContext.ChangeTracker.Clear();
         Assert.Equal(new List<EmailTokenType> { EmailTokenType.EmailChange }, await ReadLinkTypesAsync(databaseContext, account));
-        Assert.Equal(new List<EmailTokenType> { EmailTokenType.PasswordRecovery }, await ReadLinkTypesAsync(databaseContext, otherAccount));
+        Assert.Equal(
+            new List<EmailTokenType> { EmailTokenType.PasswordRecovery, EmailTokenType.TwoFactorDeactivation },
+            await ReadLinkTypesAsync(databaseContext, otherAccount));
     }
 
     // SS §3 : toutes les sessions du compte se ferment, sauf la nouvelle session préparée avec elles.

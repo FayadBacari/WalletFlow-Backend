@@ -36,6 +36,8 @@
 - Si l'adresse n'est pas encore confirmée, l'e-mail de récupération invite à s'inscrire à nouveau.
 - Après une récupération, l'utilisateur se connecte avec son nouveau mot de passe.
 - Une récupération du mot de passe ne désactive pas la double authentification.
+- Si l'utilisateur a perdu son téléphone et ses codes de secours, le support peut envoyer à l'adresse de son compte un lien qui désactive la double authentification. Le lien demande le mot de passe, et ne marche que si celui-ci n'a pas changé depuis au moins 7 jours. Toutes les sessions du compte se ferment alors.
+- Après 5 mauvais mots de passe, ce lien est annulé : il faut en redemander un au support.
 - En cas d'échec de connexion, le message est le même, que l'adresse e-mail existe ou non (« Identifiants incorrects »), pour ne pas révéler quels comptes existent.
 - Si le mot de passe est juste mais que l'adresse n'est pas confirmée, l'application invite à la confirmer.
 - Les pages « mot de passe oublié » et « inscription » affichent aussi le même message, que l'adresse existe ou non.
@@ -155,13 +157,20 @@
 ## Administrateur et administration
 
 - L'administrateur peut répondre aux demandes de support.
+- Seul l'administrateur répond à une demande. Pour ajouter quelque chose, l'utilisateur écrit une nouvelle demande.
+- Chaque réponse part par e-mail, avec son texte, à l'adresse du compte ou à l'adresse de contact du visiteur.
 - L'administrateur peut débloquer un compte.
-- L'administrateur ne voit ni les comptes bancaires, ni les transactions, ni les soldes, ni les sacs des utilisateurs. Chacune de ses actions est enregistrée dans le journal de sécurité.
-- L'administrateur peut voir des statistiques globales et anonymes (nombre d'utilisateurs…).
+- L'administrateur peut envoyer à un compte le lien qui désactive sa double authentification. Il ne voit ni ce lien ni le mot de passe. Il ne peut pas l'envoyer à un compte sans double authentification, ni à un compte dont le mot de passe a changé il y a moins de 7 jours.
+- L'administrateur retrouve un compte par son adresse exacte, avec son état. Il ne peut pas parcourir la liste des utilisateurs.
+- L'administrateur doit avoir activé la double authentification pour utiliser l'administration.
+- L'administrateur ne voit ni les comptes bancaires, ni les transactions, ni les soldes, ni les sacs des utilisateurs. Chacune de ses actions qui change quelque chose, et chacune de ses recherches de compte, est enregistrée dans le journal de sécurité.
+- L'administrateur peut voir des statistiques globales et anonymes : les comptes par état, les connexions bancaires actives et les demandes de support par état. Aucun chiffre ne porte sur l'argent.
 - Le rôle d'administrateur est attribué ou retiré uniquement par le responsable du projet, depuis le serveur.
 - Les connexions et les actions sensibles sont enregistrées dans un journal de sécurité.
 - L'utilisateur peut contacter le support en cas de problème.
 - L'utilisateur peut suivre l'état de ses demandes (envoyée, en cours, résolue).
+- Une demande passe « en cours » à chaque réponse, même si elle était « résolue ». L'administrateur la marque « résolue », avec ou sans réponse.
+- Une demande de support est effacée un an après son envoi, avec ses réponses.
 - Un visiteur non connecté peut aussi contacter le support, par exemple si son compte est bloqué.
 
 
@@ -169,8 +178,8 @@
 
 - L'utilisateur peut choisir comment il reçoit ses alertes : par e-mail, par notification sur son téléphone, ou les deux.
 - L'utilisateur peut activer ou désactiver chaque type d'alerte.
-- Types d'alertes : budget d'une catégorie atteint, nouvelle suggestion d'épargne, objectif d'un sac atteint, autorisation bancaire à renouveler, et les alertes de sécurité : connexion depuis un nouvel appareil, compte bloqué, changement de mot de passe ou d'adresse e-mail.
-- Les alertes de sécurité (connexion depuis un nouvel appareil, compte bloqué, changement de mot de passe ou d'adresse e-mail) ne peuvent pas être désactivées.
+- Types d'alertes : budget d'une catégorie atteint, nouvelle suggestion d'épargne, objectif d'un sac atteint, autorisation bancaire à renouveler, et les alertes de sécurité : connexion depuis un nouvel appareil, compte bloqué, changement de mot de passe ou d'adresse e-mail, désactivation de la double authentification, utilisation d'un code de secours.
+- Les alertes de sécurité (connexion depuis un nouvel appareil, compte bloqué, changement de mot de passe ou d'adresse e-mail, désactivation de la double authentification, utilisation d'un code de secours) ne peuvent pas être désactivées.
 - Tant que l'application mobile n'existe pas, toutes les alertes partent par e-mail. Le choix du téléphone est gardé pour plus tard.
 - Les alertes restent générales : elles ne contiennent aucun montant.
 - La toute première connexion d'un compte ne déclenche pas l'alerte de nouvel appareil.

@@ -193,6 +193,14 @@ public class PasswordChangeServiceTests
         Assert.IsType<PasswordChangeResult.Changed>(firstResult);
         Assert.IsType<PasswordChangeResult.WrongPasswordOrCode>(secondResult);
         Assert.Single(tools.TwoFactorRepository.SavedBackupCodes, savedCode => savedCode.UsedAt != null);
+
+        // GR Notif : le changement et le code de secours ont chacun leur alerte, et le second essai n'en envoie aucune.
+        Assert.Equal(
+            new List<EmailRequestType> { EmailRequestType.PasswordChange, EmailRequestType.BackupCodeUse },
+            tools.EmailRequests.SavedRequests.Select(request => request.Type).Order().ToList());
+        var backupCodeAlert = tools.EmailRequests.SavedRequests.Single(request => request.Type == EmailRequestType.BackupCodeUse);
+        Assert.Equal(activatedAccount.UserAccount.Id, backupCodeAlert.UserId);
+        Assert.Equal(TwoFactorServicesWithFakeTools.IpAddress, backupCodeAlert.IpAddress);
     }
 
     // Un code de l'application ne sert qu'une fois, même pour deux actions différentes (SS §2).

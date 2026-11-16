@@ -145,7 +145,9 @@ public class TwoFactorRealChainTests
             CreateSavingService(databaseContext),
             CreateSecurityJournal(databaseContext, clock),
             passwordHasher,
-            CreateCodeCheckingService(databaseContext));
+            CreateCodeCheckingService(databaseContext),
+            new EmailRequestRepository(databaseContext, new EmailRequestWakeUp()),
+            clock);
         var result = await deactivationService.DeactivateAsync(accountId, ValidPassword, code, IpAddress);
         databaseContext.ChangeTracker.Clear();
 
