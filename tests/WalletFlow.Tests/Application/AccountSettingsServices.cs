@@ -1,4 +1,6 @@
+using WalletFlow.Application.AccountDeletion;
 using WalletFlow.Application.AccountSettings;
+using WalletFlow.Application.DataExport;
 using WalletFlow.Tests.Fakes;
 
 namespace WalletFlow.Tests.Application;
@@ -69,5 +71,49 @@ public static class AccountSettingsServices
     public static ProfileService CreateProfile(TwoFactorServicesWithFakeTools tools)
     {
         return new ProfileService(tools.AccountRepository);
+    }
+
+    // Crée le service qui donne le fichier des données, avec la vraie limite de 3 essais par heure, sur l'horloge des outils.
+    public static DataExportService CreateDataExport(TwoFactorServicesWithFakeTools tools, FakeDataExportRepository exportRepository, IDataExportLimiter limiter)
+    {
+        return new DataExportService(
+            tools.AccountRepository,
+            exportRepository,
+            limiter,
+            tools.CreateSavingService(),
+            tools.CreateSecurityJournal(),
+            CreateIdentityChecking(tools),
+            tools.Clock);
+    }
+
+    // Crée la révocation des banques d'un compte en suppression, avec le faux prestataire des outils.
+    public static DeletedAccountBankRevocation CreateBankRevocation(TwoFactorServicesWithFakeTools tools)
+    {
+        return new DeletedAccountBankRevocation(
+            tools.BankRepository,
+            tools.AccountRepository,
+            tools.BankProvider,
+            tools.CreateSavingService(),
+            tools.CreateSecurityJournal());
+    }
+
+    // Crée le service qui reçoit les demandes de suppression.
+    public static AccountDeletionService CreateAccountDeletion(TwoFactorServicesWithFakeTools tools)
+    {
+        return new AccountDeletionService(
+            tools.AccountRepository,
+            tools.SessionRepository,
+            tools.EmailRequests,
+            tools.CreateSavingService(),
+            tools.CreateSecurityJournal(),
+            CreateIdentityChecking(tools),
+            CreateBankRevocation(tools),
+            tools.Clock);
+    }
+
+    // Crée le service qui efface les comptes dont la suppression est demandée depuis 30 jours.
+    public static AccountErasureService CreateAccountErasure(TwoFactorServicesWithFakeTools tools)
+    {
+        return new AccountErasureService(tools.AccountRepository, tools.EmailRequests, tools.CreateSavingService(), tools.Clock);
     }
 }

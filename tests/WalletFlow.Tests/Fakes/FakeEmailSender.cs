@@ -45,4 +45,13 @@ public class FakeEmailSender : IEmailSender
             return SentEmails.Count(email => email.RecipientAddress == recipient);
         }
     }
+
+    // Donne les e-mails de cet objet partis vers cette adresse, même pendant qu'une tâche de fond en envoie.
+    public List<EmailMessage> FindSentEmailsTo(string recipient, string subject)
+    {
+        lock (sentEmailsLock)
+        {
+            return SentEmails.Where(email => email.RecipientAddress == recipient && email.Subject == subject).ToList();
+        }
+    }
 }

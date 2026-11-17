@@ -185,13 +185,19 @@ public class AccountLoginService
     }
 
     // Un passage : prépare la trace du blocage au journal et la demande du lien de déblocage. Rien d'existant n'est modifié :
-    // aucune autre requête ne peut empêcher cet enregistrement.
-    private Task<PreparedChanges<bool>> PrepareLockoutNoticeAsync(Guid accountId, LoginAttempt attempt, DateTime now)
+    // seul l'effacement du compte au même instant empêche cet enregistrement (GR Suppression). Le passage suivant ne trouve
+    // alors plus de compte à prévenir.
+    private async Task<PreparedChanges<bool>> PrepareLockoutNoticeAsync(Guid accountId, LoginAttempt attempt, DateTime now)
     {
+        if (await accountRepository.FindByIdAsync(accountId) == null)
+        {
+            return PreparedChanges<bool>.NothingToSave(false);
+        }
+
         securityJournal.PrepareEvent(SecurityEventType.Lockout, SecurityEventResult.Success, accountId, attempt.IpAddress);
         emailRequests.PrepareRequest(EmailRequest.ForAccountUnlock(accountId, attempt.IpAddress, now));
 
-        return Task.FromResult(PreparedChanges<bool>.SaveThenReturn(true));
+        return PreparedChanges<bool>.SaveThenReturn(true);
     }
 
     // Le mot de passe est bon, mais le compte demande aussi un code : aucune session ne s'ouvre, et l'essai reste compté.
@@ -234,7 +240,8 @@ public class AccountLoginService
         return new AccountLoginResult.LoggedIn
         {
             SessionToken = session.SessionToken,
-            DeviceToken = session.DeviceToken
+            DeviceToken = session.DeviceToken,
+            HasCancelledDeletion = session.HasCancelledDeletion
         };
     }
 

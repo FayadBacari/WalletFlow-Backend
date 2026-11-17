@@ -21,5 +21,8 @@ public static class EmailRequestTypeDatabaseCodes
                 { EmailRequestType.TwoFactorDeactivationLink, "lien_double_auth" },
                 { EmailRequestType.SupportResponse, "reponse_support" },
                 { EmailRequestType.Alert, "alerte" },
+                { EmailRequestType.DeletionRequest, "demande_suppression" },
+                { EmailRequestType.DeletionCancellation, "annulation_suppression" },
+                { EmailRequestType.AccountErasure, "effacement_compte" },
             });
 }

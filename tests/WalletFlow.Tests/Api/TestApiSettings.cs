@@ -53,24 +53,24 @@ public static class TestApiSettings
         {
             services.AddDataProtection().UseEphemeralDataProtectionProvider();
 
-            // La mise à jour des soldes, le calcul des suggestions et les alertes en arrière-plan ne tournent pas pendant
-            // les tests : sur la base de test, ils toucheraient les comptes de la base locale, et sur les fausses bases,
-            // ils écriraient au milieu d'un test. Leurs tests les créent eux-mêmes.
+            // La mise à jour des soldes, le calcul des suggestions, les alertes et la suppression des comptes en arrière-plan
+            // ne tournent pas pendant les tests : sur la base de test, ils toucheraient les comptes de la base locale, et sur
+            // les fausses bases, ils écriraient au milieu d'un test. Leurs tests les créent eux-mêmes.
             RemoveBackgroundTask(services, typeof(BankBalancesBackgroundService));
             RemoveBackgroundTask(services, typeof(SuggestionsBackgroundService));
             RemoveBackgroundTask(services, typeof(AlertsBackgroundService));
+            RemoveBackgroundTask(services, typeof(AccountDeletionBackgroundService));
         });
     }
 
-    // Retire cette tâche de fond des services de l'API.
+    // Retire cette tâche de fond des services de l'API. Elle doit y être : une tâche que Program.cs ne branche plus ne tournerait
+    // jamais, et aucun autre test ne le verrait, puisque toutes les API des tests la retirent.
     private static void RemoveBackgroundTask(IServiceCollection services, Type backgroundTaskType)
     {
-        var backgroundTask = services.FirstOrDefault(service => service.ImplementationType == backgroundTaskType);
+        var backgroundTask = services.FirstOrDefault(service => service.ImplementationType == backgroundTaskType)
+            ?? throw new InvalidOperationException("Program.cs ne branche plus la tâche de fond " + backgroundTaskType.Name + ".");
 
-        if (backgroundTask != null)
-        {
-            services.Remove(backgroundTask);
-        }
+        services.Remove(backgroundTask);
     }
 
     // Écrit la clé jetable dans le dossier temporaire, et la fait effacer quand les tests se terminent.

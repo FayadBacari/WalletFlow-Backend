@@ -158,6 +158,9 @@ public class EnumCodeTablesTests
     [InlineData(EmailRequestType.TwoFactorDeactivationLink, "lien_double_auth")]
     [InlineData(EmailRequestType.SupportResponse, "reponse_support")]
     [InlineData(EmailRequestType.Alert, "alerte")]
+    [InlineData(EmailRequestType.DeletionRequest, "demande_suppression")]
+    [InlineData(EmailRequestType.DeletionCancellation, "annulation_suppression")]
+    [InlineData(EmailRequestType.AccountErasure, "effacement_compte")]
     public void EmailRequestTypeIsConvertedIntoItsDatabaseCodeAndBack(
         EmailRequestType emailRequestType, string databaseCode)
     {
@@ -171,7 +174,7 @@ public class EnumCodeTablesTests
     [Fact]
     public void EveryEmailRequestTypeHasItsCase()
     {
-        Assert.Equal(11, Enum.GetValues<EmailRequestType>().Length);
+        Assert.Equal(14, Enum.GetValues<EmailRequestType>().Length);
     }
 
     [Theory]

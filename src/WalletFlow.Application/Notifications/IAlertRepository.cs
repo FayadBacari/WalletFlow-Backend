@@ -28,7 +28,8 @@ public interface IAlertRepository
     Task<Alert?> FindConnectionAlertAsync(Guid connectionId);
 
     // Donne les connexions de tous les utilisateurs dont l'autorisation finit à cette date ou avant, qui n'ont pas encore
-    // leur alerte, et dont l'utilisateur n'a pas désactivé cette alerte : la tâche de fond les prévient. Rien n'est suivi.
+    // leur alerte, et dont l'utilisateur n'a pas désactivé cette alerte ni demandé la suppression de son compte : la tâche de
+    // fond les prévient. Rien n'est suivi.
     Task<List<Guid>> FindConnectionsToWarnAsync(DateTime authorizationEndLimit);
 
     // Donne ce que dit l'e-mail de cette alerte, lu au moment de l'envoi. Renvoie null si l'alerte n'existe plus. Rien n'est suivi.

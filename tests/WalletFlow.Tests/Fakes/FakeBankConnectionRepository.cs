@@ -1,5 +1,6 @@
 using WalletFlow.Application.BankConnections;
 using WalletFlow.Domain.AccountsAndCategories;
+using WalletFlow.Domain.UsersAndSecurity;
 
 namespace WalletFlow.Tests.Fakes;
 
@@ -101,13 +102,16 @@ public class FakeBankConnectionRepository : IBankConnectionRepository, ITransact
         }
     }
 
-    // Donne les connexions qui ne sont pas expirées.
+    // Les comptes de la fausse base, pour savoir lesquels sont en suppression. Sans eux, aucun compte ne l'est.
+    public List<User> Users { get; set; } = new List<User>();
+
+    // Donne les connexions qui ne sont pas expirées, sauf celles des comptes en suppression.
     public Task<List<Guid>> FindConnectionIdsToUpdateAsync()
     {
         lock (pendingChangesLock)
         {
             var connectionIds = SavedConnections
-                .Where(connection => connection.Status != BankConnectionStatus.Expired)
+                .Where(connection => connection.Status != BankConnectionStatus.Expired && !IsBeingDeleted(connection.UserId))
                 .Select(connection => connection.Id)
                 .ToList();
             return Task.FromResult(connectionIds);
@@ -296,5 +300,24 @@ public class FakeBankConnectionRepository : IBankConnectionRepository, ITransact
         checkedConnections.Clear();
         readConnections.Clear();
         readAccounts.Clear();
+    }
+
+    // Donne les connexions pas encore expirées des comptes en suppression.
+    public Task<List<Guid>> FindConnectionIdsToRevokeAsync()
+    {
+        lock (pendingChangesLock)
+        {
+            var connectionIds = SavedConnections
+                .Where(connection => connection.Status != BankConnectionStatus.Expired && IsBeingDeleted(connection.UserId))
+                .Select(connection => connection.Id)
+                .ToList();
+            return Task.FromResult(connectionIds);
+        }
+    }
+
+    // Renvoie vrai si la suppression de ce compte est demandée.
+    private bool IsBeingDeleted(Guid userId)
+    {
+        return Users.Any(user => user.Id == userId && user.DeletionRequestedAt != null);
     }
 }

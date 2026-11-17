@@ -39,4 +39,15 @@ public interface IUserAccountRepository
 
     // Efface tout de suite les comptes non confirmés qui n'ont plus aucun lien valable, et renvoie leur nombre.
     Task<int> DeleteExpiredUnconfirmedAccountsAsync(DateTime now);
+
+    // Prépare l'effacement de tous les liens du compte, quel que soit leur type : la demande de suppression les annule (SS §7).
+    Task PrepareAllLinksRemovalAsync(Guid accountId);
+
+    // Donne les comptes dont la suppression est demandée à cette date ou avant, du plus ancien au plus récent : la tâche de
+    // fond les efface. Rien n'est suivi.
+    Task<List<Guid>> FindAccountsToEraseAsync(DateTime requestedAtOrBefore);
+
+    // Prépare l'effacement définitif de ce compte, lu par cet accès à la base : tout ce qui lui appartient part avec lui, et le
+    // journal garde ses événements sans lui (MPD). L'enregistrement échoue si une autre requête l'a changé depuis sa lecture.
+    void PrepareErasure(User account);
 }

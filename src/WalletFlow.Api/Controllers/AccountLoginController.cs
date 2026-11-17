@@ -17,6 +17,7 @@ namespace WalletFlow.Api.Controllers;
 public class AccountLoginController : ControllerBase
 {
     public const string LoggedInMessage = "Tu es connecté.";
+    public const string DeletionCancelledMessage = "Tu es connecté. La suppression de ton compte est annulée.";
     public const string CodeRequiredMessage = "Saisis le code de ton application d'authentification, ou un code de secours.";
 
     private readonly AccountLoginService loginService;
@@ -47,7 +48,7 @@ public class AccountLoginController : ControllerBase
         if (result is AccountLoginResult.LoggedIn loggedIn)
         {
             SessionCookiesConfiguration.WriteLoginCookies(Response, loggedIn.SessionToken, loggedIn.DeviceToken);
-            return Ok(new LoginResponse(LoggedInMessage, false));
+            return Ok(CreateLoggedInResponse(loggedIn.HasCancelledDeletion));
         }
 
         if (result is AccountLoginResult.WaitingForTwoFactorCode waitingForCode)
@@ -62,5 +63,11 @@ public class AccountLoginController : ControllerBase
         }
 
         return Problem(statusCode: StatusCodes.Status401Unauthorized, title: ErrorMessages.WrongCredentials);
+    }
+
+    // Donne la réponse d'une connexion réussie. Une connexion qui annule la suppression du compte le dit (GR Suppression).
+    public static LoginResponse CreateLoggedInResponse(bool hasCancelledDeletion)
+    {
+        return new LoginResponse(hasCancelledDeletion ? DeletionCancelledMessage : LoggedInMessage, false, hasCancelledDeletion);
     }
 }

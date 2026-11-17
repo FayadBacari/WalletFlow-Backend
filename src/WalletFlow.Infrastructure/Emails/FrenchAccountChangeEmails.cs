@@ -4,7 +4,8 @@ using WalletFlow.Domain.UsersAndSecurity;
 
 namespace WalletFlow.Infrastructure.Emails;
 
-// Texte en français des e-mails du changement d'adresse. La durée du lien vient de sa règle : le texte la suit si elle change.
+// Texte en français des e-mails du changement d'adresse et de la suppression du compte. Les durées viennent de leur règle :
+// le texte les suit si elles changent.
 public class FrenchAccountChangeEmails : IAccountChangeEmails
 {
     // Crée l'e-mail envoyé à la nouvelle adresse, avec le lien qui la confirme (GR Compte).
@@ -52,5 +53,38 @@ public class FrenchAccountChangeEmails : IAccountChangeEmails
             """;
 
         return new EmailMessage(recipient, "L'adresse e-mail de ton compte WalletFlow a changé", body);
+    }
+
+    // Crée l'e-mail qui confirme la demande de suppression. Il donne le jour de l'effacement, la façon de changer d'avis, et
+    // finit par l'adresse de la page de support, seule sur sa ligne (SS §9).
+    public EmailMessage CreateDeletionRequestedEmail(string recipient, DateOnly erasureDayInParis, string supportPageAddress)
+    {
+        var body = $"""
+            Bonjour,
+
+            La suppression de ton compte WalletFlow est demandée. Toutes tes sessions sont fermées, et l'autorisation donnée à ta banque est révoquée.
+
+            Ton compte et toutes tes données seront effacés définitivement le {FrenchDates.WriteDay(erasureDayInParis)}. Pour changer d'avis, il te suffit de te reconnecter avant cette date : tu retrouveras toutes tes données, et tu n'auras qu'à renouveler l'autorisation de ta banque.
+
+            Si ce n'est pas toi qui as demandé la suppression, reconnecte-toi tout de suite pour l'annuler, choisis un nouveau mot de passe avec « Mot de passe oublié », puis écris au support de WalletFlow :
+            {supportPageAddress}
+            """;
+
+        return new EmailMessage(recipient, "La suppression de ton compte WalletFlow est demandée", body);
+    }
+
+    // Crée l'e-mail qui confirme l'effacement définitif. Le compte n'existe plus : rien ne peut plus être fait depuis WalletFlow.
+    // Les sauvegardes sont gardées 30 jours (SS §7) : c'est une règle de l'hébergement, que le code n'applique pas lui-même.
+    public EmailMessage CreateAccountErasedEmail(string recipient)
+    {
+        var body = $"""
+            Bonjour,
+
+            Comme tu l'avais demandé il y a {AccountDeletionRules.ErasureDelay.Days} jours, ton compte WalletFlow est effacé, avec toutes ses données. Elles disparaîtront aussi de nos sauvegardes au plus tard dans 30 jours.
+
+            Merci d'avoir utilisé WalletFlow.
+            """;
+
+        return new EmailMessage(recipient, "Ton compte WalletFlow est effacé", body);
     }
 }

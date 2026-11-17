@@ -58,6 +58,14 @@ public static class PostgresErrors
     public const string SecurityEventTargetForeignKey = "evenement_securite_id_utilisateur_vise_fkey";
     public const string ResponseRequestForeignKey = "reponse_support_id_demande_fkey";
 
+    // Noms donnés par PostgreSQL aux clés étrangères vers un compte que la tâche d'effacement peut effacer au même instant
+    // (GR Suppression) : une connexion, un lien reçu par e-mail ou une action de l'administrateur lit le compte, puis écrit
+    // son nouvel appareil, sa session, son événement du journal ou sa demande d'e-mail. Le passage suivant ne trouve plus le compte.
+    public const string DeviceAccountForeignKey = "appareil_id_utilisateur_fkey";
+    public const string SessionAccountForeignKey = "session_id_utilisateur_fkey";
+    public const string SecurityEventAccountForeignKey = "evenement_securite_id_utilisateur_fkey";
+    public const string EmailRequestAccountForeignKey = "demande_email_id_utilisateur_fkey";
+
     // Nom de la contrainte du script SQL : un mouvement garde au moins un sac. L'application ne crée jamais un mouvement
     // sans sac : cette contrainte refuse seulement deux suppressions simultanées de deux sacs reliés par un mouvement,
     // qui viderait chacune un côté de ce mouvement. La seconde suppression recommence, et le déclencheur efface alors ce mouvement.
@@ -80,7 +88,8 @@ public static class PostgresErrors
         BankAccountConnectionForeignKey, TransactionAccountForeignKey, TransactionCategoryForeignKey, RuleCategoryForeignKey,
         MovementSourceBagForeignKey, MovementDestinationBagForeignKey, SuggestionCategoryForeignKey,
         AlertCategoryForeignKey, AlertBagForeignKey, AlertConnectionForeignKey,
-        SecurityEventTargetForeignKey, ResponseRequestForeignKey
+        SecurityEventTargetForeignKey, ResponseRequestForeignKey,
+        DeviceAccountForeignKey, SessionAccountForeignKey, SecurityEventAccountForeignKey, EmailRequestAccountForeignKey
     };
 
     // Renvoie vrai si l'erreur vient de l'unicité de l'adresse e-mail : un autre compte utilise déjà cette adresse.

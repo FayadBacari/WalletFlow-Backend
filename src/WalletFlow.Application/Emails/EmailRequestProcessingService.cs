@@ -132,6 +132,9 @@ public class EmailRequestProcessingService
             EmailRequestType.TwoFactorDeactivationLink => await TrySendTwoFactorLinkEmailAsync(request),
             EmailRequestType.SupportResponse => await TrySendSupportResponseEmailAsync(request),
             EmailRequestType.Alert => await TrySendAlertEmailAsync(request),
+            EmailRequestType.DeletionRequest => await TrySendDeletionRequestEmailAsync(request),
+            EmailRequestType.DeletionCancellation => await TrySendSecurityAlertAsync(request, securityAlertEmails.CreateDeletionCancelledEmail),
+            EmailRequestType.AccountErasure => await TrySendEmailAsync(changeEmails.CreateAccountErasedEmail(ReadEmailAddress(request)), null, null),
             _ => throw new InvalidOperationException("Ce type de demande d'e-mail n'est pas prévu.")
         };
     }
@@ -274,6 +277,25 @@ public class EmailRequestProcessingService
             BuildSupportPageAddress());
 
         return await TrySendEmailAsync(responseEmail, content.AccountId, null);
+    }
+
+    // Confirme la demande de suppression à l'adresse actuelle du compte, avec le jour de Paris où il sera effacé. Une demande
+    // déjà annulée par une connexion, ou un compte déjà effacé, ne reçoit rien : il n'y a plus rien à confirmer.
+    private async Task<SendingAttempt> TrySendDeletionRequestEmailAsync(EmailRequest request)
+    {
+        var account = await accountRepository.FindByIdAsync(ReadUserId(request));
+        if (account?.DeletionRequestedAt is not DateTime deletionRequestedAt)
+        {
+            return SendingAttempt.Finished(request.UserId, null);
+        }
+
+        var erasureMoment = AccountDeletionRules.FindErasureMoment(deletionRequestedAt);
+        var requestEmail = changeEmails.CreateDeletionRequestedEmail(
+            account.Email,
+            DateOnly.FromDateTime(UsersCalendar.ConvertToUsersTime(erasureMoment)),
+            BuildSupportPageAddress());
+
+        return await TrySendEmailAsync(requestEmail, account.Id, null);
     }
 
     // Envoie l'e-mail d'une alerte à l'adresse actuelle du compte. Ce qu'il dit est lu au moment de l'envoi : une catégorie

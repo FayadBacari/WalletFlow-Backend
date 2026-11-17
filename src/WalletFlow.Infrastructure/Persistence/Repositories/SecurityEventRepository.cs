@@ -7,9 +7,6 @@ namespace WalletFlow.Infrastructure.Persistence.Repositories;
 // Écrit les événements du journal de sécurité dans la base PostgreSQL (SS §11).
 public class SecurityEventRepository : ISecurityEventRepository
 {
-    // Nom donné par PostgreSQL à la clé étrangère qui relie un événement à son compte.
-    private const string AccountForeignKey = "evenement_securite_id_utilisateur_fkey";
-
     private readonly WalletFlowDatabaseContext databaseContext;
 
     // Reçoit l'accès à la base de la requête en cours.
@@ -34,7 +31,7 @@ public class SecurityEventRepository : ISecurityEventRepository
         {
             SecurityEvent keptEvent;
 
-            if (PostgresErrors.IsForeignKeyViolation(exception, AccountForeignKey))
+            if (PostgresErrors.IsForeignKeyViolation(exception, PostgresErrors.SecurityEventAccountForeignKey))
             {
                 keptEvent = CreateEventOfErasedAccount(securityEvent);
             }

@@ -99,7 +99,7 @@ Les sections 11 à 13 complètent le dictionnaire : données calculées, paramè
 - `nb_tentatives_echouees` : de 0 à 5, 0 par défaut. Remis à 0 après une connexion réussie, un lien de déblocage, une récupération réussie, ou au premier essai qui suit la fin d'un blocage.
 - `nb_blocages` : 0 par défaut. Sert à doubler la durée de chaque nouveau blocage. Il s'arrête à 8 : la durée maximale est alors atteinte. Remis à 0 après une connexion réussie.
 - `date_fin_blocage` : vide si le compte n'est pas bloqué.
-- `date_demande_suppression` : vide s'il n'y a pas de demande. Effacement définitif 30 jours après.
+- `date_demande_suppression` : vide s'il n'y a pas de demande. Effacement définitif 30 jours après. Une connexion réussie avant l'effacement la vide : la suppression est annulée (GR Suppression).
 - `dernier_mois_suggestions` : premier jour du dernier mois dont les suggestions ont été calculées, vide avant le premier calcul. Les suggestions d'un mois ne sont calculées qu'une fois (GR Sacs).
 
 
@@ -184,7 +184,7 @@ Seul l'administrateur fait envoyer le lien `desactivation_double_auth` (GR Admin
 **Contraintes**
 
 - `id_evenement` : UUID.
-- `type_evenement` : `connexion`, `blocage`, `deblocage`, `recuperation_mdp`, `changement_mdp`, `changement_email`, `activation_double_auth`, `desactivation_double_auth`, `connexion_banque`, `deconnexion_banque`, `export_donnees`, `demande_suppression`, `action_admin`, `changement_role` ou `acces_refuse`. `connexion_banque` sert aussi au renouvellement de l'autorisation bancaire.
+- `type_evenement` : `connexion`, `blocage`, `deblocage`, `recuperation_mdp`, `changement_mdp`, `changement_email`, `activation_double_auth`, `desactivation_double_auth`, `connexion_banque`, `deconnexion_banque`, `export_donnees`, `demande_suppression`, `action_admin`, `changement_role` ou `acces_refuse`. `connexion_banque` sert aussi au renouvellement de l'autorisation bancaire. `deconnexion_banque` sert aussi à la révocation des banques d'un compte en suppression.
 - `resultat_evenement` : `succes` ou `echec`.
 - `date_evenement` : conservé 1 an, puis effacé (SS §11).
 - `adresse_ip_evenement` : IPv4 ou IPv6. Effacée quand le compte de l'utilisateur est supprimé.
@@ -211,7 +211,7 @@ Une action de l'administrateur (`action_admin`) est rattachée à l'administrate
 - `id_connexion` : UUID.
 - `id_connexion_externe` : fourni par le prestataire, unique. Sert à retrouver la connexion à chaque mise à jour.
 - `nom_banque` : fourni par le prestataire, 1 à 100 caractères.
-- `statut_connexion` : `active`, `en_erreur` ou `expiree`, `active` par défaut. Quand la banque ne répond pas, la connexion passe `en_erreur` et l'application affiche le dernier solde connu.
+- `statut_connexion` : `active`, `en_erreur` ou `expiree`, `active` par défaut. Quand la banque ne répond pas, la connexion passe `en_erreur` et l'application affiche le dernier solde connu. La demande de suppression du compte révoque l'autorisation : la connexion passe `expiree`, et ses comptes et ses transactions restent jusqu'à l'effacement.
 - `date_expiration_autorisation` : au plus 180 jours après l'autorisation donnée à la banque, moins si la banque n'accepte pas 180 jours. L'utilisateur est prévenu 7 jours avant.
 
 Une connexion regroupe les comptes d'une même banque. La déconnecter supprime ses comptes et leurs transactions, et révoque l'autorisation (GR Comptes).
@@ -436,8 +436,8 @@ Une alerte est liée à son utilisateur et à son type, et selon son type à une
 **Contraintes**
 
 - `id_demande_email` : UUID.
-- `type_demande_email` : `recuperation_mdp`, `deblocage`, `changement_email`, `avis_ancienne_adresse`, `nouvel_appareil`, `changement_mdp`, `desactivation_double_auth`, `utilisation_code_secours`, `lien_double_auth`, `reponse_support` ou `alerte`.
-- `adresse_email_demande` : seulement quand l'e-mail ne part pas à l'adresse actuelle du compte : l'adresse saisie pour une récupération, la nouvelle adresse à confirmer, ou l'ancienne adresse prévenue. En minuscules, comme l'adresse d'un compte. Une réponse au support lit la sienne dans sa demande.
+- `type_demande_email` : `recuperation_mdp`, `deblocage`, `changement_email`, `avis_ancienne_adresse`, `nouvel_appareil`, `changement_mdp`, `desactivation_double_auth`, `utilisation_code_secours`, `lien_double_auth`, `reponse_support`, `alerte`, `demande_suppression`, `annulation_suppression` ou `effacement_compte`.
+- `adresse_email_demande` : seulement quand l'e-mail ne part pas à l'adresse actuelle du compte : l'adresse saisie pour une récupération, la nouvelle adresse à confirmer, l'ancienne adresse prévenue, ou l'adresse du compte effacé. En minuscules, comme l'adresse d'un compte. Une réponse au support lit la sienne dans sa demande.
 - `adresse_ip_demande` : IPv4 ou IPv6, celle de la requête qui a demandé l'e-mail, pour le journal de sécurité.
 - `date_demande_email` : renseignée automatiquement.
 - `nb_essais_envoi` : de 0 à 5, 0 par défaut.
@@ -445,7 +445,7 @@ Une alerte est liée à son utilisateur et à son type, et selon son type à une
 
 La file d'e-mails est gardée en base : un redémarrage du serveur ne perd aucune demande. Elle ne contient aucun secret : chaque lien est créé au moment de l'envoi. Une demande est effacée dès que l'e-mail est parti, ou après son 5e échec, noté dans le journal technique (SS §9).
 
-Une récupération ne vise aucun compte : elle est mise dans la file avec l'adresse saisie, avant de savoir si un compte l'utilise. Une réponse au support n'en vise pas non plus : elle est liée à sa réponse (§10.2), et part à l'adresse lue dans la demande au moment de l'envoi, celle du compte ou celle du visiteur. Toute autre demande vise un compte. Une demande de type `alerte` est liée à son alerte (§9.3). Ces liens sont les associations ATTENDRE, ANNONCER et TRANSMETTRE du MCD.
+Une récupération ne vise aucun compte : elle est mise dans la file avec l'adresse saisie, avant de savoir si un compte l'utilise. Une réponse au support n'en vise pas non plus : elle est liée à sa réponse (§10.2), et part à l'adresse lue dans la demande au moment de l'envoi, celle du compte ou celle du visiteur. L'e-mail d'effacement n'en vise plus : il entre dans la file avec l'effacement du compte, et garde son adresse jusqu'à son envoi. Toute autre demande vise un compte. Une demande de type `alerte` est liée à son alerte (§9.3). Ces liens sont les associations ATTENDRE, ANNONCER et TRANSMETTRE du MCD.
 
 
 ## 10. Support
@@ -520,47 +520,49 @@ Ces données ne sont **pas stockées** : elles sont recalculées à chaque affic
 
 Ces valeurs sont les mêmes pour tous les utilisateurs. Elles relèvent de la configuration de l'application, pas des données de chaque utilisateur.
 
-| Paramètre                                    | Valeur                           | Source         |
-|----------------------------------------------|----------------------------------|----------------|
-| Tentatives de connexion avant blocage        | 5                                | GR Auth        |
-| Durée du premier blocage                     | 15 min, doublée à chaque blocage | GR Auth        |
-| Durée maximale d'un blocage                  | 24 heures                        | GR Auth        |
-| Longueur du mot de passe                     | 12 à 128 caractères              | GR Auth, SS §2 |
-| Inactivité avant fermeture de la session     | 30 minutes                       | GR Auth        |
-| Validité du lien de récupération             | 30 minutes                       | GR Auth        |
-| Validité des liens de confirmation           | 24 heures (inscription, e-mail)  | SS §2          |
-| Validité du lien de déblocage                | 1 heure                          | SS §2          |
-| Lien de désactivation de la double auth.     | 24 heures                        | SS §2          |
-| Mot de passe inchangé avant ce lien          | 7 jours au moins                 | GR Auth        |
-| Mauvais mots de passe sur ce lien            | 5, puis il est annulé            | GR Auth        |
-| Nombre de codes de secours                   | 10                               | GR Auth, SS §2 |
-| Durée d'une autorisation bancaire            | 180 jours au plus                | GR Comptes     |
-| Rappel avant la fin de l'autorisation        | 7 jours                          | GR Comptes     |
-| Mises à jour en arrière-plan                 | 4 par jour au plus               | GR Comptes     |
-| Catégories créées à l'inscription            | 8 (voir §6.1)                    | GR Dépenses    |
-| Catégories par utilisateur                   | 100 au plus                      | SS §6          |
-| Sacs par utilisateur                         | 100 au plus                      | SS §6          |
-| Déplacements d'argent par utilisateur        | 1 000 sur 24 heures glissantes   | SS §6          |
-| Lectures coûteuses par session               | 60 par minute                    | SS §6          |
-| Demandes de support par utilisateur          | 10 sur 24 heures glissantes      | SS §6          |
-| Règles de classement communes                | Liste fournie par l'application  | GR Dépenses    |
-| Seuil de dépassement d'une catégorie         | Moyenne sur 3 mois + 20 %        | GR Sacs        |
-| Historique minimal (suggestions par moyenne) | 3 mois                           | GR Sacs        |
-| Seuil d'épargne mensuelle                    | 20 % des revenus                 | GR Sacs        |
-| Pause après une suggestion ignorée           | 30 jours                         | GR Sacs        |
-| Calcul des suggestions d'un mois             | À partir du 5 du mois suivant    | GR Sacs        |
-| Seuils d'alerte de budget                    | 80 % et 100 %, une fois par mois | GR Dépenses    |
-| Alertes envoyées tant que le mobile n'existe | Par e-mail                       | GR Notif       |
-| Essais d'envoi d'un e-mail                   | 5 au plus                        | SS §9          |
-| Attente entre deux essais d'envoi            | 1 min, 5 min, 30 min, 2 h        | SS §9          |
-| Conservation d'une alerte de budget          | 2 mois après son mois            | SS §7          |
-| Conservation d'une alerte de suggestion      | 2 mois après son mois            | SS §7          |
-| Conservation d'une demande de support        | 1 an après son envoi             | GR Admin       |
-| Durée d'une période de graphique             | 10 ans au plus                   | SS §6          |
-| Délai avant effacement d'un compte           | 30 jours                         | GR Suppression |
-| Effacement d'un compte non confirmé          | À l'expiration de son lien       | GR Auth        |
-| Conservation des sauvegardes                 | 30 jours                         | SS §7          |
-| Conservation du journal de sécurité          | 1 an                             | SS §11         |
+| Paramètre                                    | Valeur                                                 | Source         |
+|----------------------------------------------|--------------------------------------------------------|----------------|
+| Tentatives de connexion avant blocage        | 5                                                      | GR Auth        |
+| Durée du premier blocage                     | 15 min, doublée à chaque blocage                       | GR Auth        |
+| Durée maximale d'un blocage                  | 24 heures                                              | GR Auth        |
+| Longueur du mot de passe                     | 12 à 128 caractères                                    | GR Auth, SS §2 |
+| Inactivité avant fermeture de la session     | 30 minutes                                             | GR Auth        |
+| Validité du lien de récupération             | 30 minutes                                             | GR Auth        |
+| Validité des liens de confirmation           | 24 heures (inscription, e-mail)                        | SS §2          |
+| Validité du lien de déblocage                | 1 heure                                                | SS §2          |
+| Lien de désactivation de la double auth.     | 24 heures                                              | SS §2          |
+| Mot de passe inchangé avant ce lien          | 7 jours au moins                                       | GR Auth        |
+| Mauvais mots de passe sur ce lien            | 5, puis il est annulé                                  | GR Auth        |
+| Nombre de codes de secours                   | 10                                                     | GR Auth, SS §2 |
+| Durée d'une autorisation bancaire            | 180 jours au plus                                      | GR Comptes     |
+| Rappel avant la fin de l'autorisation        | 7 jours                                                | GR Comptes     |
+| Mises à jour en arrière-plan                 | 4 par jour au plus                                     | GR Comptes     |
+| Catégories créées à l'inscription            | 8 (voir §6.1)                                          | GR Dépenses    |
+| Catégories par utilisateur                   | 100 au plus                                            | SS §6          |
+| Sacs par utilisateur                         | 100 au plus                                            | SS §6          |
+| Déplacements d'argent par utilisateur        | 1 000 sur 24 heures glissantes                         | SS §6          |
+| Lectures coûteuses par session               | 60 par minute                                          | SS §6          |
+| Demandes de support par utilisateur          | 10 sur 24 heures glissantes                            | SS §6          |
+| Téléchargement des données                   | 3 essais par heure et par utilisateur, bons ou mauvais | SS §6          |
+| Règles de classement communes                | Liste fournie par l'application                        | GR Dépenses    |
+| Seuil de dépassement d'une catégorie         | Moyenne sur 3 mois + 20 %                              | GR Sacs        |
+| Historique minimal (suggestions par moyenne) | 3 mois                                                 | GR Sacs        |
+| Seuil d'épargne mensuelle                    | 20 % des revenus                                       | GR Sacs        |
+| Pause après une suggestion ignorée           | 30 jours                                               | GR Sacs        |
+| Calcul des suggestions d'un mois             | À partir du 5 du mois suivant                          | GR Sacs        |
+| Seuils d'alerte de budget                    | 80 % et 100 %, une fois par mois                       | GR Dépenses    |
+| Alertes envoyées tant que le mobile n'existe | Par e-mail                                             | GR Notif       |
+| Essais d'envoi d'un e-mail                   | 5 au plus                                              | SS §9          |
+| Attente entre deux essais d'envoi            | 1 min, 5 min, 30 min, 2 h                              | SS §9          |
+| Conservation d'une alerte de budget          | 2 mois après son mois                                  | SS §7          |
+| Conservation d'une alerte de suggestion      | 2 mois après son mois                                  | SS §7          |
+| Conservation d'une demande de support        | 1 an après son envoi                                   | GR Admin       |
+| Durée d'une période de graphique             | 10 ans au plus                                         | SS §6          |
+| Délai avant effacement d'un compte           | 30 jours                                               | GR Suppression |
+| Passage de l'effacement des comptes          | Toutes les heures                                      | GR Suppression |
+| Effacement d'un compte non confirmé          | À l'expiration de son lien                             | GR Auth        |
+| Conservation des sauvegardes                 | 30 jours                                               | SS §7          |
+| Conservation du journal de sécurité          | 1 an                                                   | SS §11         |
 
 
 ## 13. Données volontairement non collectées

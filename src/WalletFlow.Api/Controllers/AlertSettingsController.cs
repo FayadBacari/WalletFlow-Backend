@@ -3,8 +3,6 @@ using WalletFlow.Api.Authentication;
 using WalletFlow.Api.Configuration;
 using WalletFlow.Api.Contracts;
 using WalletFlow.Application.Notifications;
-using WalletFlow.Domain.NotificationsAndSupport;
-using WalletFlow.Domain.UsersAndSecurity;
 
 namespace WalletFlow.Api.Controllers;
 
@@ -15,29 +13,6 @@ namespace WalletFlow.Api.Controllers;
 [Route("api/alert-settings")]
 public class AlertSettingsController : ControllerBase
 {
-    // Le nom de chaque type d'alerte tel que le site le reçoit et l'envoie.
-    private static readonly Dictionary<AlertKind, string> TypeNames = new Dictionary<AlertKind, string>
-    {
-        { AlertKind.BudgetReached, "budgetReached" },
-        { AlertKind.NewSuggestion, "newSuggestion" },
-        { AlertKind.BagGoalReached, "bagGoalReached" },
-        { AlertKind.BankAuthorizationToRenew, "bankAuthorizationToRenew" },
-        { AlertKind.NewDevice, "newDevice" },
-        { AlertKind.AccountLocked, "accountLocked" },
-        { AlertKind.PasswordChange, "passwordChange" },
-        { AlertKind.EmailChange, "emailChange" },
-        { AlertKind.TwoFactorDeactivation, "twoFactorDeactivation" },
-        { AlertKind.BackupCodeUse, "backupCodeUse" },
-    };
-
-    // Le nom de chaque canal tel que le site le reçoit et l'envoie.
-    private static readonly Dictionary<NotificationChannel, string> ChannelNames = new Dictionary<NotificationChannel, string>
-    {
-        { NotificationChannel.Email, "email" },
-        { NotificationChannel.Phone, "phone" },
-        { NotificationChannel.EmailAndPhone, "emailAndPhone" },
-    };
-
     private readonly AlertSettingsService settingsService;
 
     // Reçoit le cas d'utilisation des réglages d'alerte.
@@ -67,7 +42,7 @@ public class AlertSettingsController : ControllerBase
     [RequestSizeLimit(RequestSizeConfiguration.MaximumAlertSettingsRequestBytes)]
     public async Task<IActionResult> ChangeChannel(AlertChannelRequest request)
     {
-        if (!TryReadName(ChannelNames, request.Channel, out var channel))
+        if (!WebsiteNames.TryReadNotificationChannel(request.Channel, out var channel))
         {
             ModelState.AddModelError(nameof(AlertChannelRequest.Channel), ErrorMessages.AlertChannelUnknown);
             return ValidationProblem();
@@ -82,7 +57,7 @@ public class AlertSettingsController : ControllerBase
     [RequestSizeLimit(RequestSizeConfiguration.MaximumAlertSettingsRequestBytes)]
     public async Task<IActionResult> Switch(string type, AlertSwitchRequest request)
     {
-        if (!TryReadName(TypeNames, type, out var kind))
+        if (!WebsiteNames.TryReadAlertKind(type, out var kind))
         {
             return Problem(statusCode: StatusCodes.Status404NotFound);
         }
@@ -111,30 +86,13 @@ public class AlertSettingsController : ControllerBase
         return Problem(statusCode: StatusCodes.Status409Conflict, title: ErrorMessages.AccountChangedMeanwhile);
     }
 
-    // Retrouve la valeur qui porte exactement ce nom, majuscules comprises. Renvoie faux pour tout autre nom.
-    private static bool TryReadName<TValue>(Dictionary<TValue, string> names, string? name, out TValue value)
-        where TValue : struct, Enum
-    {
-        foreach (var pair in names)
-        {
-            if (string.Equals(pair.Value, name, StringComparison.Ordinal))
-            {
-                value = pair.Key;
-                return true;
-            }
-        }
-
-        value = default;
-        return false;
-    }
-
     // Donne les réglages tels que le site les reçoit.
     private static AlertSettingsResponse CreateResponse(AlertSettings settings)
     {
         var alerts = settings.Alerts
-            .Select(setting => new AlertSettingResponse(TypeNames[setting.Kind], setting.Label, setting.CanBeDisabled, setting.IsEnabled))
+            .Select(setting => new AlertSettingResponse(WebsiteNames.Of(setting.Kind), setting.Label, setting.CanBeDisabled, setting.IsEnabled))
             .ToList();
 
-        return new AlertSettingsResponse(ChannelNames[settings.Channel], alerts);
+        return new AlertSettingsResponse(WebsiteNames.Of(settings.Channel), alerts);
     }
 }

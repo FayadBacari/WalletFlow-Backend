@@ -1,3 +1,4 @@
+using System.Reflection;
 using Microsoft.EntityFrameworkCore;
 using Npgsql;
 using WalletFlow.Infrastructure.Persistence;
@@ -51,6 +52,44 @@ public class PostgresErrorsTests
         Assert.False(PostgresErrors.IsConflict(CreateSaveError(PostgresErrorCodes.ForeignKeyViolation, "sac_id_utilisateur_fkey")));
         Assert.False(PostgresErrors.IsConflict(CreateSaveError(PostgresErrorCodes.ForeignKeyViolation, "suggestion_id_utilisateur_fkey")));
         Assert.False(PostgresErrors.IsConflict(CreateSaveError(PostgresErrorCodes.UniqueViolation, PostgresErrors.BankAccountConnectionForeignKey)));
+    }
+
+    // GR Suppression : le compte qu'une connexion, un lien ou un administrateur vient de lire peut être effacé au même instant.
+    // Son nouvel appareil, sa session, son événement du journal et sa demande d'e-mail butent alors sur leur clé : c'est un
+    // conflit. Une clé vers le compte qu'aucune requête sans session n'écrit reste une panne.
+    [Fact]
+    public void KeysOfAnAccountErasedMeanwhileAreConflicts()
+    {
+        Assert.True(PostgresErrors.IsConflict(CreateSaveError(PostgresErrorCodes.ForeignKeyViolation, PostgresErrors.DeviceAccountForeignKey)));
+        Assert.True(PostgresErrors.IsConflict(CreateSaveError(PostgresErrorCodes.ForeignKeyViolation, PostgresErrors.SessionAccountForeignKey)));
+        Assert.True(PostgresErrors.IsConflict(CreateSaveError(PostgresErrorCodes.ForeignKeyViolation, PostgresErrors.SecurityEventAccountForeignKey)));
+        Assert.True(PostgresErrors.IsConflict(CreateSaveError(PostgresErrorCodes.ForeignKeyViolation, PostgresErrors.EmailRequestAccountForeignKey)));
+        Assert.False(PostgresErrors.IsConflict(CreateSaveError(PostgresErrorCodes.ForeignKeyViolation, "code_secours_id_utilisateur_fkey")));
+        Assert.False(PostgresErrors.IsConflict(CreateSaveError(PostgresErrorCodes.UniqueViolation, PostgresErrors.SessionAccountForeignKey)));
+    }
+
+    // Chaque contrainte et chaque index que l'application reconnaît existe dans la vraie base : un nom mal écrit ne reconnaîtrait
+    // jamais son conflit, et la requête tomberait en panne au lieu de recommencer.
+    [Fact]
+    public async Task EveryNameExistsInTheRealDatabase()
+    {
+        var names = typeof(PostgresErrors)
+            .GetFields(BindingFlags.Public | BindingFlags.Static)
+            .Where(field => field.IsLiteral && field.FieldType == typeof(string))
+            .Select(field => (string)field.GetRawConstantValue()!)
+            .ToList();
+        await using var databaseContext = LocalTestDatabase.CreateDatabaseContext();
+
+        var databaseNames = await databaseContext.Database
+            .SqlQuery<string>($"""
+                SELECT conname::text AS "Value" FROM pg_constraint
+                UNION
+                SELECT relname::text FROM pg_class WHERE relkind = 'i'
+                """)
+            .ToListAsync();
+
+        Assert.Equal(28, names.Count);
+        Assert.All(names, name => Assert.Contains(name, databaseNames));
     }
 
     // Une clé étrangère précise est reconnue à n'importe quelle profondeur de la chaîne d'erreurs, comme le reste.

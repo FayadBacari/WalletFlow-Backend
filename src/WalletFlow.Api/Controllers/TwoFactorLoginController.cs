@@ -50,7 +50,7 @@ public class TwoFactorLoginController : ControllerBase
         if (result is TwoFactorLoginResult.LoggedIn loggedIn)
         {
             SessionCookiesConfiguration.WriteLoginCookies(Response, loggedIn.SessionToken, loggedIn.DeviceToken);
-            return Ok(new LoginResponse(AccountLoginController.LoggedInMessage, false));
+            return Ok(AccountLoginController.CreateLoggedInResponse(loggedIn.HasCancelledDeletion));
         }
 
         return Problem(statusCode: StatusCodes.Status401Unauthorized, title: ErrorMessages.LoginMustRestart);

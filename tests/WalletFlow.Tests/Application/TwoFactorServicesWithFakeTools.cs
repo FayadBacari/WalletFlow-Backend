@@ -26,6 +26,8 @@ public class TwoFactorServicesWithFakeTools
     public FakeTwoFactorAuthenticationRepository TwoFactorRepository { get; } = new FakeTwoFactorAuthenticationRepository();
     public FakeDatabaseUnitOfWork UnitOfWork { get; }
     public FakeEmailRequestRepository EmailRequests { get; } = new FakeEmailRequestRepository();
+    public FakeBankConnectionRepository BankRepository { get; } = new FakeBankConnectionRepository();
+    public FakeBankDataProvider BankProvider { get; } = new FakeBankDataProvider();
     public FakePasswordHasher PasswordHasher { get; } = new FakePasswordHasher();
     public FakeBackupCodeHasher BackupCodeHasher { get; } = new FakeBackupCodeHasher();
     public FakeTimeProvider Clock { get; } = new FakeTimeProvider();
@@ -44,7 +46,9 @@ public class TwoFactorServicesWithFakeTools
             SessionRepository,
             TwoFactorRepository,
             SecurityEventRepository,
-            EmailRequests);
+            EmailRequests,
+            BankRepository);
+        BankRepository.Users = AccountRepository.SavedUsers;
         WaitingLoginStore = new InMemoryWaitingLoginStore(Clock);
         WaitingSecretStore = new InMemoryWaitingSecretStore(Clock);
         UsedCodesRegister = new InMemoryUsedAuthenticatorCodesRegister(Clock);

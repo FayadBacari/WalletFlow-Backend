@@ -68,4 +68,20 @@ public class FrenchSecurityAlertEmails : ISecurityAlertEmails
 
         return new EmailMessage(recipient, "Un code de secours de ton compte WalletFlow a servi", body);
     }
+
+    // Crée l'alerte de l'annulation d'une suppression. Celui qui s'est connecté connaissait le mot de passe : l'alerte invite
+    // à en choisir un nouveau si ce n'est pas l'utilisateur.
+    public EmailMessage CreateDeletionCancelledEmail(string recipient, DateTime cancellationTimeInParis, string supportPageAddress)
+    {
+        var body = $"""
+            Bonjour,
+
+            Une connexion à ton compte WalletFlow vient d'annuler la demande de suppression, {FrenchDates.WriteMoment(cancellationTimeInParis)} (heure de Paris). Ton compte et tes données sont gardés. Si ta banque était connectée, renouvelle son autorisation dans WalletFlow.
+
+            Si c'est toi, tu n'as rien d'autre à faire. Sinon, quelqu'un connaît ton mot de passe : choisis-en tout de suite un nouveau avec « Mot de passe oublié », puis écris au support de WalletFlow :
+            {supportPageAddress}
+            """;
+
+        return new EmailMessage(recipient, "La suppression de ton compte WalletFlow est annulée", body);
+    }
 }

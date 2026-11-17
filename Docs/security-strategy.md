@@ -97,9 +97,10 @@ Tous les liens (confirmation, récupération, déblocage, changement d'e-mail, d
 Ces actions redemandent le mot de passe, même si l'utilisateur est déjà connecté :
 - changer de mot de passe ou d'adresse e-mail (règle de gestion) ;
 - supprimer son compte (règle de gestion) ;
+- télécharger ses données (règle de gestion) ;
 - activer ou désactiver la double authentification (règle de gestion).
 
-Si la double authentification est activée, changer de mot de passe ou d'adresse e-mail demande aussi un code.
+Si la double authentification est activée, changer de mot de passe ou d'adresse e-mail, télécharger ses données ou supprimer son compte demande aussi un code.
 
 Les mauvais mots de passe saisis ici ne comptent pas pour le blocage du compte : un voleur de session pourrait sinon le bloquer.
 
@@ -162,8 +163,9 @@ Toute donnée est validée **côté serveur**, même si l'interface la valide d�
 - Accepter une suggestion ne crée qu'un seul mouvement, même en cas de double clic.
 
 ### Export de données
-- Si l'export est en CSV, les cellules qui commencent par `=`, `+`, `-` ou `@` sont précédées d'une apostrophe. Sinon, un libellé piégé peut exécuter une formule à l'ouverture dans un tableur.
+- L'export est un fichier JSON. Il ne contient aucun secret : ni empreinte de mot de passe, ni secret de double authentification, ni code de secours, ni jeton, ni identifiant de session. Il ne contient pas non plus le journal de sécurité, qui peut garder l'adresse IP d'un inconnu.
 - L'export se télécharge directement depuis l'application. Il n'est jamais envoyé par e-mail.
+- Un mauvais mot de passe compte aussi : une session volée ne peut pas en essayer plus de 3 par heure.
 
 
 ## 6. Protection des requêtes
@@ -183,10 +185,12 @@ Les valeurs ci-dessous sont des points de départ, à ajuster selon l'usage rée
 | Réglage de la double auth.                 | 10 par heure et par adresse IP                                                           |
 | Changement de mot de passe                 | 10 par heure et par adresse IP                                                           |
 | Changement d'adresse e-mail                | 3 par heure et par nouvelle adresse, 10 par heure et par adresse IP                      |
+| Suppression du compte                      | 10 par heure et par adresse IP                                                           |
 | Lien de changement d'adresse               | 10 essais par heure et par adresse IP                                                    |
 | Lien de désactivation de la double auth.   | 10 essais par heure et par adresse IP                                                    |
 | Formulaire de support (visiteur)           | 3 par heure et par adresse IP                                                            |
 | Demande de support (utilisateur)           | 10 sur 24 heures glissantes, par utilisateur                                             |
+| Téléchargement des données                 | 3 essais par heure et par utilisateur, bons ou mauvais                                   |
 | Mise à jour des comptes                    | 1 par minute et par utilisateur                                                          |
 | Recherche, graphiques, sacs et suggestions | 60 par minute et par session, toutes ces lectures ensemble                               |
 
@@ -265,8 +269,9 @@ Aucun script tiers (publicité, traceur, outil d'analyse externe) sur les pages 
 - La restauration est testée avant la mise en production, puis une fois par trimestre. Une sauvegarde jamais testée n'est pas une sauvegarde.
 
 ### Suppression de compte
-- Pendant les 30 jours de délai (règle de gestion), le compte est inaccessible, sauf pour annuler la suppression.
+- Pendant les 30 jours de délai (règle de gestion), le compte est inaccessible, sauf pour annuler la suppression : la demande ferme toutes ses sessions et annule ses liens en attente, et seule une connexion réussie le rouvre, en annulant la suppression. La récupération du mot de passe et le déblocage restent possibles, pour pouvoir revenir. Les tâches de fond ne touchent plus au compte.
 - Dès la demande, l'autorisation donnée à la banque est révoquée chez le prestataire (règle de gestion).
+- Si le prestataire ne répond pas, la demande est acceptée quand même : la révocation est réessayée en arrière-plan, puis une dernière fois avant l'effacement. Une connexion qui annule la suppression arrête ces essais : la banque reste connectée.
 - Passé ce délai, sont effacés : l'utilisateur, ses connexions bancaires, ses comptes bancaires et leurs transactions, ses catégories et ses règles de classement, ses sacs et leurs mouvements, ses suggestions, ses préférences d'alerte, ses alertes envoyées, ses e-mails en attente, ses demandes de support et leurs réponses, ses appareils, ses sessions, ses jetons et ses codes de secours. Dans le journal de sécurité, ses événements restent, mais sans son identifiant ni son adresse IP, et les actions d'un administrateur sur son compte ne le désignent plus.
 - Les données disparaissent des sauvegardes au plus tard 30 jours plus tard, quand la dernière sauvegarde qui les contient expire. C'est à indiquer dans la politique de confidentialité.
 
@@ -295,9 +300,10 @@ Les journaux techniques ne contiennent jamais de mot de passe, de jeton, de code
 - Les e-mails ne contiennent jamais de mot de passe, ni de solde, ni de liste de transactions.
 - Les liens pointent uniquement vers le domaine de WalletFlow, en HTTPS.
 - L'e-mail qui rappelle de renouveler l'autorisation bancaire ne contient aucun lien vers une banque : il invite seulement à ouvrir WalletFlow. Un e-mail qui propose de reconnecter sa banque en un clic est exactement ce qu'imiterait un hameçonnage.
-- Chaque e-mail de sécurité (connexion depuis un nouvel appareil, changement de mot de passe ou d'e-mail, blocage, désactivation de la double authentification, utilisation d'un code de secours) indique quoi faire si ce n'est pas l'utilisateur qui a agi. Quand il invite à écrire au support, il donne le lien de la page de support.
+- Chaque e-mail de sécurité (connexion depuis un nouvel appareil, changement de mot de passe ou d'e-mail, blocage, désactivation de la double authentification, utilisation d'un code de secours, annulation d'une suppression) indique quoi faire si ce n'est pas l'utilisateur qui a agi. Quand il invite à écrire au support, il donne le lien de la page de support.
 - L'e-mail qui prévient l'ancienne adresse ne cite pas la nouvelle, et invite à écrire au support, avec le lien de la page de support, si ce n'est pas l'utilisateur qui a agi.
 - Une réponse du support part par e-mail avec son texte, à l'adresse du compte ou à l'adresse de contact du visiteur (règle de gestion). Elle part en texte brut : un message piégé qu'elle citerait ne devient pas du HTML.
+- La demande de suppression, son annulation et l'effacement sont confirmés par e-mail (règle de gestion). L'e-mail d'effacement garde l'adresse du compte effacé jusqu'à son envoi, et rien d'autre.
 - Le contenu des notifications sur téléphone reste général (par exemple « Ton budget Loisirs est presque atteint ») : il peut s'afficher sur un écran verrouillé.
 - Une alerte ne cite aucun montant, par e-mail comme sur le téléphone (règle de gestion).
 - Tant que l'application mobile n'existe pas, toutes les alertes partent par e-mail (règle de gestion).

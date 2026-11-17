@@ -912,4 +912,61 @@ public class EmailRequestProcessingServiceTests
         Assert.IsType<EmailRequestOutcome.Finished>(outcome);
         Assert.Empty(emailSender.SentEmails);
     }
+
+    // --- Suppression du compte (GR Suppression)
+
+    // La confirmation donne le jour de Paris de l'effacement : 30 jours après une demande faite à 23 h 30 UTC, un soir d'hiver,
+    // c'est déjà le lendemain à Paris. Elle finit par l'adresse de la page de support.
+    [Fact]
+    public async Task DeletionRequestEmailGivesTheErasureDayInParis()
+    {
+        var account = AddAccount();
+        account.RequestDeletion(new DateTime(2026, 11, 16, 23, 30, 0, DateTimeKind.Utc));
+
+        await QueueThenProcessAsync(EmailRequest.ForDeletionRequest(account.Id, IpAddress, Now));
+
+        var email = Assert.Single(emailSender.SentEmails);
+        Assert.Equal((AccountEmail, "La suppression de ton compte WalletFlow est demandée"), (email.RecipientAddress, email.Subject));
+        Assert.Contains("effacés définitivement le 17 décembre 2026.", email.Body);
+        Assert.EndsWith(" :\n" + SupportPage, email.Body);
+    }
+
+    // Une demande déjà annulée par une connexion, ou un compte déjà effacé, n'a plus de confirmation à recevoir.
+    [Fact]
+    public async Task DeletionRequestEmailIsNotSentOnceCancelledOrErased()
+    {
+        var cancelled = AddAccount();
+
+        var cancelledOutcome = await QueueThenProcessAsync(EmailRequest.ForDeletionRequest(cancelled.Id, IpAddress, Now));
+        var erasedOutcome = await QueueThenProcessAsync(EmailRequest.ForDeletionRequest(Guid.NewGuid(), IpAddress, Now));
+
+        Assert.IsType<EmailRequestOutcome.Finished>(cancelledOutcome);
+        Assert.IsType<EmailRequestOutcome.Finished>(erasedOutcome);
+        Assert.Empty(emailSender.SentEmails);
+    }
+
+    // L'annulation est une alerte de sécurité : elle part à l'adresse du compte, avec le moment et la page de support.
+    [Fact]
+    public async Task DeletionCancellationAlertGoesToTheAccount()
+    {
+        var account = AddAccount();
+
+        await QueueThenProcessAsync(EmailRequest.ForDeletionCancellation(account.Id, IpAddress, Now));
+
+        var email = Assert.Single(emailSender.SentEmails);
+        Assert.Equal((AccountEmail, "La suppression de ton compte WalletFlow est annulée"), (email.RecipientAddress, email.Subject));
+        Assert.EndsWith(" :\n" + SupportPage, email.Body);
+    }
+
+    // L'e-mail d'effacement part à l'adresse qu'il garde : le compte n'existe plus.
+    [Fact]
+    public async Task ErasureEmailGoesToTheKeptAddressWithoutAnAccount()
+    {
+        var outcome = await QueueThenProcessAsync(EmailRequest.ForAccountErasure("efface@exemple.test", Now));
+
+        Assert.IsType<EmailRequestOutcome.Finished>(outcome);
+        var email = Assert.Single(emailSender.SentEmails);
+        Assert.Equal(("efface@exemple.test", "Ton compte WalletFlow est effacé"), (email.RecipientAddress, email.Subject));
+        Assert.Contains("il y a 30 jours", email.Body);
+    }
 }

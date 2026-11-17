@@ -7,6 +7,7 @@ using WalletFlow.Application.Administration;
 using WalletFlow.Application.Bags;
 using WalletFlow.Application.BankConnections;
 using WalletFlow.Application.Categories;
+using WalletFlow.Application.DataExport;
 using WalletFlow.Application.Emails;
 using WalletFlow.Application.Security;
 using WalletFlow.Application.Suggestions;
@@ -39,6 +40,7 @@ public class ApiFactoryWithFakes : WebApplicationFactory<Program>
     public FakeAlertRepository AlertRepository { get; } = new FakeAlertRepository();
     public FakeSupportRequestRepository SupportRepository { get; }
     public FakeAdministrationRepository AdministrationRepository { get; }
+    public FakeDataExportRepository ExportRepository { get; } = new FakeDataExportRepository();
     public FakeBankDataProvider BankProvider { get; } = new FakeBankDataProvider();
     public FakeDatabaseUnitOfWork UnitOfWork { get; }
     public FakeEmailSender EmailSender { get; } = new FakeEmailSender();
@@ -60,6 +62,7 @@ public class ApiFactoryWithFakes : WebApplicationFactory<Program>
         AlertRepository.Categories = CategoryRepository;
         AlertRepository.Bags = BagRepository;
         AlertRepository.Connections = BankRepository;
+        BankRepository.Users = AccountRepository.SavedUsers;
         SupportRepository = new FakeSupportRequestRepository(AccountRepository.SavedUsers);
         AdministrationRepository = new FakeAdministrationRepository(SupportRepository, BankRepository);
         OwnershipRepository = new FakeResourceOwnershipRepository(
@@ -103,6 +106,7 @@ public class ApiFactoryWithFakes : WebApplicationFactory<Program>
             services.AddSingleton<IAlertRepository>(AlertRepository);
             services.AddSingleton<ISupportRequestRepository>(SupportRepository);
             services.AddSingleton<IAdministrationRepository>(AdministrationRepository);
+            services.AddSingleton<IDataExportRepository>(ExportRepository);
             services.AddSingleton(EmailWakeUp);
             services.AddSingleton<IBankDataProvider>(BankProvider);
             services.AddSingleton<IEmailSender>(EmailSender);

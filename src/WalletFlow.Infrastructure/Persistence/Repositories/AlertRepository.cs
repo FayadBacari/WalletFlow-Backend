@@ -85,6 +85,7 @@ public class AlertRepository : IAlertRepository
             .AsNoTracking()
             .Where(connection =>
                 connection.AuthorizationExpiresAt <= authorizationEndLimit
+                && databaseContext.Users.Any(user => user.Id == connection.UserId && user.DeletionRequestedAt == null)
                 && !databaseContext.Alerts.Any(alert =>
                     alert.ConnectionId == connection.Id
                     && alert.Kind == AlertKind.BankAuthorizationToRenew)
