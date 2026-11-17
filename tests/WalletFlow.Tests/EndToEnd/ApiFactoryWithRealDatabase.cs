@@ -30,6 +30,9 @@ public class ApiFactoryWithRealDatabase : WebApplicationFactory<Program>
         {
             services.AddSingleton<IEmailSender>(EmailSender);
             services.AddSingleton<IBankDataProvider>(BankProvider);
+
+            // Un test peut donner une adresse IP à ses requêtes, pour la retrouver dans le vrai journal.
+            services.AddSingleton<IStartupFilter, VisitorAddressStartupFilter>();
         });
     }
 }

@@ -17,6 +17,8 @@ public class FakeUserAccountRepository : IUserAccountRepository, ITransactionalF
     private readonly List<User> accountsUnderCheck = new List<User>();
     private readonly List<EmailToken> preparedSignupTokens = new List<EmailToken>();
     private readonly List<Guid> accountsLosingOldAddressLinks = new List<Guid>();
+    private readonly List<Guid> accountsLosingAllLinks = new List<Guid>();
+    private readonly List<User> accountsToErase = new List<User>();
     private Action? concurrentChanges = null;
 
     // Ce que la fausse base contient.
@@ -64,6 +66,9 @@ public class FakeUserAccountRepository : IUserAccountRepository, ITransactionalF
 
     // Le compte est effacé pendant la connexion : au-delà de ce nombre de recherches par identifiant, il n'existe plus.
     public int? SearchesBeforeAccountDisappears { get; set; } = null;
+
+    // Une connexion annule la suppression d'un compte que cet enregistrement contrôle, ou efface, juste avant lui.
+    public bool DeletionCancelledBeforeCheckedSave { get; set; } = false;
 
     // Un autre compte prend la nouvelle adresse juste avant l'enregistrement d'un changement d'adresse.
     public User? AccountTakingNewEmailBeforeSave { get; set; } = null;
@@ -187,6 +192,42 @@ public class FakeUserAccountRepository : IUserAccountRepository, ITransactionalF
         return Task.CompletedTask;
     }
 
+    // Note le compte qui perdra tous ses liens à l'enregistrement.
+    public Task PrepareAllLinksRemovalAsync(Guid accountId)
+    {
+        lock (pendingChangesLock)
+        {
+            accountsLosingAllLinks.Add(accountId);
+        }
+
+        return Task.CompletedTask;
+    }
+
+    // Donne les comptes dont la suppression est demandée à cette date ou avant, du plus ancien au plus récent.
+    public Task<List<Guid>> FindAccountsToEraseAsync(DateTime requestedAtOrBefore)
+    {
+        lock (pendingChangesLock)
+        {
+            var accountIds = SavedUsers
+                .Where(user => user.DeletionRequestedAt != null && user.DeletionRequestedAt <= requestedAtOrBefore)
+                .OrderBy(user => user.DeletionRequestedAt)
+                .ThenBy(user => user.Id)
+                .Select(user => user.Id)
+                .ToList();
+            return Task.FromResult(accountIds);
+        }
+    }
+
+    // Note le compte à effacer à l'enregistrement. Il est contrôlé comme dans la vraie base : les conflits simulés le visent.
+    public void PrepareErasure(User account)
+    {
+        lock (pendingChangesLock)
+        {
+            accountsToErase.Add(account);
+            accountsUnderCheck.Add(account);
+        }
+    }
+
     // Note le compte à contrôler : les conflits simulés par les réglages de ce faux dépôt le visent.
     public void PrepareUnchangedCheck(User account)
     {
@@ -276,6 +317,15 @@ public class FakeUserAccountRepository : IUserAccountRepository, ITransactionalF
                 return true;
             }
 
+            // Une connexion annule la suppression du compte contrôlé juste avant l'enregistrement : la version du compte a changé.
+            if (DeletionCancelledBeforeCheckedSave && accountsUnderCheck.Count > 0)
+            {
+                var checkedAccount = accountsUnderCheck[0];
+                DeletionCancelledBeforeCheckedSave = false;
+                concurrentChanges = () => checkedAccount.CancelDeletion();
+                return true;
+            }
+
             // Un autre compte prend la nouvelle adresse juste avant l'enregistrement du changement : la base refuserait l'adresse en double.
             var otherAccount = AccountTakingNewEmailBeforeSave;
             if (otherAccount != null && FindAccountWithNewEmailSinceRead() != null)
@@ -337,6 +387,18 @@ public class FakeUserAccountRepository : IUserAccountRepository, ITransactionalF
                     && (token.Type == EmailTokenType.PasswordRecovery
                         || token.Type == EmailTokenType.AccountUnlock
                         || token.Type == EmailTokenType.TwoFactorDeactivation));
+            }
+
+            foreach (var accountId in accountsLosingAllLinks)
+            {
+                SavedEmailTokens.RemoveAll(token => token.UserId == accountId);
+            }
+
+            // Le compte effacé part avec ses liens, comme ON DELETE CASCADE dans la vraie base.
+            foreach (var account in accountsToErase)
+            {
+                SavedUsers.Remove(account);
+                SavedEmailTokens.RemoveAll(token => token.UserId == account.Id);
             }
 
             ClearTracking();
@@ -410,6 +472,8 @@ public class FakeUserAccountRepository : IUserAccountRepository, ITransactionalF
         readTokens.Clear();
         preparedSignupTokens.Clear();
         accountsLosingOldAddressLinks.Clear();
+        accountsLosingAllLinks.Clear();
+        accountsToErase.Clear();
         accountsUnderCheck.Clear();
     }
 }

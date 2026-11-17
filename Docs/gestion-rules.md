@@ -145,8 +145,9 @@
 - L'utilisateur peut changer ses données personnelles : son nom et son prénom.
 - L'utilisateur peut effacer son nom et son prénom.
 - L'utilisateur peut télécharger toutes ses données dans un fichier (droit à la portabilité prévu par le RGPD).
-- Changer le mot de passe ou l'adresse e-mail demande de saisir le mot de passe actuel.
-- Si la double authentification est activée, changer le mot de passe ou l'adresse e-mail demande aussi un code de l'application ou un code de secours.
+- Le fichier contient toutes les données que l'utilisateur voit dans l'application, sans les montants calculés à partir d'elles, et sans aucun mot de passe, code ni secret de connexion, ni le journal de sécurité.
+- Changer le mot de passe ou l'adresse e-mail, ou télécharger ses données, demande de saisir le mot de passe actuel.
+- Si la double authentification est activée, changer le mot de passe ou l'adresse e-mail, ou télécharger ses données, demande aussi un code de l'application ou un code de secours.
 - La nouvelle adresse e-mail doit être confirmée par un lien. L'ancienne adresse reçoit un message qui prévient du changement.
 - Pour confirmer sa nouvelle adresse, l'utilisateur ouvre le lien reçu et saisit son mot de passe. Tant qu'elle n'est pas confirmée, l'ancienne reste valable. Un nouveau lien remplace l'ancien.
 - La demande de changement affiche le même message, que la nouvelle adresse soit libre ou déjà utilisée.
@@ -189,7 +190,7 @@
 ## Suppression
 
 - L'utilisateur peut supprimer son compte.
-- La suppression demande de saisir le mot de passe, puis de confirmer.
-- La demande de suppression révoque aussi l'autorisation donnée à la banque.
-- Après la demande, l'utilisateur a 30 jours pour changer d'avis en se reconnectant. Passé ce délai, toutes ses données sont effacées définitivement, y compris des sauvegardes au plus tard 30 jours après. Dans le journal de sécurité, ses événements perdent son identifiant et son adresse IP.
-- Un e-mail confirme la demande de suppression, puis un autre confirme l'effacement définitif.
+- La suppression demande de saisir le mot de passe, et un code si la double authentification est activée, puis de confirmer.
+- La demande de suppression révoque aussi l'autorisation donnée à la banque. Les comptes et les transactions restent jusqu'à l'effacement, sans mise à jour.
+- Après la demande, l'utilisateur a 30 jours pour changer d'avis : se reconnecter annule la suppression. Il retrouve alors toutes ses données, et n'a qu'à renouveler l'autorisation de sa banque. Passé ce délai, toutes ses données sont effacées définitivement, y compris des sauvegardes au plus tard 30 jours après. Dans le journal de sécurité, ses événements perdent son identifiant et son adresse IP.
+- Un e-mail confirme la demande de suppression, un autre son annulation, et un dernier l'effacement définitif.

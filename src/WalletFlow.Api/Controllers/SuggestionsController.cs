@@ -5,7 +5,6 @@ using WalletFlow.Api.Configuration;
 using WalletFlow.Api.Contracts;
 using WalletFlow.Application.Security;
 using WalletFlow.Application.Suggestions;
-using WalletFlow.Domain.BagsAndSuggestions;
 
 namespace WalletFlow.Api.Controllers;
 
@@ -46,7 +45,7 @@ public class SuggestionsController : ControllerBase
         var suggestions = list.Suggestions
             .Select(view => new SuggestionResponse(
                 view.Id,
-                TranslateRule(view.Rule),
+                WebsiteNames.Of(view.Rule),
                 view.Month,
                 view.CategoryId,
                 view.CategoryName,
@@ -142,20 +141,6 @@ public class SuggestionsController : ControllerBase
         }
 
         return Problem(statusCode: StatusCodes.Status409Conflict, title: ErrorMessages.BagsChangedMeanwhile);
-    }
-
-    // Donne le nom de la règle tel que le site le reçoit.
-    private static string TranslateRule(SuggestionRule rule)
-    {
-        switch (rule)
-        {
-            case SuggestionRule.CategoryOverrun:
-                return "categoryOverrun";
-            case SuggestionRule.UnallocatedMoney:
-                return "unallocatedMoney";
-            default:
-                return "insufficientSavings";
-        }
     }
 
     // Note au journal si la ressource visée est à un autre utilisateur (SS §11). La réponse reste la même dans tous les cas.

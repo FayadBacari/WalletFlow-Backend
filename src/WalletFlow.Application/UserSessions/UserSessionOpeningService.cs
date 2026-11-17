@@ -58,11 +58,11 @@ public class UserSessionOpeningService
             deviceToken = newDeviceToken.Token;
         }
 
-        var saved = await savingService.SaveWithRetriesAsync(
+        var saving = await savingService.SaveWithRetriesAsync(
             () => PrepareLoginAsync(login, session, device),
-            false);
+            LoginSaving.Refused);
 
-        if (!saved)
+        if (saving == LoginSaving.Refused)
         {
             return null;
         }
@@ -72,15 +72,16 @@ public class UserSessionOpeningService
         return new OpenedUserSession
         {
             SessionToken = newSessionToken.Token,
-            DeviceToken = deviceToken
+            DeviceToken = deviceToken,
+            HasCancelledDeletion = saving == LoginSaving.SavedWithDeletionCancelled
         };
     }
 
     // Un passage : lit le compte, vérifie que ce qui vient d'être contrôlé est toujours valable, puis prépare en une fois
     // les compteurs remis à zéro, la nouvelle session, le nouvel appareil s'il y en a un avec son alerte, le code de secours
-    // utilisé s'il y en a un avec son alerte, et l'événement du journal. Donne faux si le compte a disparu ou si ce qui vient d'être vérifié
-    // n'est plus valable.
-    private async Task<PreparedChanges<bool>> PrepareLoginAsync(
+    // utilisé s'il y en a un avec son alerte, la suppression annulée s'il y en avait une avec son alerte, et l'événement du journal.
+    // Refuse si le compte a disparu, effacé par exemple, ou si ce qui vient d'être vérifié n'est plus valable.
+    private async Task<PreparedChanges<LoginSaving>> PrepareLoginAsync(
         SuccessfulLogin login,
         UserSession session,
         Device? device)
@@ -88,7 +89,7 @@ public class UserSessionOpeningService
         var account = await accountRepository.FindByIdAsync(login.AccountId);
         if (account == null || !AccountStillMatches(account, login))
         {
-            return PreparedChanges<bool>.NothingToSave(false);
+            return PreparedChanges<LoginSaving>.NothingToSave(LoginSaving.Refused);
         }
 
         if (login.BackupCodeId != null)
@@ -96,7 +97,7 @@ public class UserSessionOpeningService
             var backupCode = await twoFactorRepository.FindBackupCodeAsync(login.BackupCodeId.Value);
             if (backupCode == null || backupCode.UsedAt != null)
             {
-                return PreparedChanges<bool>.NothingToSave(false);
+                return PreparedChanges<LoginSaving>.NothingToSave(LoginSaving.Refused);
             }
 
             // L'enregistrement refusera tout si une autre requête vient de se servir de ce code.
@@ -105,6 +106,15 @@ public class UserSessionOpeningService
         }
 
         account.ResetLoginCounters();
+
+        // Une connexion réussie annule la suppression demandée, avec l'alerte qui le dit (GR Suppression). Elle l'annule tant que le
+        // compte n'est pas effacé, donc jusqu'au passage de la tâche horaire qui suit les 30 jours.
+        var cancelsDeletion = account.DeletionRequestedAt != null;
+        if (cancelsDeletion)
+        {
+            account.CancelDeletion();
+            emailRequests.PrepareRequest(EmailRequest.ForDeletionCancellation(login.AccountId, login.IpAddress, session.LastActivityAt));
+        }
 
         // Le compte est contrôlé même si ses compteurs n'ont pas changé : ce contrôle vérifie en base que personne ne l'a changé
         // depuis sa lecture, mot de passe compris. Sinon, une session survivrait à une récupération du mot de passe.
@@ -122,7 +132,7 @@ public class UserSessionOpeningService
             login.AccountId,
             login.IpAddress);
 
-        return PreparedChanges<bool>.SaveThenReturn(true);
+        return PreparedChanges<LoginSaving>.SaveThenReturn(cancelsDeletion ? LoginSaving.SavedWithDeletionCancelled : LoginSaving.Saved);
     }
 
     // Prépare le nouvel appareil, et l'alerte « nouvel appareil » s'il n'est pas le premier du compte : la toute première
@@ -193,5 +203,13 @@ public class UserSessionOpeningService
 
         var oldSessionTokenHash = tokenGenerator.HashToken(sessionToken);
         await sessionRepository.DeleteAsync(oldSessionTokenHash);
+    }
+
+    // Ce que l'enregistrement d'une connexion a fait.
+    private enum LoginSaving
+    {
+        Refused,
+        Saved,
+        SavedWithDeletionCancelled
     }
 }

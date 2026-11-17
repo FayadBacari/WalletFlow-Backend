@@ -41,6 +41,7 @@ public class SuggestionRepository : ISuggestionRepository
             .AsNoTracking()
             .Where(user =>
                 user.IsEmailConfirmed
+                && user.DeletionRequestedAt == null
                 && (user.LastSuggestionMonth == null || user.LastSuggestionMonth < month)
                 && databaseContext.BankConnections.Any(connection =>
                     connection.UserId == user.Id

@@ -100,6 +100,25 @@ public class EmailRequest
         return Create(EmailRequestType.BackupCodeUse, userId, null, ipAddress, now);
     }
 
+    // L'utilisateur vient de demander la suppression de son compte (GR Suppression).
+    public static EmailRequest ForDeletionRequest(Guid userId, IPAddress? ipAddress, DateTime now)
+    {
+        return Create(EmailRequestType.DeletionRequest, userId, null, ipAddress, now);
+    }
+
+    // Une connexion vient d'annuler la suppression du compte (GR Suppression).
+    public static EmailRequest ForDeletionCancellation(Guid userId, IPAddress? ipAddress, DateTime now)
+    {
+        return Create(EmailRequestType.DeletionCancellation, userId, null, ipAddress, now);
+    }
+
+    // Le compte vient d'être effacé, dans la même transaction : la demande ne vise plus de compte, et garde son adresse, en
+    // minuscules comme celle du compte, jusqu'à l'envoi (DD §9.4). Aucune requête ne la demande : elle n'a pas d'adresse IP.
+    public static EmailRequest ForAccountErasure(string erasedAccountEmail, DateTime now)
+    {
+        return Create(EmailRequestType.AccountErasure, null, erasedAccountEmail, null, now);
+    }
+
     // L'administrateur fait envoyer au compte le lien qui désactive sa double authentification (GR Admin).
     public static EmailRequest ForTwoFactorDeactivationLink(Guid userId, IPAddress? ipAddress, DateTime now)
     {

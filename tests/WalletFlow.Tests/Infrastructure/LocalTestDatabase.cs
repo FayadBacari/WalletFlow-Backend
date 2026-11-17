@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using WalletFlow.Application.Emails;
 using WalletFlow.Application.Notifications;
 using WalletFlow.Application.Persistence;
@@ -18,11 +19,12 @@ public static class LocalTestDatabase
     // Sans la variable : la base locale, dont le mode « trust » ne demande pas de mot de passe (voir SS §7 pour la production).
     private const string ConnectionString = "Host=localhost;Port=5432;Database=walletflow;Username=walletflow_app";
 
-    // Crée un accès à la base des tests.
-    public static WalletFlowDatabaseContext CreateDatabaseContext()
+    // Crée un accès à la base des tests. Un intercepteur peut agir entre deux commandes, comme une autre requête au même instant.
+    public static WalletFlowDatabaseContext CreateDatabaseContext(params IInterceptor[] interceptors)
     {
         var options = new DbContextOptionsBuilder<WalletFlowDatabaseContext>()
             .UseNpgsql(ReadConnectionString())
+            .AddInterceptors(interceptors)
             .Options;
 
         return new WalletFlowDatabaseContext(options);

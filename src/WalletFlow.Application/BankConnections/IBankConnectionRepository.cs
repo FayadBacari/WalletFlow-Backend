@@ -24,8 +24,12 @@ public interface IBankConnectionRepository
     // Donne les comptes de ces connexions.
     Task<List<BankAccount>> FindAccountsAsync(List<Guid> connectionIds);
 
-    // Donne les connexions de tous les utilisateurs qui ne sont pas expirées : la tâche de fond les met à jour.
+    // Donne les connexions qui ne sont pas expirées, sauf celles des comptes en suppression : la tâche de fond les met à jour.
     Task<List<Guid>> FindConnectionIdsToUpdateAsync();
+
+    // Donne les connexions pas encore expirées des comptes en suppression : leur autorisation reste à révoquer (SS §7). Rien
+    // n'est suivi.
+    Task<List<Guid>> FindConnectionIdsToRevokeAsync();
 
     // Renvoie vrai si ce compte, reconnu par son identifiant stable, est déjà dans une autre connexion de l'utilisateur.
     Task<bool> IsAccountConnectedElsewhereAsync(Guid userId, string stableId, Guid? exceptConnectionId);

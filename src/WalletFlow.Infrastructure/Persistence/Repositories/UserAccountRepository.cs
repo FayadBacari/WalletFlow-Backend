@@ -117,7 +117,8 @@ public class UserAccountRepository : IUserAccountRepository
         databaseContext.EmailTokens.Add(newToken);
     }
 
-    // Prépare l'effacement des liens de récupération et de déblocage du compte : ils sont partis vers l'ancienne adresse (SS §2).
+    // Prépare l'effacement des liens de récupération, de déblocage et de désactivation de la double authentification du compte :
+    // ils sont partis vers l'ancienne adresse (SS §2).
     // EF Core suit ces liens : si l'un d'eux vient de servir ou d'être remplacé, l'enregistrement échoue et le passage recommence.
     public async Task PrepareOldAddressLinksRemovalAsync(Guid accountId)
     {
@@ -152,5 +153,36 @@ public class UserAccountRepository : IUserAccountRepository
                     && token.Type == EmailTokenType.SignupConfirmation
                     && token.ExpiresAt > now))
             .ExecuteDeleteAsync();
+    }
+
+    // Prépare l'effacement de tous les liens du compte. EF Core les suit : si l'un d'eux vient de servir ou d'être remplacé,
+    // l'enregistrement échoue et le passage recommence.
+    public async Task PrepareAllLinksRemovalAsync(Guid accountId)
+    {
+        var links = await databaseContext.EmailTokens
+            .Where(token => token.UserId == accountId)
+            .ToListAsync();
+
+        databaseContext.EmailTokens.RemoveRange(links);
+    }
+
+    // Lit les comptes dont la suppression est demandée à cette date ou avant.
+    public async Task<List<Guid>> FindAccountsToEraseAsync(DateTime requestedAtOrBefore)
+    {
+        return await databaseContext.Users
+            .AsNoTracking()
+            .Where(user => user.DeletionRequestedAt != null && user.DeletionRequestedAt <= requestedAtOrBefore)
+            .OrderBy(user => user.DeletionRequestedAt)
+            .ThenBy(user => user.Id)
+            .Select(user => user.Id)
+            .ToListAsync();
+    }
+
+    // EF Core efface la ligne du compte en vérifiant sa version (xmin) : une connexion qui vient d'annuler la suppression fait
+    // échouer l'effacement. La base efface tout ce qui appartient au compte (ON DELETE CASCADE), et son déclencheur retire
+    // l'identifiant et l'adresse IP de ses événements du journal.
+    public void PrepareErasure(User account)
+    {
+        databaseContext.Users.Remove(account);
     }
 }

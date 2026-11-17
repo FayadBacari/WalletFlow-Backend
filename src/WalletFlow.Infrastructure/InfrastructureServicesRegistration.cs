@@ -9,6 +9,7 @@ using WalletFlow.Application.Suggestions;
 using WalletFlow.Application.Support;
 using WalletFlow.Application.BankConnections;
 using WalletFlow.Application.Categories;
+using WalletFlow.Application.DataExport;
 using WalletFlow.Application.Emails;
 using WalletFlow.Application.Notifications;
 using WalletFlow.Application.Persistence;
@@ -53,6 +54,7 @@ public static class InfrastructureServicesRegistration
         services.AddScoped<IAlertRepository, AlertRepository>();
         services.AddScoped<ISupportRequestRepository, SupportRequestRepository>();
         services.AddScoped<IAdministrationRepository, AdministrationRepository>();
+        services.AddScoped<IDataExportRepository, DataExportRepository>();
 
         return services;
     }
@@ -69,6 +71,7 @@ public static class InfrastructureServicesRegistration
         services.AddSingleton<IEmailAddressRequestLimiter, InMemoryEmailAddressRequestLimiter>();
         services.AddSingleton<IPasswordRecoveryRequestLimiter, InMemoryPasswordRecoveryRequestLimiter>();
         services.AddSingleton<IEmailChangeRequestLimiter, InMemoryEmailChangeRequestLimiter>();
+        services.AddSingleton<IDataExportLimiter, InMemoryDataExportLimiter>();
         services.AddSingleton<IAuthenticatorCodeTool, OtpNetAuthenticatorCodeTool>();
         services.AddSingleton<IWaitingLoginStore, InMemoryWaitingLoginStore>();
         services.AddSingleton<IWaitingSecretStore, InMemoryWaitingSecretStore>();

@@ -319,6 +319,21 @@ public class AccountLoginServiceTests
         Assert.Equal(5, CountSecurityEvents(SecurityEventType.Login, SecurityEventResult.Failure));
     }
 
+    // GR Suppression : un compte effacé entre l'essai compté et la trace du blocage n'a plus personne à prévenir. Ni trace du
+    // blocage, ni lien de déblocage, et la connexion reçoit le refus générique.
+    [Fact]
+    public async Task AccountErasedBeforeTheLockoutNoticeGetsNoNotice()
+    {
+        var account = AddAccount(failedAttemptCount: 4);
+        passwordHasher.OnPasswordVerified = () => accountRepository.SavedUsers.Remove(account);
+
+        var result = await LogInAsync(AccountEmail, WrongPassword);
+
+        AssertGenericRefusal(result);
+        Assert.Equal(0, CountSecurityEvents(SecurityEventType.Lockout, SecurityEventResult.Success));
+        Assert.Empty(emailRequests.SavedRequests);
+    }
+
     [Fact]
     public async Task FourWrongPasswordsDoNotWriteAnyLockoutEvent()
     {

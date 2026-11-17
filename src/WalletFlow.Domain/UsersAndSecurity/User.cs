@@ -16,6 +16,7 @@ public class User
     private short failedLoginAttemptCount = 0;
     private short lockoutCount = 0;
     private DateTime? lockoutEndsAt = null;
+    private DateTime? deletionRequestedAt = null;
     private DateOnly? lastSuggestionMonth = null;
     private NotificationChannel notificationChannel = NotificationChannel.Email;
 
@@ -103,7 +104,11 @@ public class User
     }
 
     // date_demande_suppression : vide s'il n'y a pas de demande de suppression.
-    public DateTime? DeletionRequestedAt { get; init; }
+    public DateTime? DeletionRequestedAt
+    {
+        get => deletionRequestedAt;
+        init => deletionRequestedAt = value;
+    }
 
     // dernier_mois_suggestions : premier jour du dernier mois dont les suggestions ont été calculées, vide avant le premier calcul.
     public DateOnly? LastSuggestionMonth
@@ -254,5 +259,29 @@ public class User
     {
         isTwoFactorEnabled = false;
         encryptedTotpSecret = null;
+    }
+
+    // Demande la suppression du compte à cette date : il sera effacé 30 jours après, sauf si l'utilisateur se reconnecte
+    // avant (GR Suppression). Une demande déjà en cours ne repart pas à zéro.
+    public void RequestDeletion(DateTime now)
+    {
+        if (deletionRequestedAt != null)
+        {
+            throw new InvalidOperationException("La suppression de ce compte est déjà demandée.");
+        }
+
+        deletionRequestedAt = now;
+    }
+
+    // Annule la demande de suppression : une connexion réussie pendant les 30 jours rouvre le compte (GR Suppression).
+    public void CancelDeletion()
+    {
+        deletionRequestedAt = null;
+    }
+
+    // Renvoie vrai si la suppression du compte est demandée depuis 30 jours ou plus : il peut être effacé.
+    public bool IsDueForErasureAt(DateTime now)
+    {
+        return deletionRequestedAt != null && AccountDeletionRules.FindErasureMoment(deletionRequestedAt.Value) <= now;
     }
 }

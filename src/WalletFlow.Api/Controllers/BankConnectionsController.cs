@@ -4,7 +4,6 @@ using WalletFlow.Api.Configuration;
 using WalletFlow.Api.Contracts;
 using WalletFlow.Application.BankConnections;
 using WalletFlow.Application.Security;
-using WalletFlow.Domain.AccountsAndCategories;
 
 namespace WalletFlow.Api.Controllers;
 
@@ -267,26 +266,12 @@ public class BankConnectionsController : ControllerBase
             responses.Add(new BankConnectionResponse(
                 view.Connection.Id,
                 view.Connection.BankName,
-                TranslateStatus(view.Status),
+                WebsiteNames.Of(view.Status),
                 view.Connection.AuthorizationExpiresAt,
                 view.IsEndingSoon,
                 accounts));
         }
 
         return responses;
-    }
-
-    // Donne le nom d'un état, tel que le site le lit.
-    private static string TranslateStatus(BankConnectionStatus status)
-    {
-        switch (status)
-        {
-            case BankConnectionStatus.Active:
-                return "active";
-            case BankConnectionStatus.InError:
-                return "inError";
-            default:
-                return "expired";
-        }
     }
 }

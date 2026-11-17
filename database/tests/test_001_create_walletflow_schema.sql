@@ -1058,6 +1058,56 @@ BEGIN
 END;
 $$;
 
+
+-- 20. GR Suppression : la demande de suppression, son annulation et l'effacement sont confirmés par e-mail. L'e-mail
+--     d'effacement ne vise plus de compte : il entre dans la file avec l'effacement, et garde l'adresse du compte effacé.
+DO $$
+DECLARE
+    utilisateur_id uuid;
+    compte_efface_id uuid;
+BEGIN
+    SELECT identifiant INTO utilisateur_id FROM donnees_communes_aux_tests_de_contraintes WHERE nom = 'utilisateur';
+
+    INSERT INTO demande_email (type_demande_email, id_utilisateur)
+    VALUES ('demande_suppression', utilisateur_id), ('annulation_suppression', utilisateur_id);
+    RAISE NOTICE 'OK : la demande de suppression et son annulation partent à l''adresse du compte';
+
+    PERFORM pg_temp.verifier_que_la_base_refuse_cette_instruction(
+        $sql$INSERT INTO demande_email (type_demande_email, adresse_email_demande)
+             VALUES ('demande_suppression', 'test-suppression@exemple.test')$sql$,
+        '23514', 'la confirmation d''une demande de suppression vise un compte');
+    PERFORM pg_temp.verifier_que_la_base_refuse_cette_instruction(
+        format($sql$INSERT INTO demande_email (type_demande_email, id_utilisateur, adresse_email_demande)
+                    VALUES ('annulation_suppression', %L, 'test-suppression@exemple.test')$sql$, utilisateur_id),
+        '23514', 'l''annulation part à l''adresse du compte, sans en garder une autre');
+    PERFORM pg_temp.verifier_que_la_base_refuse_cette_instruction(
+        format($sql$INSERT INTO demande_email (type_demande_email, id_utilisateur, adresse_email_demande)
+                    VALUES ('effacement_compte', %L, 'test-suppression@exemple.test')$sql$, utilisateur_id),
+        '23514', 'l''e-mail d''effacement ne vise aucun compte');
+    PERFORM pg_temp.verifier_que_la_base_refuse_cette_instruction(
+        $sql$INSERT INTO demande_email (type_demande_email) VALUES ('effacement_compte')$sql$,
+        '23514', 'l''e-mail d''effacement garde l''adresse du compte effacé');
+    PERFORM pg_temp.verifier_que_la_base_refuse_cette_instruction(
+        $sql$INSERT INTO demande_email (type_demande_email, adresse_email_demande)
+             VALUES ('effacement_compte', 'Test-Suppression@exemple.test')$sql$,
+        '23514', 'l''adresse d''un e-mail d''effacement est en minuscules');
+
+    INSERT INTO utilisateur (email_utilisateur, mot_de_passe_hash, email_confirme)
+    VALUES ('test-effacement@exemple.test', 'empreinte', TRUE)
+    RETURNING id_utilisateur INTO compte_efface_id;
+    INSERT INTO demande_email (type_demande_email, id_utilisateur) VALUES ('demande_suppression', compte_efface_id);
+    DELETE FROM utilisateur WHERE id_utilisateur = compte_efface_id;
+    INSERT INTO demande_email (type_demande_email, adresse_email_demande)
+    VALUES ('effacement_compte', 'test-effacement@exemple.test');
+
+    ASSERT NOT EXISTS (SELECT 1 FROM demande_email WHERE id_utilisateur = compte_efface_id)
+       AND (SELECT count(*) FROM demande_email
+            WHERE type_demande_email = 'effacement_compte' AND adresse_email_demande = 'test-effacement@exemple.test') = 1,
+        'ÉCHEC : seul l''e-mail d''effacement devait rester dans la file après l''effacement du compte';
+    RAISE NOTICE 'OK : l''e-mail d''effacement reste dans la file, sans compte, après l''effacement';
+END;
+$$;
+
 \echo
 \echo 'Tous les tests sont passés. La transaction est annulée : la base reste vide.'
 ROLLBACK;

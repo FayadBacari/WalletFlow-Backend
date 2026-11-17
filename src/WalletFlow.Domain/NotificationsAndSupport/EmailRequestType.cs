@@ -34,5 +34,14 @@ public enum EmailRequestType
     SupportResponse,
 
     // L'e-mail d'une des quatre alertes qu'on peut désactiver, lié à l'alerte qu'il annonce (DD §9.3).
-    Alert
+    Alert,
+
+    // La confirmation d'une demande de suppression du compte, avec la date de son effacement (GR Suppression).
+    DeletionRequest,
+
+    // L'alerte de l'annulation d'une suppression, par une connexion pendant les 30 jours (GR Suppression, SS §9).
+    DeletionCancellation,
+
+    // La confirmation de l'effacement définitif. Le compte n'existe plus : elle garde son adresse jusqu'à l'envoi (DD §9.4).
+    AccountErasure
 }

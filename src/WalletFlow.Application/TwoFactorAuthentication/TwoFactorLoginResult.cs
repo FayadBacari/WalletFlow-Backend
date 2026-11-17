@@ -14,6 +14,9 @@ public abstract class TwoFactorLoginResult
     {
         public required string SessionToken { get; init; }
         public required string DeviceToken { get; init; }
+
+        // Vrai si cette connexion a annulé la suppression du compte (GR Suppression).
+        public bool HasCancelledDeletion { get; init; } = false;
     }
 
     // Le code n'est pas bon : le visiteur peut encore essayer.

@@ -119,7 +119,8 @@ public class TwoFactorLoginService
         return new TwoFactorLoginResult.LoggedIn
         {
             SessionToken = session.SessionToken,
-            DeviceToken = session.DeviceToken
+            DeviceToken = session.DeviceToken,
+            HasCancelledDeletion = session.HasCancelledDeletion
         };
     }
 

@@ -18,4 +18,7 @@ public interface ISecurityAlertEmails
 
     // Crée l'alerte de l'utilisation d'un code de secours, à cette heure de Paris.
     EmailMessage CreateBackupCodeUsedEmail(string recipient, DateTime useTimeInParis, string supportPageAddress);
+
+    // Crée l'alerte de l'annulation d'une suppression : une connexion, à cette heure de Paris, a rouvert le compte (GR Suppression).
+    EmailMessage CreateDeletionCancelledEmail(string recipient, DateTime cancellationTimeInParis, string supportPageAddress);
 }

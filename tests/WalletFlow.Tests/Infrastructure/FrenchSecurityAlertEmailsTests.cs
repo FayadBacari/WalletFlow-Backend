@@ -11,7 +11,7 @@ public class FrenchSecurityAlertEmailsTests
 
     private readonly FrenchSecurityAlertEmails emails = new FrenchSecurityAlertEmails();
 
-    // Les quatre alertes de sécurité écrites par cette classe, au même moment.
+    // Les cinq alertes de sécurité écrites par cette classe, au même moment.
     private List<EmailMessage> CreateAll(DateTime moment)
     {
         return new List<EmailMessage>
@@ -19,7 +19,8 @@ public class FrenchSecurityAlertEmailsTests
             emails.CreateNewDeviceEmail(Recipient, moment, SupportPage),
             emails.CreatePasswordChangedEmail(Recipient, moment, SupportPage),
             emails.CreateTwoFactorDeactivatedEmail(Recipient, moment, SupportPage),
-            emails.CreateBackupCodeUsedEmail(Recipient, moment, SupportPage)
+            emails.CreateBackupCodeUsedEmail(Recipient, moment, SupportPage),
+            emails.CreateDeletionCancelledEmail(Recipient, moment, SupportPage)
         };
     }
 
@@ -62,9 +63,12 @@ public class FrenchSecurityAlertEmailsTests
         Assert.Contains("réactive la double authentification", all[2].Body);
         Assert.Contains("Un code de secours de ton compte WalletFlow vient de servir", all[3].Body);
         Assert.Contains("désactive et réactive la double authentification pour recevoir de nouveaux codes de secours", all[3].Body);
-        Assert.Equal(4, all.Select(email => email.Subject).Distinct().Count());
+        Assert.Contains("Une connexion à ton compte WalletFlow vient d'annuler la demande de suppression", all[4].Body);
+        Assert.Contains("quelqu'un connaît ton mot de passe : choisis-en tout de suite un nouveau avec « Mot de passe oublié »", all[4].Body);
+        Assert.Equal(5, all.Select(email => email.Subject).Distinct().Count());
         Assert.Equal("La double authentification de ton compte WalletFlow est désactivée", all[2].Subject);
         Assert.Equal("Un code de secours de ton compte WalletFlow a servi", all[3].Subject);
+        Assert.Equal("La suppression de ton compte WalletFlow est annulée", all[4].Subject);
     }
 
     // Compte les fois où ce morceau apparaît dans le texte.

@@ -63,7 +63,21 @@ public class BankConnectionRepository : IBankConnectionRepository
     public async Task<List<Guid>> FindConnectionIdsToUpdateAsync()
     {
         return await databaseContext.BankConnections
-            .Where(connection => connection.Status != BankConnectionStatus.Expired)
+            .Where(connection =>
+                connection.Status != BankConnectionStatus.Expired
+                && databaseContext.Users.Any(user => user.Id == connection.UserId && user.DeletionRequestedAt == null))
+            .Select(connection => connection.Id)
+            .ToListAsync();
+    }
+
+    // Lit les connexions à révoquer des comptes en suppression.
+    public async Task<List<Guid>> FindConnectionIdsToRevokeAsync()
+    {
+        return await databaseContext.BankConnections
+            .AsNoTracking()
+            .Where(connection =>
+                connection.Status != BankConnectionStatus.Expired
+                && databaseContext.Users.Any(user => user.Id == connection.UserId && user.DeletionRequestedAt != null))
             .Select(connection => connection.Id)
             .ToListAsync();
     }

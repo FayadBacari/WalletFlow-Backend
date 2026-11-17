@@ -310,8 +310,9 @@ CREATE TABLE reponse_support (
 
 -- La file d'e-mails (DD §9.4) : aucun secret, chaque lien est créé au moment de l'envoi. Une récupération ne vise aucun
 -- compte : elle entre dans la file avant de savoir si l'adresse en a un. Une réponse au support n'en vise pas non
--- plus : elle part à l'adresse lue dans sa demande au moment de l'envoi. Tout autre e-mail vise un compte. Seuls la
--- récupération, le lien vers la nouvelle adresse et l'avis à l'ancienne gardent une adresse, en minuscules comme
+-- plus : elle part à l'adresse lue dans sa demande au moment de l'envoi. L'e-mail d'effacement n'en vise plus : il
+-- entre dans la file avec l'effacement du compte. Tout autre e-mail vise un compte. Seuls la récupération, le lien
+-- vers la nouvelle adresse, l'avis à l'ancienne et l'e-mail d'effacement gardent une adresse, en minuscules comme
 -- celle du compte. Un e-mail d'alerte, et lui seul, est lié à son alerte ; une réponse au support, et elle seule, à
 -- sa réponse.
 CREATE TABLE demande_email (
@@ -331,12 +332,13 @@ CREATE TABLE demande_email (
     CONSTRAINT ck_demande_email_type CHECK (type_demande_email IN (
         'recuperation_mdp', 'deblocage', 'changement_email', 'avis_ancienne_adresse',
         'nouvel_appareil', 'changement_mdp', 'desactivation_double_auth', 'utilisation_code_secours',
-        'lien_double_auth', 'reponse_support', 'alerte')),
+        'lien_double_auth', 'reponse_support', 'alerte', 'demande_suppression', 'annulation_suppression',
+        'effacement_compte')),
     CONSTRAINT ck_demande_email_essais CHECK (nb_essais_envoi BETWEEN 0 AND 5),
     CONSTRAINT ck_demande_email_compte CHECK (
-        (type_demande_email IN ('recuperation_mdp', 'reponse_support')) = (id_utilisateur IS NULL)),
+        (type_demande_email IN ('recuperation_mdp', 'reponse_support', 'effacement_compte')) = (id_utilisateur IS NULL)),
     CONSTRAINT ck_demande_email_adresse CHECK (
-        (type_demande_email IN ('recuperation_mdp', 'changement_email', 'avis_ancienne_adresse'))
+        (type_demande_email IN ('recuperation_mdp', 'changement_email', 'avis_ancienne_adresse', 'effacement_compte'))
         = (adresse_email_demande IS NOT NULL)),
     CONSTRAINT ck_demande_email_minuscules CHECK (adresse_email_demande = lower(adresse_email_demande)),
     CONSTRAINT ck_demande_email_alerte CHECK ((type_demande_email = 'alerte') = (id_alerte IS NOT NULL)),

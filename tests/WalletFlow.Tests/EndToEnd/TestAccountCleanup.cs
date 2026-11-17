@@ -23,4 +23,15 @@ public static class TestAccountCleanup
             .Where(row => row.Email == email)
             .ExecuteDeleteAsync();
     }
+
+    // Efface les e-mails encore en file vers cette adresse sans viser de compte : l'e-mail d'effacement survit au compte effacé
+    // jusqu'à son envoi (SS §9), et un test qui échoue avant cet envoi le laisserait dans la file.
+    public static async Task DeleteQueuedEmailsToAsync(string email)
+    {
+        await using var databaseContext = LocalTestDatabase.CreateDatabaseContext();
+
+        await databaseContext.EmailRequests
+            .Where(row => row.EmailAddress == email)
+            .ExecuteDeleteAsync();
+    }
 }

@@ -22,6 +22,7 @@ public static class RateLimitingConfiguration
     public const string CostlyReadPolicy = "lecture-couteuse-par-session";
     public const string VisitorSupportPolicy = "support-visiteur-par-adresse-ip";
     public const string TwoFactorSupportLinkPolicy = "lien-de-desactivation-de-la-double-auth-par-adresse-ip";
+    public const string AccountDeletionPolicy = "suppression-du-compte-par-adresse-ip";
 
     // Connexion : 10 essais par minute et par adresse IP, en plus des 5 tentatives par compte.
     public static FixedWindowRateLimiterOptions CreateLoginLimit()
@@ -84,7 +85,7 @@ public static class RateLimitingConfiguration
         };
     }
 
-    // Changement de mot de passe : 10 par heure et par adresse IP.
+    // Changement de mot de passe, et demande de suppression du compte : 10 par heure et par adresse IP, chacun son compteur.
     public static FixedWindowRateLimiterOptions CreatePasswordChangeLimit()
     {
         return new FixedWindowRateLimiterOptions
@@ -157,6 +158,7 @@ public static class RateLimitingConfiguration
             AddLimitPerSession(options, CostlyReadPolicy, CreateCostlyReadLimit());
             AddLimitPerIp(options, VisitorSupportPolicy, CreateVisitorSupportLimit());
             AddLimitPerIp(options, TwoFactorSupportLinkPolicy, CreateAccountRecoveryLimit());
+            AddLimitPerIp(options, AccountDeletionPolicy, CreatePasswordChangeLimit());
         });
 
         return services;
