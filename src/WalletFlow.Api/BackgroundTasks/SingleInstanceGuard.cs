@@ -18,7 +18,9 @@ public sealed class SingleInstanceGuard : IHostedService, IDisposable
     private readonly ILogger<SingleInstanceGuard> logger;
     private readonly TimeSpan checkInterval;
     private readonly CancellationTokenSource stopping = new CancellationTokenSource();
+    private readonly object stopGate = new object();
     private Task watching = Task.CompletedTask;
+    private Task? stop = null;
 
     // Reçoit le verrou de l'instance, la vie de l'API, qu'elle peut arrêter, et le journal technique.
     public SingleInstanceGuard(SingleInstanceLock instanceLock, IHostApplicationLifetime lifetime, ILogger<SingleInstanceGuard> logger)
@@ -50,8 +52,20 @@ public sealed class SingleInstanceGuard : IHostedService, IDisposable
         watching = WatchAsync(stopping.Token);
     }
 
-    // Arrête les contrôles, puis rend le verrou (nom imposé par le framework).
-    public async Task StopAsync(CancellationToken cancellationToken)
+    // Arrête les contrôles, puis rend le verrou (nom imposé par le framework). L'hôte peut l'appeler deux fois en même temps, et même
+    // après Dispose : l'hôte de test arrête l'API pendant que son app.Run() l'arrête aussi, puis la libère. Le premier appel fait
+    // l'arrêt, les suivants attendent le même.
+    public Task StopAsync(CancellationToken cancellationToken)
+    {
+        lock (stopGate)
+        {
+            stop ??= StopOnceAsync();
+            return stop;
+        }
+    }
+
+    // Annule les contrôles, attend la fin du dernier, puis rend le verrou.
+    private async Task StopOnceAsync()
     {
         await stopping.CancelAsync();
         await watching;
@@ -127,9 +141,10 @@ public sealed class SingleInstanceGuard : IHostedService, IDisposable
         }
     }
 
-    // Libère l'annulation des contrôles (nom imposé par .NET).
+    // Annule les contrôles sans libérer leur annulation, comme BackgroundService : un StopAsync peut encore passer après, et
+    // l'annulation ne tient aucune ressource tant qu'elle n'a ni délai ni attente (nom imposé par .NET).
     public void Dispose()
     {
-        stopping.Dispose();
+        stopping.Cancel();
     }
 }

@@ -140,6 +140,41 @@ public class SingleInstanceGuardTests
         Assert.Equal(0, lifetime.StopCount);
     }
 
+    // L'hôte de test arrête l'API pendant que son app.Run() l'arrête aussi : les deux arrêts n'en font qu'un, et le verrou est rendu.
+    [Fact]
+    public async Task TwoSimultaneousStopsMakeOneStop()
+    {
+        var key = NewKey();
+        await using var guardLock = CreateLock(key);
+        await using var otherInstance = CreateLock(key);
+        using var guard = CreateGuard(guardLock, new RecordingLifetime(), TimeSpan.FromDays(1));
+        await guard.StartAsync(CancellationToken.None);
+
+        var firstStop = guard.StopAsync(CancellationToken.None);
+        var secondStop = guard.StopAsync(CancellationToken.None);
+        await Task.WhenAll(firstStop, secondStop);
+
+        Assert.Same(firstStop, secondStop);
+        Assert.True(await otherInstance.TryAcquireAsync());
+    }
+
+    // Libérée avant son arrêt, comme quand app.Run() libère l'API de test que l'hôte arrête encore, la garde s'arrête sans erreur
+    // et rend le verrou.
+    [Fact]
+    public async Task StopAfterDisposeStillReleasesTheLock()
+    {
+        var key = NewKey();
+        await using var guardLock = CreateLock(key);
+        await using var otherInstance = CreateLock(key);
+        var guard = CreateGuard(guardLock, new RecordingLifetime(), TimeSpan.FromDays(1));
+        await guard.StartAsync(CancellationToken.None);
+
+        guard.Dispose();
+        await guard.StopAsync(CancellationToken.None);
+
+        Assert.True(await otherInstance.TryAcquireAsync());
+    }
+
     // Une connexion perdue ne coûte que le temps d'un contrôle : la garde reprend le verrou, sans arrêter l'API.
     [Fact]
     public async Task GuardTakesTheLockBackAfterLosingItsConnection()
