@@ -3,10 +3,13 @@ using WalletFlow.Application.Persistence;
 namespace WalletFlow.Tests.Fakes;
 
 // Remplace l'unité de travail dans les tests : les faux dépôts gardent ensemble tout ce qui a été préparé, ou rien,
-// comme une vraie transaction. Une panne ou un conflit simulé remet tout comme avant l'enregistrement.
+// comme une vraie transaction. Une panne ou un conflit simulé remet tout comme avant l'enregistrement. Comme dans la vraie
+// base, une transaction est enregistrée en entier avant la suivante, et ce qui la suit, comme le réveil de la file d'e-mails,
+// ne part qu'une fois tout enregistré.
 public class FakeDatabaseUnitOfWork : IDatabaseUnitOfWork
 {
     private readonly List<ITransactionalFakeRepository> repositories;
+    private readonly object saveGate = new object();
 
     public int CommittedTransactionCount { get; private set; } = 0;
 
@@ -19,36 +22,44 @@ public class FakeDatabaseUnitOfWork : IDatabaseUnitOfWork
     // Garde tout, sauf panne ou conflit simulé. Une panne est remontée, comme celle de la vraie base, après avoir tout annulé.
     public Task<bool> TrySaveChangesAsync(CancellationToken cancellationToken = default)
     {
-        try
+        lock (saveGate)
         {
-            foreach (var repository in repositories)
+            try
             {
-                repository.ThrowIfTableIsDown();
+                foreach (var repository in repositories)
+                {
+                    repository.ThrowIfTableIsDown();
+                }
             }
-        }
-        catch (InvalidOperationException)
-        {
-            RollbackAll();
-            throw;
-        }
-
-        foreach (var repository in repositories)
-        {
-            if (repository.HasConcurrentChange())
+            catch (InvalidOperationException)
             {
                 RollbackAll();
-                repository.ApplyConcurrentChanges();
-                return Task.FromResult(false);
+                throw;
             }
-        }
 
-        foreach (var repository in repositories)
-        {
-            repository.Commit();
-        }
+            foreach (var repository in repositories)
+            {
+                if (repository.HasConcurrentChange())
+                {
+                    RollbackAll();
+                    repository.ApplyConcurrentChanges();
+                    return Task.FromResult(false);
+                }
+            }
 
-        CommittedTransactionCount = CommittedTransactionCount + 1;
-        return Task.FromResult(true);
+            foreach (var repository in repositories)
+            {
+                repository.Commit();
+            }
+
+            foreach (var repository in repositories)
+            {
+                repository.AfterCommit();
+            }
+
+            CommittedTransactionCount = CommittedTransactionCount + 1;
+            return Task.FromResult(true);
+        }
     }
 
     // Annule la transaction simulée dans tous les faux dépôts.

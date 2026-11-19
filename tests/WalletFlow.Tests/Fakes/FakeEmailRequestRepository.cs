@@ -4,7 +4,8 @@ using WalletFlow.Domain.NotificationsAndSupport;
 namespace WalletFlow.Tests.Fakes;
 
 // Remplace la vraie base dans les tests : garde la file d'e-mails en mémoire. Une demande préparée n'entre dans la file
-// qu'avec les autres changements (voir FakeDatabaseUnitOfWork), et réveille alors la tâche de fond, comme la vraie file.
+// qu'avec les autres changements (voir FakeDatabaseUnitOfWork), et réveille la tâche de fond une fois tout enregistré, comme
+// la vraie file.
 public class FakeEmailRequestRepository : IEmailRequestRepository, ITransactionalFakeRepository
 {
     public const string FailureDetail = "detail-technique-de-la-panne-de-la-file";
@@ -14,6 +15,7 @@ public class FakeEmailRequestRepository : IEmailRequestRepository, ITransactiona
     private readonly List<EmailRequest> preparedRemovals = new List<EmailRequest>();
     private readonly ReadCopies<EmailRequest> readRequests = new ReadCopies<EmailRequest>();
     private Guid? requestToRemoveAfterRollback = null;
+    private bool hasRequestsToAnnounce = false;
 
     // Reçoit le réveil de la tâche de fond, le même que celui qu'elle attend.
     public FakeEmailRequestRepository(EmailRequestWakeUp wakeUp)
@@ -157,14 +159,12 @@ public class FakeEmailRequestRepository : IEmailRequestRepository, ITransactiona
         }
     }
 
-    // Garde les nouvelles demandes et les sorties de la file, puis réveille la tâche de fond s'il y a du nouveau.
+    // Garde les nouvelles demandes et les sorties de la file. Le réveil attend la fin de tout l'enregistrement : voir AfterCommit.
     public void Commit()
     {
-        var hasNewRequests = false;
-
         lock (pendingChangesLock)
         {
-            hasNewRequests = preparedRequests.Count > 0;
+            hasRequestsToAnnounce = hasRequestsToAnnounce || preparedRequests.Count > 0;
             SavedRequests.AddRange(preparedRequests);
 
             foreach (var removedRequest in preparedRemovals)
@@ -174,8 +174,22 @@ public class FakeEmailRequestRepository : IEmailRequestRepository, ITransactiona
 
             ClearTracking();
         }
+    }
 
-        if (hasNewRequests)
+    // Réveille la tâche de fond s'il y a de nouvelles demandes, une fois la transaction enregistrée dans tous les dépôts. Plus tôt,
+    // elle pourrait lire une demande dont la suite n'est pas encore là, comme le texte d'une réponse du support, et la retirer
+    // sans envoyer d'e-mail.
+    public void AfterCommit()
+    {
+        bool announces;
+
+        lock (pendingChangesLock)
+        {
+            announces = hasRequestsToAnnounce;
+            hasRequestsToAnnounce = false;
+        }
+
+        if (announces)
         {
             WakeUp.Signal();
         }
