@@ -17,4 +17,10 @@ public interface ITransactionalFakeRepository
 
     // Garde tout, comme une transaction validée.
     void Commit();
+
+    // Agit une fois la transaction validée dans tous les dépôts. Rien par défaut : seule la file d'e-mails s'en sert, pour
+    // réveiller sa tâche de fond après tout l'enregistrement, comme la vraie file.
+    void AfterCommit()
+    {
+    }
 }
