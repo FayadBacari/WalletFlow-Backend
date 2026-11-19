@@ -3,7 +3,7 @@ namespace WalletFlow.Tests.Api;
 // Vérifie les en-têtes de sécurité d'une réponse, avec les valeurs exactes de SS §6.
 public static class SecurityHeadersAssertions
 {
-    // Vérifie que la réponse porte les cinq en-têtes écrits sur chaque réponse de l'API, et ne nomme pas le serveur web. Sur le
+    // Vérifie que la réponse porte les six en-têtes écrits sur chaque réponse de l'API, et ne nomme pas le serveur web. Sur le
     // serveur de test, l'en-tête Server n'existe jamais : seules les réponses du vrai serveur Kestrel le vérifient vraiment.
     public static void AssertExactSecurityHeaders(HttpResponseMessage response)
     {
@@ -16,6 +16,7 @@ public static class SecurityHeadersAssertions
         AssertHeaderValue(response, "X-Content-Type-Options", "nosniff");
         AssertHeaderValue(response, "Referrer-Policy", "strict-origin-when-cross-origin");
         AssertHeaderValue(response, "Permissions-Policy", "camera=(), microphone=(), geolocation=()");
+        AssertHeaderValue(response, "Cross-Origin-Resource-Policy", "same-origin");
     }
 
     // Vérifie qu'un en-tête est présent une seule fois, avec la valeur attendue.

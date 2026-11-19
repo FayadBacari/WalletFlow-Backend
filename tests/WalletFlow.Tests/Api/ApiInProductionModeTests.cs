@@ -76,7 +76,8 @@ public class ApiInProductionModeTests
         }
     }
 
-    // En production, l'API ne répond qu'aux noms du site : une requête sous un autre nom est refusée avant toute lecture.
+    // En production, l'API ne répond qu'aux noms du site : une requête sous un autre nom est refusée avant toute lecture, par un
+    // 400 vide, sans la page HTML d'ASP.NET Core.
     [Fact]
     public async Task RequestUnderAnotherHostNameIsRefused()
     {
@@ -90,6 +91,31 @@ public class ApiInProductionModeTests
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
         Assert.Empty(productionApi.AccountRepository.SavedUsers);
+        await AssertEmptyAnswerAsync(response);
+    }
+
+    // Une recherche des métadonnées d'un hébergeur cloud, sous le nom de son adresse interne comme le fait OWASP ZAP, reçoit le
+    // même 400 vide.
+    [Theory]
+    [InlineData("169.254.169.254", "/latest/meta-data/")]
+    [InlineData("metadata.google.internal", "/computeMetadata/v1/")]
+    public async Task CloudMetadataProbeGetsAnEmptyRefusal(string hostName, string path)
+    {
+        using var productionApi = new ApiFactoryInProduction();
+        var client = productionApi.CreateClient(
+            new WebApplicationFactoryClientOptions { BaseAddress = new Uri("http://" + hostName) });
+
+        var response = await client.GetAsync(path);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        await AssertEmptyAnswerAsync(response);
+    }
+
+    // Vérifie qu'une réponse n'a ni contenu, ni type de contenu.
+    private static async Task AssertEmptyAnswerAsync(HttpResponseMessage response)
+    {
+        Assert.Null(response.Content.Headers.ContentType);
+        Assert.Empty(await response.Content.ReadAsByteArrayAsync());
     }
 
     // Sans noms du site, ou avec « * », l'API refuse de démarrer en production.

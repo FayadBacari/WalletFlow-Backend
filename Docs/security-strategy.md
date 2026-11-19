@@ -230,14 +230,15 @@ Une requête abandonnée par son client, ou interrompue par l'arrêt du serveur,
 
 ### En-têtes de sécurité
 
-| En-tête                     | Valeur                                                                                                                  |
-|-----------------------------|-------------------------------------------------------------------------------------------------------------------------|
-| `Strict-Transport-Security` | `max-age=31536000; includeSubDomains`                                                                                   |
-| `Content-Security-Policy`   | `default-src 'self'; script-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'` |
-| `X-Content-Type-Options`    | `nosniff`                                                                                                               |
-| `Referrer-Policy`           | `strict-origin-when-cross-origin`                                                                                       |
-| `Permissions-Policy`        | `camera=(), microphone=(), geolocation=()`                                                                              |
-| `Cache-Control`             | `no-store`                                                                                                              |
+| En-tête                        | Valeur                                                                                                                  |
+|--------------------------------|-------------------------------------------------------------------------------------------------------------------------|
+| `Strict-Transport-Security`    | `max-age=31536000; includeSubDomains`                                                                                   |
+| `Content-Security-Policy`      | `default-src 'self'; script-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'` |
+| `X-Content-Type-Options`       | `nosniff`                                                                                                               |
+| `Referrer-Policy`              | `strict-origin-when-cross-origin`                                                                                       |
+| `Permissions-Policy`           | `camera=(), microphone=(), geolocation=()`                                                                              |
+| `Cross-Origin-Resource-Policy` | `same-origin`                                                                                                           |
+| `Cache-Control`                | `no-store`                                                                                                              |
 
 Aucune réponse n'est gardée par un navigateur ou un intermédiaire : toutes contiennent des données personnelles, des données financières, un jeton ou une erreur. Les réponses ne nomment pas non plus le serveur web : aucun en-tête `Server`.
 

@@ -1,5 +1,6 @@
 using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.HostFiltering;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Authorization;
@@ -103,6 +104,10 @@ if (!builder.Environment.IsDevelopment()
     throw new InvalidOperationException(
         "Le réglage « AllowedHosts » doit donner les noms du site, séparés par des points-virgules, jamais « * ».");
 }
+
+// Une requête sous un autre nom reçoit un 400 vide. La page HTML qu'ASP.NET Core écrit par défaut serait la seule réponse de
+// l'API hors JSON, et partirait sans les en-têtes de sécurité : le filtre des noms passe avant eux.
+builder.Services.Configure<HostFilteringOptions>(options => options.IncludeFailureMessage = false);
 
 // Adresse publique du site, qui sert à construire les liens envoyés par e-mail (SS §9).
 builder.Services.AddSingleton(
