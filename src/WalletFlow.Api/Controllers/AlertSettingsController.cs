@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using WalletFlow.Api.Authentication;
 using WalletFlow.Api.Configuration;
@@ -7,10 +8,11 @@ using WalletFlow.Application.Notifications;
 namespace WalletFlow.Api.Controllers;
 
 // Réglages d'alerte de l'utilisateur connecté (GR Notif) : le canal qui reçoit ses alertes, et chaque type d'alerte.
-// Ces routes n'ont aucun attribut de sécurité : toute route demande par défaut une session et le jeton anti-CSRF
+// Ces routes demandent une session, que [Authorize] redit, et le jeton anti-CSRF, comme toute route
 // (voir Program.cs). Elles ne prennent aucun identifiant : chacune ne touche que le compte de la session (SS §4).
 [ApiController]
 [Route("api/alert-settings")]
+[Authorize]
 public class AlertSettingsController : ControllerBase
 {
     private readonly AlertSettingsService settingsService;

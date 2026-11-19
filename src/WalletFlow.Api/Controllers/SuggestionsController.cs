@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
 using WalletFlow.Api.Authentication;
@@ -9,10 +10,11 @@ using WalletFlow.Application.Suggestions;
 namespace WalletFlow.Api.Controllers;
 
 // Suggestions d'épargne de l'utilisateur connecté : la liste avec les économies réalisées, l'acceptation et l'ignorance (GR Sacs).
-// Ces routes n'ont aucun attribut de sécurité : toute route demande par défaut une session et le jeton anti-CSRF
+// Ces routes demandent une session, que [Authorize] redit, et le jeton anti-CSRF, comme toute route
 // (voir Program.cs). La suggestion d'un autre utilisateur répond 404, comme une adresse qui n'existe pas (SS §4).
 [ApiController]
 [Route("api/suggestions")]
+[Authorize]
 public class SuggestionsController : ControllerBase
 {
     private readonly SuggestionListService listService;

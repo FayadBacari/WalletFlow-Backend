@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
 using WalletFlow.Api.Authentication;
@@ -9,11 +10,12 @@ using WalletFlow.Application.Transactions;
 namespace WalletFlow.Api.Controllers;
 
 // Opérations bancaires de l'utilisateur connecté : la recherche, le changement de catégorie et la marque de transfert
-// (GR Comptes et GR Dépenses). Ces routes n'ont aucun attribut de sécurité : toute route demande par défaut une session
-// et le jeton anti-CSRF (voir Program.cs). L'opération ou la catégorie d'un autre utilisateur répond 404,
+// (GR Comptes et GR Dépenses). Ces routes demandent une session, que [Authorize] redit, et le jeton anti-CSRF, comme toute
+// route (voir Program.cs). L'opération ou la catégorie d'un autre utilisateur répond 404,
 // comme une adresse qui n'existe pas : rien ne dit qu'elle existe (SS §4).
 [ApiController]
 [Route("api/transactions")]
+[Authorize]
 public class TransactionsController : ControllerBase
 {
     private readonly TransactionSearchService searchService;

@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using WalletFlow.Api.Authentication;
 using WalletFlow.Api.Configuration;
@@ -7,12 +8,14 @@ using WalletFlow.Application.Administration;
 
 namespace WalletFlow.Api.Controllers;
 
-// Administration (GR Admin, SS §8). Chaque route demande une session et le jeton anti-CSRF, comme toute route (voir Program.cs),
-// puis le filtre AdministratorOnlyFilter la réserve à l'administrateur qui a activé la double authentification. L'administrateur
-// ne voit ni compte bancaire, ni opération, ni solde, ni sac : seulement l'adresse et l'état d'un compte, les demandes de support
-// et des statistiques sans argent. Il agit sur tous les comptes : un identifiant reçu ici n'est jamais celui « d'un autre ».
+// Administration (GR Admin, SS §8). Chaque route demande une session, que [Authorize] redit, et le jeton anti-CSRF, comme
+// toute route (voir Program.cs), puis le filtre AdministratorOnlyFilter la réserve à l'administrateur qui a activé la double
+// authentification. L'administrateur ne voit ni compte bancaire, ni opération, ni solde, ni sac : seulement l'adresse et l'état
+// d'un compte, les demandes de support et des statistiques sans argent. Il agit sur tous les comptes : un identifiant reçu ici
+// n'est jamais celui « d'un autre ».
 [ApiController]
 [Route("api/admin")]
+[Authorize]
 [ServiceFilter(typeof(AdministratorOnlyFilter), Order = AdministratorOnlyFilter.OrderAfterCsrfCheck)]
 public class AdministrationController : ControllerBase
 {

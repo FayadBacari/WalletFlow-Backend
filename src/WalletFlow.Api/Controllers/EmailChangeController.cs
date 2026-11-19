@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
 using WalletFlow.Api.Authentication;
@@ -8,9 +9,10 @@ using WalletFlow.Application.AccountSettings;
 namespace WalletFlow.Api.Controllers;
 
 // Demande de changement d'adresse e-mail par l'utilisateur connecté (GR Compte, SS §2).
-// Cette route n'a aucun attribut de sécurité : toute route demande par défaut une session et le jeton anti-CSRF (voir Program.cs).
+// Cette route demande une session, que [Authorize] redit, et le jeton anti-CSRF, comme toute route (voir Program.cs).
 [ApiController]
 [Route("api/account")]
+[Authorize]
 public class EmailChangeController : ControllerBase
 {
     // Le même message que la nouvelle adresse soit libre ou déjà utilisée (SS §2).

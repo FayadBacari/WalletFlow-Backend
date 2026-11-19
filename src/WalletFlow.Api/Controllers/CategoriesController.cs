@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using WalletFlow.Api.Authentication;
 using WalletFlow.Api.Configuration;
@@ -9,10 +10,11 @@ using WalletFlow.Domain.AccountsAndCategories;
 namespace WalletFlow.Api.Controllers;
 
 // Catégories de l'utilisateur connecté : la liste, la création, le nom, le budget et la suppression (GR Dépenses).
-// Ces routes n'ont aucun attribut de sécurité : toute route demande par défaut une session et le jeton anti-CSRF (voir Program.cs).
+// Ces routes demandent une session, que [Authorize] redit, et le jeton anti-CSRF, comme toute route (voir Program.cs).
 // La catégorie d'un autre utilisateur répond 404, comme une adresse qui n'existe pas : rien ne dit qu'elle existe (SS §4).
 [ApiController]
 [Route("api/categories")]
+[Authorize]
 public class CategoriesController : ControllerBase
 {
     public const string CategoryDeletedMessage = "La catégorie est supprimée. Ses transactions sont maintenant dans « Autres ».";

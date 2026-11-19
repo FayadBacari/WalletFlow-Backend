@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
 using WalletFlow.Api.Authentication;
@@ -10,11 +11,12 @@ namespace WalletFlow.Api.Controllers;
 
 // Connexions bancaires de l'utilisateur connecté, en lecture seule (GR Comptes, SS §7) : la liste des banques, la connexion
 // et son renouvellement, les comptes et leurs soldes, le solde total, leur mise à jour, et la déconnexion.
-// Ces routes n'ont aucun attribut de sécurité : toute route demande par défaut une session et le jeton anti-CSRF (voir Program.cs).
+// Ces routes demandent une session, que [Authorize] redit, et le jeton anti-CSRF, comme toute route (voir Program.cs).
 // La connexion d'un autre utilisateur répond 404, comme une adresse qui n'existe pas (SS §4). Les routes qui appellent le
 // prestataire partagent une limite par session (SS §6) : le prestataire limite les appels de toute l'application.
 [ApiController]
 [Route("api")]
+[Authorize]
 public class BankConnectionsController : ControllerBase
 {
     public const string DisconnectedMessage = "La banque est déconnectée. Ses comptes et leurs transactions sont supprimés de WalletFlow.";

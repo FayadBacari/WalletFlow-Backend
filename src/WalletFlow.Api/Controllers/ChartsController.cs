@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
 using WalletFlow.Api.Authentication;
@@ -10,11 +11,12 @@ namespace WalletFlow.Api.Controllers;
 
 // Les chiffres des graphiques de l'utilisateur connecté (GR Dépenses) : la répartition des dépenses par catégorie,
 // les dépenses et les revenus mois par mois, et le mois en cours face à la moyenne des 3 derniers mois. Le site les dessine.
-// Ces routes n'ont aucun attribut de sécurité : toute route demande par défaut une session (voir Program.cs).
+// Ces routes demandent une session, que [Authorize] redit, comme toute route (voir Program.cs).
 // Le compte d'un autre utilisateur ne filtre rien de visible : aucune de ses opérations ne compte (SS §4).
 // La tentative est notée au journal de sécurité (SS §11).
 [ApiController]
 [Route("api/charts")]
+[Authorize]
 public class ChartsController : ControllerBase
 {
     private readonly CategoryExpenseChartService categoryExpenseService;

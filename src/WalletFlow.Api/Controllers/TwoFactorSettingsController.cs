@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
 using WalletFlow.Api.Authentication;
@@ -8,10 +9,11 @@ using WalletFlow.Application.TwoFactorAuthentication;
 namespace WalletFlow.Api.Controllers;
 
 // Réglage de la double authentification par l'utilisateur connecté (GR Auth, SS §2).
-// Ces routes n'ont aucun attribut de sécurité : toute route demande par défaut une session et le jeton anti-CSRF (voir Program.cs).
+// Ces routes demandent une session, que [Authorize] redit, et le jeton anti-CSRF, comme toute route (voir Program.cs).
 // Leurs réponses contiennent un secret ou des codes de secours : aucun navigateur ni intermédiaire ne doit les garder.
 [ApiController]
 [Route("api/account/two-factor")]
+[Authorize]
 [EnableRateLimiting(RateLimitingConfiguration.TwoFactorSettingsPolicy)]
 [RequestSizeLimit(RequestSizeConfiguration.MaximumAccountRequestBytes)]
 public class TwoFactorSettingsController : ControllerBase

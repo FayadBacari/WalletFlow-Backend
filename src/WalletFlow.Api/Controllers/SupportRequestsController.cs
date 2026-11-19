@@ -9,12 +9,13 @@ using WalletFlow.Application.Support;
 
 namespace WalletFlow.Api.Controllers;
 
-// Demandes de support (GR Admin). Les routes de l'utilisateur connecté n'ont aucun attribut de sécurité : toute route demande
-// par défaut une session et le jeton anti-CSRF (voir Program.cs), et elles ne touchent que les demandes du compte de la session
+// Demandes de support (GR Admin). Les routes de l'utilisateur connecté demandent une session, que [Authorize] redit, et
+// le jeton anti-CSRF, comme toute route (voir Program.cs), et elles ne touchent que les demandes du compte de la session
 // (SS §4). La route des visiteurs est appelée sans session : elle n'agit au nom de personne, et n'a donc ni besoin d'être
 // connecté, ni besoin du jeton anti-CSRF. Comme toute route, elle n'accepte que du JSON (SS §6).
 [ApiController]
 [Route("api/support-requests")]
+[Authorize]
 public class SupportRequestsController : ControllerBase
 {
     public const string VisitorRequestSentMessage = "Ta demande est envoyée. Le support te répondra par e-mail, à l'adresse donnée.";

@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
 using WalletFlow.Api.Authentication;
@@ -10,11 +11,12 @@ using WalletFlow.Domain.BagsAndSuggestions;
 namespace WalletFlow.Api.Controllers;
 
 // Sacs de l'utilisateur connecté : la liste, la création, le nom, l'objectif, la suppression, les déplacements d'argent
-// et l'historique (GR Sacs). Ces routes n'ont aucun attribut de sécurité : toute route demande par défaut une session
-// et le jeton anti-CSRF (voir Program.cs). Le sac d'un autre utilisateur répond 404, comme une adresse qui n'existe pas :
-// rien ne dit qu'il existe (SS §4).
+// et l'historique (GR Sacs). Ces routes demandent une session, que [Authorize] redit, et le jeton anti-CSRF, comme toute
+// route (voir Program.cs). Le sac d'un autre utilisateur répond 404, comme une adresse qui n'existe pas : rien ne dit qu'il
+// existe (SS §4).
 [ApiController]
 [Route("api/bags")]
+[Authorize]
 public class BagsController : ControllerBase
 {
     public const string BagDeletedMessage = "Le sac est supprimé. Son argent est revenu dans l'argent disponible.";

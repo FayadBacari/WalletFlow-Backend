@@ -180,6 +180,7 @@ builder.Services
     {
         // Toute route demande une session et le jeton anti-CSRF, même si on oublie de le demander :
         // une route publique doit le dire avec [AllowAnonymous] et [IgnoreAntiforgeryToken] (SS §4 et §6).
+        // Chaque contrôleur le redit aussi, avec [Authorize] ou [AllowAnonymous] : CodeQL ne voit pas cette règle commune.
         options.Filters.Add(new AuthorizeFilter());
         options.Filters.Add(new AutoValidateAntiforgeryTokenAttribute());
 

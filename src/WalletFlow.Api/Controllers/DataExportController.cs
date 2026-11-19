@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authorization;
 using System.Globalization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Net.Http.Headers;
@@ -10,9 +11,10 @@ using WalletFlow.Domain.AccountsAndCategories;
 namespace WalletFlow.Api.Controllers;
 
 // Téléchargement de toutes ses données par l'utilisateur connecté (GR Compte, droit à la portabilité du RGPD ; SS §2 et §6).
-// Cette route n'a aucun attribut de sécurité : toute route demande par défaut une session et le jeton anti-CSRF (voir Program.cs).
+// Cette route demande une session, que [Authorize] redit, et le jeton anti-CSRF, comme toute route (voir Program.cs).
 [ApiController]
 [Route("api/account")]
+[Authorize]
 public class DataExportController : ControllerBase
 {
     public const string FileNamePrefix = "walletflow-donnees-";

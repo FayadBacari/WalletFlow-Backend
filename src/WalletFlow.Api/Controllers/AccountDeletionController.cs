@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
 using WalletFlow.Api.Authentication;
@@ -9,9 +10,10 @@ using WalletFlow.Domain.AccountsAndCategories;
 namespace WalletFlow.Api.Controllers;
 
 // Demande de suppression du compte par l'utilisateur connecté (GR Suppression, SS §2, §6 et §7).
-// Cette route n'a aucun attribut de sécurité : toute route demande par défaut une session et le jeton anti-CSRF (voir Program.cs).
+// Cette route demande une session, que [Authorize] redit, et le jeton anti-CSRF, comme toute route (voir Program.cs).
 [ApiController]
 [Route("api/account")]
+[Authorize]
 public class AccountDeletionController : ControllerBase
 {
     public const string DeletionRequestedMessage =

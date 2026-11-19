@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using WalletFlow.Api.Authentication;
 using WalletFlow.Api.Configuration;
@@ -7,9 +8,10 @@ using WalletFlow.Application.AccountSettings;
 namespace WalletFlow.Api.Controllers;
 
 // Profil de l'utilisateur connecté : sa lecture, et le changement du nom et du prénom (GR Compte).
-// Ces routes n'ont aucun attribut de sécurité : toute route demande par défaut une session et le jeton anti-CSRF (voir Program.cs).
+// Ces routes demandent une session, que [Authorize] redit, et le jeton anti-CSRF, comme toute route (voir Program.cs).
 [ApiController]
 [Route("api/account")]
+[Authorize]
 public class AccountProfileController : ControllerBase
 {
     public const string NameSavedMessage = "Ton nom et ton prénom sont enregistrés.";

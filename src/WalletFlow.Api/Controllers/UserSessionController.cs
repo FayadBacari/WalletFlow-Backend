@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Antiforgery;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using WalletFlow.Api.Configuration;
 using WalletFlow.Api.Contracts;
@@ -7,9 +8,10 @@ using WalletFlow.Application.UserSessions;
 namespace WalletFlow.Api.Controllers;
 
 // Routes d'un utilisateur connecté : le jeton anti-CSRF et la déconnexion (GR Auth, SS §3 et §6).
-// Elles n'ont aucun attribut de sécurité : toute route demande par défaut une session et ce jeton (voir Program.cs).
+// Elles demandent une session, que [Authorize] redit, et ce jeton, comme toute route (voir Program.cs).
 [ApiController]
 [Route("api/account")]
+[Authorize]
 public class UserSessionController : ControllerBase
 {
     public const string LoggedOutMessage = "Tu es déconnecté.";
