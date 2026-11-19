@@ -1,4 +1,10 @@
 # Règles d'OWASP ZAP pour la CI (voir l'étape « Attaquer l'API en marche » de .github/workflows/ci.yml).
 # Une règle absente de ce fichier compte comme WARN : son alerte arrête la vérification. Chaque ligne change le traitement d'une
-# règle : son numéro, IGNORE, INFO, WARN ou FAIL, puis sa raison, séparés par des tabulations. Une alerte ne s'écarte qu'après
+# règle : son numéro, IGNORE, INFO, WARN ou FAIL, puis sa raison, séparés par des tabulations. Une ligne OUTOFSCOPE écarte
+# une règle pour les seules adresses de son expression régulière, et sa raison va au-dessus. Une alerte ne s'écarte qu'après
 # avoir vérifié qu'elle ne signale pas une vraie faille, et toujours avec sa raison.
+
+# 100000 (réponse d'erreur du serveur) sur les routes du prestataire bancaire : elles répondent 503, « banque indisponible »,
+# quand le prestataire ne répond pas, et la CI le rend injoignable exprès (voir l'étape « Démarrer l'image en production »).
+# Une vraie panne n'y passerait pas inaperçue : après l'attaque, la CI refuse toute exception imprévue au journal de l'API.
+100000	OUTOFSCOPE	http://localhost:8080/api/(banks|bank-connections)([/?].*)?$

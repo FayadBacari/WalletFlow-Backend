@@ -264,10 +264,12 @@ if (app.Environment.IsDevelopment())
 }
 else
 {
-    // En production : des messages d'erreur génériques, et HSTS (SS §6 et §10).
+    // En production : des messages d'erreur génériques, et HSTS (SS §6 et §10). Une requête refusée par le serveur, comme un
+    // corps trop gros, garde son code et ne va pas au journal comme une panne.
     app.UseExceptionHandler(new ExceptionHandlerOptions
     {
-        StatusCodeSelector = ErrorStatusCodeConfiguration.ChooseStatusCode
+        StatusCodeSelector = ErrorStatusCodeConfiguration.ChooseStatusCode,
+        SuppressDiagnosticsCallback = ErrorStatusCodeConfiguration.IsRefusedRequest
     });
     app.UseHsts();
 }

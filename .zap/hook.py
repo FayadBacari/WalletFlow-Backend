@@ -19,3 +19,17 @@ def zap_started(zap, target):
             matchregex="false",
             matchstring=name,
             replacement=value)
+
+
+# Appelé par zap-api-scan.py juste avant l'arrêt de ZAP : écrit ce que l'attaque a fait, pour prouver ce qu'elle a couvert. Les
+# réponses par code disent si la session a tenu (401) et si la limite de débit a refusé une partie de l'attaque (429).
+# L'avancement dit si l'attaque a fini, ou si sa durée maximale l'a coupée. Une lecture ratée est écrite, sans arrêter ZAP.
+def zap_pre_shutdown(zap):
+    try:
+        codes = zap.stats.all_sites_stats(keyprefix="stats.code")
+        print("Réponses de l'API pendant toute l'analyse, par code : " + json.dumps(codes, sort_keys=True))
+        for scan in zap.ascan.scans:
+            print("Attaque " + str(scan.get("id")) + " : état " + str(scan.get("state")) + ", avancement "
+                  + str(scan.get("progress")) + " %, " + str(scan.get("reqCount")) + " requêtes.")
+    except Exception as error:
+        print("Les chiffres de ZAP n'ont pas pu être lus : " + repr(error))

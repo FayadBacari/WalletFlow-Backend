@@ -331,6 +331,19 @@ jobs:
         if: success() || failure()
         run: python3 .zap/session-admin.py verifier --api http://localhost:8080 --session "$RUNNER_TEMP/zap/session.json"
 
+      # Aucune requête de l'attaque ne doit faire d'exception imprévue, sur aucune route : chacune va au journal de l'API, alors
+      # qu'une requête refusée par le serveur, comme un corps trop gros, n'y va plus. Ce contrôle ne dépend d'aucune règle de ZAP.
+      - name: Vérifier que l'attaque n'a fait aucune exception imprévue
+        if: success() || failure()
+        run: |
+          failures="$(docker logs walletflow 2>&1 | grep -c 'ExceptionHandlerMiddleware' || true)"
+          if [ "$failures" != "0" ]; then
+            echo "L'attaque a fait $failures exception(s) imprévue(s) :"
+            docker logs walletflow 2>&1 | grep -A8 'ExceptionHandlerMiddleware'
+            exit 1
+          fi
+          echo "Aucune exception imprévue pendant l'attaque."
+
       - name: Afficher le journal de l'API en cas d'échec
         if: failure()
         run: docker logs walletflow
