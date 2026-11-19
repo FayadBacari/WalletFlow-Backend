@@ -60,10 +60,19 @@ public class SuggestionServices
             Bank.Clock);
     }
 
-    // Crée le service qui calcule et liste les suggestions.
+    // Crée le service qui liste les suggestions.
     public SuggestionListService CreateList()
     {
         return new SuggestionListService(CreateCalculation(), Suggestions, Bank.Categories);
+    }
+
+    // Fait comme la tâche horaire, qui calcule le mois évalué de l'utilisateur, puis lit sa liste.
+    public async Task<SuggestionList> CalculateThenListAsync()
+    {
+        var calculation = CreateCalculation();
+        await calculation.CalculateAsync(UserId, calculation.FindEvaluatedMonth());
+
+        return await CreateList().ListAsync(UserId);
     }
 
     // Crée le service qui accepte une suggestion.

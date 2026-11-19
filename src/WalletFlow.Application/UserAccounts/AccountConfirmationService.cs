@@ -32,23 +32,24 @@ public class AccountConfirmationService
     // Confirme le compte si le lien est encore valable et si le mot de passe est le bon.
     public async Task<AccountConfirmationResult> ConfirmAsync(
         string linkToken,
-        string password)
+        string password,
+        CancellationToken cancellationToken = default)
     {
         var now = clock.GetUtcNow().UtcDateTime;
 
-        var token = await FindUsableTokenAsync(linkToken, now);
+        var token = await FindUsableTokenAsync(linkToken, now, cancellationToken);
         if (token == null)
         {
             return new AccountConfirmationResult.LinkNoLongerValid();
         }
 
-        var account = await accountRepository.FindByIdAsync(token.UserId);
+        var account = await accountRepository.FindByIdAsync(token.UserId, cancellationToken);
         if (account == null || account.IsEmailConfirmed)
         {
             return new AccountConfirmationResult.LinkNoLongerValid();
         }
 
-        return await CheckPasswordThenConfirmAsync(account, token, password, now);
+        return await CheckPasswordThenConfirmAsync(account, token, password, now, cancellationToken);
     }
 
     // Vérifie le mot de passe, puis confirme le compte. Un mauvais mot de passe ne consomme pas le lien.
@@ -56,11 +57,12 @@ public class AccountConfirmationService
         User account,
         EmailToken token,
         string password,
-        DateTime now)
+        DateTime now,
+        CancellationToken cancellationToken = default)
     {
         var normalizedPassword = PasswordRules.Normalize(password);
 
-        if (!await passwordHasher.VerifyAsync(normalizedPassword, account.PasswordHash))
+        if (!await passwordHasher.VerifyAsync(normalizedPassword, account.PasswordHash, cancellationToken))
         {
             return new AccountConfirmationResult.WrongPassword();
         }
@@ -70,7 +72,7 @@ public class AccountConfirmationService
 
         // Une nouvelle inscription a pu remplacer ce lien pendant la vérification du mot de passe :
         // l'enregistrement échoue alors, et rien n'est modifié. Il n'y a pas de second passage : le lien ne vaut plus.
-        var saved = await unitOfWork.TrySaveChangesAsync();
+        var saved = await unitOfWork.TrySaveChangesAsync(cancellationToken);
 
         if (!saved)
         {
@@ -81,10 +83,10 @@ public class AccountConfirmationService
     }
 
     // Cherche le jeton du lien. Renvoie null s'il n'existe pas, s'il a déjà servi ou s'il a expiré.
-    private async Task<EmailToken?> FindUsableTokenAsync(string linkToken, DateTime now)
+    private async Task<EmailToken?> FindUsableTokenAsync(string linkToken, DateTime now, CancellationToken cancellationToken = default)
     {
         var tokenHash = tokenGenerator.HashToken(linkToken);
-        var token = await accountRepository.FindTokenAsync(tokenHash, EmailTokenType.SignupConfirmation);
+        var token = await accountRepository.FindTokenAsync(tokenHash, EmailTokenType.SignupConfirmation, cancellationToken);
 
         if (token == null || !token.CanBeUsedAt(now))
         {

@@ -43,14 +43,14 @@ public class DataExportService
 
     // Compte l'essai, vérifie l'identité, note le téléchargement au journal, puis lit les données. Elles ne sont lues qu'une fois
     // le téléchargement noté, et le code de secours dépensé s'il en a servi un.
-    public async Task<DataExportResult> ExportAsync(DataExportAttempt attempt)
+    public async Task<DataExportResult> ExportAsync(DataExportAttempt attempt, CancellationToken cancellationToken = default)
     {
         if (!exportLimiter.TryCountExport(attempt.UserId))
         {
             return new DataExportResult.TooManyExports();
         }
 
-        var account = await accountRepository.FindByIdAsync(attempt.UserId);
+        var account = await accountRepository.FindByIdAsync(attempt.UserId, cancellationToken);
         if (account == null)
         {
             return new DataExportResult.AccountGone();
@@ -60,10 +60,10 @@ public class DataExportService
         var checkedPasswordHash = account.PasswordHash;
         var checkedTotpSecret = account.EncryptedTotpSecret;
 
-        var identityCheck = await identityChecking.CheckAsync(account, attempt.Password, attempt.Code);
+        var identityCheck = await identityChecking.CheckAsync(account, attempt.Password, attempt.Code, cancellationToken);
         if (!identityCheck.IsConfirmed)
         {
-            return await RefuseAsync(account, attempt.IpAddress);
+            return await RefuseAsync(account, attempt.IpAddress, cancellationToken);
         }
 
         var export = new ExportToRecord
@@ -72,15 +72,16 @@ public class DataExportService
             CheckedPasswordHash = checkedPasswordHash,
             CheckedTotpSecret = checkedTotpSecret,
             BackupCodeId = identityCheck.BackupCodeId,
+            AuthenticatorStep = identityCheck.AuthenticatorStep,
             IpAddress = attempt.IpAddress
         };
 
-        if (!await savingService.SaveWithRetriesAsync(() => PrepareRecordAsync(export), false))
+        if (!await savingService.SaveWithRetriesAsync(() => PrepareRecordAsync(export, cancellationToken), false, cancellationToken))
         {
-            return await RefuseAsync(account, attempt.IpAddress);
+            return await RefuseAsync(account, attempt.IpAddress, cancellationToken);
         }
 
-        var data = await exportRepository.ReadAsync(account.Id);
+        var data = await exportRepository.ReadAsync(account.Id, cancellationToken);
         if (data == null)
         {
             return new DataExportResult.AccountGone();
@@ -89,14 +90,14 @@ public class DataExportService
         return new DataExportResult.Exported { Data = data, ExportedAt = clock.GetUtcNow().UtcDateTime };
     }
 
-    // Un passage : prépare le téléchargement au journal. Si un code de secours a servi, relit d'abord le compte, vérifie que le
-    // mot de passe et le secret contrôlés sont toujours les bons, et prépare l'usage du code avec son alerte : le code n'est dépensé
-    // que si le téléchargement a lieu. Le compte est alors contrôlé à l'enregistrement, même s'il n'a pas changé.
-    private async Task<PreparedChanges<bool>> PrepareRecordAsync(ExportToRecord export)
+    // Un passage : prépare le téléchargement au journal. Si un code a servi, relit d'abord le compte, vérifie que le mot de passe
+    // et le secret contrôlés sont toujours les bons, et prépare l'usage du code : le code n'est dépensé que si le téléchargement
+    // a lieu. Le compte est alors contrôlé à l'enregistrement, même s'il n'a pas changé.
+    private async Task<PreparedChanges<bool>> PrepareRecordAsync(ExportToRecord export, CancellationToken cancellationToken = default)
     {
-        if (export.BackupCodeId != null)
+        if (export.BackupCodeId != null || export.AuthenticatorStep != null)
         {
-            var account = await accountRepository.FindByIdAsync(export.UserId);
+            var account = await accountRepository.FindByIdAsync(export.UserId, cancellationToken);
             if (account == null
                 || account.PasswordHash != export.CheckedPasswordHash
                 || account.EncryptedTotpSecret != export.CheckedTotpSecret)
@@ -104,7 +105,7 @@ public class DataExportService
                 return PreparedChanges<bool>.NothingToSave(false);
             }
 
-            if (!await identityChecking.TryPrepareBackupCodeUseAsync(export.BackupCodeId, export.IpAddress))
+            if (!await identityChecking.TryPrepareCodeUseAsync(account, export.BackupCodeId, export.AuthenticatorStep, export.IpAddress, cancellationToken))
             {
                 return PreparedChanges<bool>.NothingToSave(false);
             }
@@ -118,7 +119,7 @@ public class DataExportService
     }
 
     // Note le refus dans le journal. Avec la double authentification, un mauvais mot de passe et un mauvais code reçoivent le même refus.
-    private async Task<DataExportResult> RefuseAsync(User account, IPAddress? ipAddress)
+    private async Task<DataExportResult> RefuseAsync(User account, IPAddress? ipAddress, CancellationToken cancellationToken = default)
     {
         await securityJournal.SaveEventNowAsync(SecurityEventType.DataExport, SecurityEventResult.Failure, account.Id, ipAddress);
 
@@ -137,6 +138,7 @@ public class DataExportService
         public required string CheckedPasswordHash { get; init; }
         public required string? CheckedTotpSecret { get; init; }
         public required Guid? BackupCodeId { get; init; }
+        public required long? AuthenticatorStep { get; init; }
         public required IPAddress? IpAddress { get; init; }
     }
 }

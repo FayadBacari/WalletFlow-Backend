@@ -19,9 +19,9 @@ public class BankTransactionArrival
     }
 
     // Choisit le jour d'où lire les opérations du compte, d'après sa dernière opération gardée (voir TransactionRules).
-    public async Task<DateOnly> ChooseReadingStartAsync(Guid accountId, DateOnly today)
+    public async Task<DateOnly> ChooseReadingStartAsync(Guid accountId, DateOnly today, CancellationToken cancellationToken = default)
     {
-        var latestDate = await transactionRepository.FindLatestDateAsync(accountId);
+        var latestDate = await transactionRepository.FindLatestDateAsync(accountId, cancellationToken);
 
         return TransactionRules.ChooseReadingStart(latestDate, today);
     }
@@ -29,7 +29,7 @@ public class BankTransactionArrival
     // Dans le passage en cours de l'appelant, prépare l'ajout des opérations nouvelles de ce compte, chacune dans sa catégorie.
     // Tout est relu à chaque passage : après un conflit, les opérations qu'une autre requête vient d'ajouter sont vues.
     // Renvoie le nombre d'opérations préparées.
-    public async Task<int> PrepareNewTransactionsAsync(Guid userId, Guid accountId, List<ReceivedTransaction> receivedTransactions)
+    public async Task<int> PrepareNewTransactionsAsync(Guid userId, Guid accountId, List<ReceivedTransaction> receivedTransactions, CancellationToken cancellationToken = default)
     {
         if (receivedTransactions.Count == 0)
         {
@@ -37,9 +37,9 @@ public class BankTransactionArrival
         }
 
         var earliestDate = receivedTransactions.Min(transaction => transaction.Date);
-        var knownIds = await transactionRepository.FindExternalIdsAsync(accountId, earliestDate);
-        var categories = await categoryRepository.FindAllAsync(userId);
-        var rules = await transactionRepository.FindRulesAsync(userId);
+        var knownIds = await transactionRepository.FindExternalIdsAsync(accountId, earliestDate, cancellationToken);
+        var categories = await categoryRepository.FindAllAsync(userId, cancellationToken);
+        var rules = await transactionRepository.FindRulesAsync(userId, cancellationToken);
         var preparedCount = 0;
 
         foreach (var received in receivedTransactions)

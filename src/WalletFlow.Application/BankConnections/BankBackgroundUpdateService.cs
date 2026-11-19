@@ -20,9 +20,9 @@ public class BankBackgroundUpdateService
     }
 
     // Met à jour les connexions dont la dernière mise à jour en arrière-plan date de 6 heures ou plus, et renvoie leur nombre.
-    public async Task<int> UpdateDueConnectionsAsync()
+    public async Task<int> UpdateDueConnectionsAsync(CancellationToken cancellationToken = default)
     {
-        var connectionIds = await connectionRepository.FindConnectionIdsToUpdateAsync();
+        var connectionIds = await connectionRepository.FindConnectionIdsToUpdateAsync(cancellationToken);
         var updatedCount = 0;
 
         foreach (var connectionId in connectionIds)
@@ -32,7 +32,7 @@ public class BankBackgroundUpdateService
                 continue;
             }
 
-            await updateService.UpdateConnectionAsync(connectionId, null);
+            await updateService.UpdateConnectionAsync(connectionId, null, cancellationToken);
             updatedCount = updatedCount + 1;
         }
 

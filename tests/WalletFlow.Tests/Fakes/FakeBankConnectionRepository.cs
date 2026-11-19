@@ -43,8 +43,11 @@ public class FakeBankConnectionRepository : IBankConnectionRepository, ITransact
     // Simule une panne de la base pour cette connexion : la lire par son identifiant échoue.
     public Guid? FailingConnectionId { get; set; } = null;
 
+    // Simule une panne de la base au moment de lister les connexions à révoquer.
+    public bool FailsWhenListingRevocations { get; set; } = false;
+
     // Donne les connexions gardées pour cet utilisateur.
-    public Task<List<BankConnection>> FindConnectionsAsync(Guid userId)
+    public Task<List<BankConnection>> FindConnectionsAsync(Guid userId, CancellationToken cancellationToken = default)
     {
         lock (pendingChangesLock)
         {
@@ -55,7 +58,7 @@ public class FakeBankConnectionRepository : IBankConnectionRepository, ITransact
     }
 
     // Cherche la connexion parmi celles de l'utilisateur.
-    public Task<BankConnection?> FindConnectionAsync(Guid userId, Guid connectionId)
+    public Task<BankConnection?> FindConnectionAsync(Guid userId, Guid connectionId, CancellationToken cancellationToken = default)
     {
         lock (pendingChangesLock)
         {
@@ -66,7 +69,7 @@ public class FakeBankConnectionRepository : IBankConnectionRepository, ITransact
     }
 
     // Cherche la connexion par son seul identifiant.
-    public Task<BankConnection?> FindConnectionByIdAsync(Guid connectionId)
+    public Task<BankConnection?> FindConnectionByIdAsync(Guid connectionId, CancellationToken cancellationToken = default)
     {
         if (connectionId == FailingConnectionId)
         {
@@ -82,7 +85,7 @@ public class FakeBankConnectionRepository : IBankConnectionRepository, ITransact
     }
 
     // Relit l'identifiant chez le prestataire, tel qu'il est gardé maintenant.
-    public Task<string?> ReadExternalIdAsync(Guid userId, Guid connectionId)
+    public Task<string?> ReadExternalIdAsync(Guid userId, Guid connectionId, CancellationToken cancellationToken = default)
     {
         lock (pendingChangesLock)
         {
@@ -92,7 +95,7 @@ public class FakeBankConnectionRepository : IBankConnectionRepository, ITransact
     }
 
     // Donne les comptes gardés pour ces connexions.
-    public Task<List<BankAccount>> FindAccountsAsync(List<Guid> connectionIds)
+    public Task<List<BankAccount>> FindAccountsAsync(List<Guid> connectionIds, CancellationToken cancellationToken = default)
     {
         lock (pendingChangesLock)
         {
@@ -106,7 +109,7 @@ public class FakeBankConnectionRepository : IBankConnectionRepository, ITransact
     public List<User> Users { get; set; } = new List<User>();
 
     // Donne les connexions qui ne sont pas expirées, sauf celles des comptes en suppression.
-    public Task<List<Guid>> FindConnectionIdsToUpdateAsync()
+    public Task<List<Guid>> FindConnectionIdsToUpdateAsync(CancellationToken cancellationToken = default)
     {
         lock (pendingChangesLock)
         {
@@ -119,7 +122,7 @@ public class FakeBankConnectionRepository : IBankConnectionRepository, ITransact
     }
 
     // Cherche ce compte dans les autres connexions de l'utilisateur.
-    public Task<bool> IsAccountConnectedElsewhereAsync(Guid userId, string stableId, Guid? exceptConnectionId)
+    public Task<bool> IsAccountConnectedElsewhereAsync(Guid userId, string stableId, Guid? exceptConnectionId, CancellationToken cancellationToken = default)
     {
         lock (pendingChangesLock)
         {
@@ -159,7 +162,7 @@ public class FakeBankConnectionRepository : IBankConnectionRepository, ITransact
     }
 
     // Supprime la connexion et ses comptes si sa session est toujours celle-ci, comme la vraie base.
-    public Task<bool> DeleteAsync(Guid userId, Guid connectionId, string externalConnectionId)
+    public Task<bool> DeleteAsync(Guid userId, Guid connectionId, string externalConnectionId, CancellationToken cancellationToken = default)
     {
         lock (pendingChangesLock)
         {
@@ -303,8 +306,13 @@ public class FakeBankConnectionRepository : IBankConnectionRepository, ITransact
     }
 
     // Donne les connexions pas encore expirées des comptes en suppression.
-    public Task<List<Guid>> FindConnectionIdsToRevokeAsync()
+    public Task<List<Guid>> FindConnectionIdsToRevokeAsync(CancellationToken cancellationToken = default)
     {
+        if (FailsWhenListingRevocations)
+        {
+            throw new InvalidOperationException("Panne simulée de la liste des connexions à révoquer.");
+        }
+
         lock (pendingChangesLock)
         {
             var connectionIds = SavedConnections

@@ -1,3 +1,5 @@
+using WalletFlow.Domain.UsersAndSecurity;
+
 namespace WalletFlow.Api.Configuration;
 
 // Noms et réglages des cookies de connexion (SS §3). Le préfixe __Host- oblige le navigateur à refuser
@@ -8,7 +10,8 @@ public static class SessionCookiesConfiguration
     public const string DeviceCookieName = "__Host-walletflow-device";
     public const string WaitingLoginCookieName = "__Host-walletflow-two-factor";
 
-    public static readonly TimeSpan DeviceCookieLifetime = TimeSpan.FromDays(365);
+    // Le cookie d'appareil dure autant que l'appareil en base : un appareil oublié n'a plus de cookie valable.
+    public static readonly TimeSpan DeviceCookieLifetime = DeviceRules.Lifetime;
 
     // Cookie de session : sans date de fin, il disparaît à la fermeture du navigateur.
     // Les 30 minutes d'inactivité sont contrôlées par le serveur.

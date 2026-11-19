@@ -26,9 +26,12 @@ public class SecurityHeadersMiddleware
         await next(context);
     }
 
-    // Écrit les quatre en-têtes de sécurité dans la réponse.
+    // Écrit les cinq en-têtes de sécurité dans la réponse. Aucune réponse n'est gardée par un navigateur ou un intermédiaire :
+    // toutes contiennent des données personnelles, des données financières, un jeton ou une erreur. Ce rappel passe après ceux
+    // des routes et du framework, et remplace donc tout autre Cache-Control.
     private static void AddSecurityHeaders(HttpResponse response)
     {
+        response.Headers.CacheControl = "no-store";
         response.Headers["Content-Security-Policy"] =
             "default-src 'self'; script-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'";
         response.Headers["X-Content-Type-Options"] = "nosniff";

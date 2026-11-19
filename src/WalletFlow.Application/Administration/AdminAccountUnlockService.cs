@@ -30,17 +30,18 @@ public class AdminAccountUnlockService
     }
 
     // Débloque le compte s'il est bloqué. Si une autre requête change le compte entre-temps, il est relu et tout recommence.
-    public async Task<AdminAccountUnlockResult> UnlockAsync(Guid administratorId, Guid accountId, IPAddress? ipAddress)
+    public async Task<AdminAccountUnlockResult> UnlockAsync(Guid administratorId, Guid accountId, IPAddress? ipAddress, CancellationToken cancellationToken = default)
     {
         return await savingService.SaveWithRetriesAsync(
-            () => PrepareUnlockAsync(administratorId, accountId, ipAddress),
-            new AdminAccountUnlockResult.NotSaved());
+            () => PrepareUnlockAsync(administratorId, accountId, ipAddress, cancellationToken),
+            new AdminAccountUnlockResult.NotSaved(),
+            cancellationToken);
     }
 
     // Un passage : lit le compte, vérifie qu'il est bloqué, puis prépare le déblocage et ses deux événements du journal.
-    private async Task<PreparedChanges<AdminAccountUnlockResult>> PrepareUnlockAsync(Guid administratorId, Guid accountId, IPAddress? ipAddress)
+    private async Task<PreparedChanges<AdminAccountUnlockResult>> PrepareUnlockAsync(Guid administratorId, Guid accountId, IPAddress? ipAddress, CancellationToken cancellationToken = default)
     {
-        var account = await accountRepository.FindByIdAsync(accountId);
+        var account = await accountRepository.FindByIdAsync(accountId, cancellationToken);
 
         if (account == null)
         {

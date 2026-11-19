@@ -18,7 +18,8 @@ public class SecurityJournalService
         this.clock = clock;
     }
 
-    // Écrit tout de suite un événement dans le journal : pour un refus, quand rien d'autre n'est à enregistrer.
+    // Écrit tout de suite un événement dans le journal : pour un refus, quand rien d'autre n'est à enregistrer. Il n'y a pas de
+    // jeton d'annulation : un client qui raccroche ne peut pas empêcher la trace de sa tentative (SS §11).
     public async Task SaveEventNowAsync(
         SecurityEventType type,
         SecurityEventResult result,

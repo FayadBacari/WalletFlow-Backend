@@ -1,6 +1,7 @@
 using System.Net;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
+using System.Text.Json;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Hosting.Server;
 using Microsoft.AspNetCore.Hosting.Server.Features;
@@ -15,7 +16,7 @@ namespace WalletFlow.Tests.Api;
 // Vérifie la limite de taille des routes du support avec le vrai serveur Kestrel, en HTTPS et en mode production : le serveur
 // de test n'applique pas cette limite, et la route de l'utilisateur demande une session, dont les cookies Secure ne voyagent
 // qu'en HTTPS. Le certificat est créé pour le test, et le client n'accepte que lui.
-public class SupportRequestSizeLimitTests : IDisposable
+public sealed class SupportRequestSizeLimitTests : IDisposable
 {
     private const string RequestsEndpoint = "/api/support-requests";
     private const string VisitorEndpoint = RequestsEndpoint + "/visitor";
@@ -120,6 +121,7 @@ public class SupportRequestSizeLimitTests : IDisposable
         var responseText = await fromVisitor.Content.ReadAsStringAsync();
         Assert.DoesNotContain("Request body too large", responseText);
         Assert.DoesNotContain("65536", responseText);
+        Assert.Equal("https://tools.ietf.org/html/rfc9110#section-15.5.14", JsonDocument.Parse(responseText).RootElement.GetProperty("type").GetString());
         Assert.Empty(api.SupportRepository.SavedRequests);
     }
 }

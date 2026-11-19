@@ -13,6 +13,9 @@ public class FakeUserSessionRepository : IUserSessionRepository, ITransactionalF
     private readonly List<UserSession> preparedSessions = new List<UserSession>();
     private readonly List<Device> preparedDevices = new List<Device>();
     private readonly List<Guid> accountsLosingAllSessions = new List<Guid>();
+    private readonly List<UserSession> preparedSessionRemovals = new List<UserSession>();
+    private readonly List<Device> preparedDeviceRemovals = new List<Device>();
+    private readonly List<(Device Device, DateTime UsedAt)> preparedDeviceUses = new List<(Device Device, DateTime UsedAt)>();
 
     // Ce que la fausse base contient.
     public List<UserSession> SavedSessions { get; } = new List<UserSession>();
@@ -20,6 +23,8 @@ public class FakeUserSessionRepository : IUserSessionRepository, ITransactionalF
 
     // Ce que les tests vérifient : les passages du nettoyage et les recherches de session.
     public List<DateTime> CleanupDates { get; } = new List<DateTime>();
+    public List<DateTime> CreationCleanupDates { get; } = new List<DateTime>();
+    public List<DateTime> DeviceCleanupDates { get; } = new List<DateTime>();
     public int SessionSearchCount { get; private set; } = 0;
 
     // Simule une panne de la base : enregistrer une connexion ou chercher une session échoue.
@@ -44,7 +49,7 @@ public class FakeUserSessionRepository : IUserSessionRepository, ITransactionalF
     }
 
     // Garde de côté la fermeture de toutes les sessions du compte : elle ne se fera qu'avec les autres changements.
-    public Task PrepareAllSessionsRemovalAsync(Guid userId)
+    public Task PrepareAllSessionsRemovalAsync(Guid userId, CancellationToken cancellationToken = default)
     {
         lock (pendingChangesLock)
         {
@@ -64,7 +69,7 @@ public class FakeUserSessionRepository : IUserSessionRepository, ITransactionalF
     }
 
     // Cherche en mémoire cette empreinte de jeton d'appareil, pour ce compte.
-    public Task<bool> DeviceBelongsToAccountAsync(string deviceTokenHash, Guid accountId)
+    public Task<bool> DeviceBelongsToAccountAsync(string deviceTokenHash, Guid accountId, CancellationToken cancellationToken = default)
     {
         foreach (var device in SavedDevices)
         {
@@ -78,7 +83,7 @@ public class FakeUserSessionRepository : IUserSessionRepository, ITransactionalF
     }
 
     // Cherche en mémoire un appareil de ce compte.
-    public Task<bool> HasDeviceAsync(Guid accountId)
+    public Task<bool> HasDeviceAsync(Guid accountId, CancellationToken cancellationToken = default)
     {
         lock (pendingChangesLock)
         {
@@ -87,7 +92,7 @@ public class FakeUserSessionRepository : IUserSessionRepository, ITransactionalF
     }
 
     // Cherche en mémoire une session par son empreinte.
-    public Task<UserSession?> FindAsync(string sessionTokenHash)
+    public Task<UserSession?> FindAsync(string sessionTokenHash, CancellationToken cancellationToken = default)
     {
         if (IsDown)
         {
@@ -108,7 +113,7 @@ public class FakeUserSessionRepository : IUserSessionRepository, ITransactionalF
     }
 
     // Avance la date de dernière activité de la session gardée en mémoire.
-    public Task RecordActivityAsync(string sessionTokenHash, DateTime now)
+    public Task RecordActivityAsync(string sessionTokenHash, DateTime now, CancellationToken cancellationToken = default)
     {
         foreach (var session in SavedSessions)
         {
@@ -122,14 +127,14 @@ public class FakeUserSessionRepository : IUserSessionRepository, ITransactionalF
     }
 
     // Retire la session de la liste.
-    public Task DeleteAsync(string sessionTokenHash)
+    public Task DeleteAsync(string sessionTokenHash, CancellationToken cancellationToken = default)
     {
         SavedSessions.RemoveAll(session => session.Id == sessionTokenHash);
         return Task.CompletedTask;
     }
 
     // Retire de la liste toutes les sessions du compte.
-    public Task DeleteAllForUserAsync(Guid userId)
+    public Task DeleteAllForUserAsync(Guid userId, CancellationToken cancellationToken = default)
     {
         if (FailsWhenClosingAllSessions)
         {
@@ -140,15 +145,72 @@ public class FakeUserSessionRepository : IUserSessionRepository, ITransactionalF
         return Task.CompletedTask;
     }
 
-    // Garde la date du passage. La vraie règle d'effacement est testée sur la vraie base.
-    public Task<int> DeleteInactiveSinceAsync(DateTime activityCutoff)
+    // Garde les dates du passage. La vraie règle d'effacement est testée sur la vraie base. Comme EF Core, un jeton annulé
+    // arrête tout.
+    public Task<int> DeleteExpiredAsync(DateTime activityCutoff, DateTime creationCutoff, CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
+
         if (FailsDuringCleanup)
         {
             throw new InvalidOperationException(FailureDetail);
         }
 
         CleanupDates.Add(activityCutoff);
+        CreationCleanupDates.Add(creationCutoff);
+        return Task.FromResult(0);
+    }
+
+    // Garde de côté la fermeture des sessions les moins récemment actives du compte, au-delà de ce nombre.
+    public Task PrepareOldestSessionsRemovalAsync(Guid userId, int keptCount, CancellationToken cancellationToken = default)
+    {
+        lock (pendingChangesLock)
+        {
+            preparedSessionRemovals.AddRange(SavedSessions
+                .Where(session => session.UserId == userId)
+                .OrderByDescending(session => session.LastActivityAt)
+                .ThenBy(session => session.Id, StringComparer.Ordinal)
+                .Skip(keptCount));
+        }
+
+        return Task.CompletedTask;
+    }
+
+    // Garde de côté l'oubli des appareils les moins récemment utilisés du compte, au-delà de ce nombre.
+    public Task PrepareOldestDevicesRemovalAsync(Guid userId, int keptCount, CancellationToken cancellationToken = default)
+    {
+        lock (pendingChangesLock)
+        {
+            preparedDeviceRemovals.AddRange(SavedDevices
+                .Where(device => device.UserId == userId)
+                .OrderByDescending(device => device.LastUsedAt)
+                .ThenBy(device => device.Id)
+                .Skip(keptCount));
+        }
+
+        return Task.CompletedTask;
+    }
+
+    // Garde de côté la connexion depuis cet appareil du compte : elle ne sera notée qu'avec les autres changements.
+    public Task PrepareDeviceUseAsync(string deviceTokenHash, Guid accountId, DateTime now, CancellationToken cancellationToken = default)
+    {
+        lock (pendingChangesLock)
+        {
+            var device = SavedDevices.SingleOrDefault(saved => saved.DeviceToken == deviceTokenHash && saved.UserId == accountId);
+
+            if (device != null)
+            {
+                preparedDeviceUses.Add((device, now));
+            }
+        }
+
+        return Task.CompletedTask;
+    }
+
+    // Garde la date du passage. La vraie règle d'effacement est testée sur la vraie base.
+    public Task<int> DeleteForgottenDevicesAsync(DateTime usedBefore, CancellationToken cancellationToken = default)
+    {
+        DeviceCleanupDates.Add(usedBefore);
         return Task.FromResult(0);
     }
 
@@ -187,6 +249,9 @@ public class FakeUserSessionRepository : IUserSessionRepository, ITransactionalF
             preparedSessions.Clear();
             preparedDevices.Clear();
             accountsLosingAllSessions.Clear();
+            preparedSessionRemovals.Clear();
+            preparedDeviceRemovals.Clear();
+            preparedDeviceUses.Clear();
         }
     }
 
@@ -206,11 +271,22 @@ public class FakeUserSessionRepository : IUserSessionRepository, ITransactionalF
                 SavedSessions.RemoveAll(session => session.UserId == accountId);
             }
 
+            SavedSessions.RemoveAll(preparedSessionRemovals.Contains);
+            SavedDevices.RemoveAll(preparedDeviceRemovals.Contains);
+
+            foreach (var (device, usedAt) in preparedDeviceUses)
+            {
+                device.RecordUse(usedAt);
+            }
+
             SavedSessions.AddRange(preparedSessions);
             SavedDevices.AddRange(preparedDevices);
             preparedSessions.Clear();
             preparedDevices.Clear();
             accountsLosingAllSessions.Clear();
+            preparedSessionRemovals.Clear();
+            preparedDeviceRemovals.Clear();
+            preparedDeviceUses.Clear();
         }
     }
 }

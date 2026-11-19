@@ -6,5 +6,5 @@ namespace WalletFlow.Application.TwoFactorAuthentication;
 public interface IBackupCodeHasher
 {
     // Transforme un code de secours en empreinte. Le même code, pour le même compte, donne toujours la même empreinte.
-    Task<string> HashAsync(string cleanedCode, Guid accountId);
+    Task<string> HashAsync(string cleanedCode, Guid accountId, CancellationToken cancellationToken = default);
 }

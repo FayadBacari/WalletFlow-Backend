@@ -1,5 +1,6 @@
 # Règles de gitleaks pour WalletFlow (SS §10) : toutes les règles par défaut. Seules ces valeurs d'exemple, publiques,
-# sont acceptées : les mots de passe inventés des tests et des requêtes de démonstration, et le secret d'exemple de la RFC 6238.
+# sont acceptées : les mots de passe inventés des tests et des requêtes de démonstration, la fin de l'empreinte SHA-1 de
+# « Mot-De-Passe-Divulgue-7 » (tests de Pwned Passwords), et le secret d'exemple de la RFC 6238.
 # Une exception se donne valeur par valeur, jamais pour un dossier entier : un vrai secret écrit dans un test serait trouvé.
 title = "Règles de gitleaks pour WalletFlow"
 
@@ -13,5 +14,7 @@ regexes = [
     '''^Exemple-De-Mot-De-Passe-\d$''',
     '''^Nouveau-Mot-De-Passe-\d$''',
     '''^Mot-De-Passe-De-L-Inconnu-\d$''',
+    '''^Mot-De-Passe-Divulgue-\d$''',
+    '''^039CB538F3901755162C22BDF50A7DE8BA7$''',
     '''^GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ$''',
 ]

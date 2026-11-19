@@ -21,67 +21,67 @@ public class TransactionRepository : ITransactionRepository
     }
 
     // Donne la date de la dernière opération du compte, sans rien suivre.
-    public async Task<DateOnly?> FindLatestDateAsync(Guid accountId)
+    public async Task<DateOnly?> FindLatestDateAsync(Guid accountId, CancellationToken cancellationToken = default)
     {
         return await databaseContext.BankTransactions
             .AsNoTracking()
             .Where(transaction => transaction.BankAccountId == accountId)
-            .MaxAsync(transaction => (DateOnly?)transaction.TransactionDate);
+            .MaxAsync(transaction => (DateOnly?)transaction.TransactionDate, cancellationToken);
     }
 
     // Donne les identifiants des opérations du compte à partir de ce jour, sans rien suivre.
-    public async Task<HashSet<string>> FindExternalIdsAsync(Guid accountId, DateOnly fromDate)
+    public async Task<HashSet<string>> FindExternalIdsAsync(Guid accountId, DateOnly fromDate, CancellationToken cancellationToken = default)
     {
         var externalIds = await databaseContext.BankTransactions
             .AsNoTracking()
             .Where(transaction => transaction.BankAccountId == accountId && transaction.TransactionDate >= fromDate)
             .Select(transaction => transaction.ExternalTransactionId)
-            .ToListAsync();
+            .ToListAsync(cancellationToken);
 
         return new HashSet<string>(externalIds);
     }
 
     // Donne les règles des catégories de l'utilisateur.
-    public async Task<List<CategorizationRule>> FindRulesAsync(Guid userId)
+    public async Task<List<CategorizationRule>> FindRulesAsync(Guid userId, CancellationToken cancellationToken = default)
     {
         return await databaseContext.CategorizationRules
             .Where(rule => databaseContext.Categories.Any(category => category.Id == rule.CategoryId && category.UserId == userId))
-            .ToListAsync();
+            .ToListAsync(cancellationToken);
     }
 
     // Cherche la règle de l'utilisateur pour ce libellé. S'il y en avait plusieurs, la première par identifiant est toujours la même.
-    public async Task<CategorizationRule?> FindRuleAsync(Guid userId, string ruleLabel)
+    public async Task<CategorizationRule?> FindRuleAsync(Guid userId, string ruleLabel, CancellationToken cancellationToken = default)
     {
         return await databaseContext.CategorizationRules
             .Where(rule =>
                 rule.Label == ruleLabel
                 && databaseContext.Categories.Any(category => category.Id == rule.CategoryId && category.UserId == userId))
             .OrderBy(rule => rule.Id)
-            .FirstOrDefaultAsync();
+            .FirstOrDefaultAsync(cancellationToken);
     }
 
     // Cherche l'opération parmi celles des comptes de l'utilisateur : celle d'un autre n'est jamais trouvée.
-    public async Task<BankTransaction?> FindAsync(Guid userId, Guid transactionId)
+    public async Task<BankTransaction?> FindAsync(Guid userId, Guid transactionId, CancellationToken cancellationToken = default)
     {
         return await databaseContext.BankTransactions
             .Where(transaction => transaction.Id == transactionId && UserAccountIds(userId).Contains(transaction.BankAccountId))
-            .SingleOrDefaultAsync();
+            .SingleOrDefaultAsync(cancellationToken);
     }
 
     // Donne l'opération telle que l'utilisateur la voit, sans rien suivre.
-    public async Task<TransactionView?> ReadViewAsync(Guid userId, Guid transactionId)
+    public async Task<TransactionView?> ReadViewAsync(Guid userId, Guid transactionId, CancellationToken cancellationToken = default)
     {
         return await QueryRows(userId)
             .Where(row => row.Id == transactionId)
             .Select(row => new TransactionView(
                 row.Id, row.Date, row.Label, row.AmountInCents, row.IsInternalTransfer,
                 row.AccountId, row.AccountName, row.CategoryId, row.CategoryName))
-            .SingleOrDefaultAsync();
+            .SingleOrDefaultAsync(cancellationToken);
     }
 
     // Applique chaque critère donné, compte les opérations trouvées, puis lit la page demandée,
     // les plus récentes d'abord. À date égale, l'identifiant donne toujours le même ordre d'une page à l'autre.
-    public async Task<TransactionPage> SearchAsync(Guid userId, TransactionSearch search)
+    public async Task<TransactionPage> SearchAsync(Guid userId, TransactionSearch search, CancellationToken cancellationToken = default)
     {
         var query = QueryRows(userId);
 
@@ -116,7 +116,7 @@ public class TransactionRepository : ITransactionRepository
             query = query.Where(row => row.CategoryId == categoryId);
         }
 
-        var totalCount = await query.CountAsync();
+        var totalCount = await query.CountAsync(cancellationToken);
         var items = await query
             .OrderByDescending(row => row.Date)
             .ThenByDescending(row => row.Id)
@@ -125,22 +125,22 @@ public class TransactionRepository : ITransactionRepository
             .Select(row => new TransactionView(
                 row.Id, row.Date, row.Label, row.AmountInCents, row.IsInternalTransfer,
                 row.AccountId, row.AccountName, row.CategoryId, row.CategoryName))
-            .ToListAsync();
+            .ToListAsync(cancellationToken);
 
         return new TransactionPage(items, totalCount);
     }
 
     // Additionne en SQL, par catégorie et par mois, les opérations des comptes de l'utilisateur entre ces deux jours compris,
     // sans les transferts. Les montants sont additionnés en bigint : beaucoup d'opérations ne débordent jamais.
-    public async Task<List<CategoryMonthTotal>> SumByCategoryAndMonthAsync(Guid userId, DateOnly from, DateOnly to, Guid? accountId)
+    public async Task<List<CategoryMonthTotal>> SumByCategoryAndMonthAsync(Guid userId, DateOnly firstDay, DateOnly lastDay, Guid? accountId, CancellationToken cancellationToken = default)
     {
         var query = databaseContext.BankTransactions
             .AsNoTracking()
             .Where(transaction =>
                 UserAccountIds(userId).Contains(transaction.BankAccountId)
                 && !transaction.IsInternalTransfer
-                && transaction.TransactionDate >= from
-                && transaction.TransactionDate <= to);
+                && transaction.TransactionDate >= firstDay
+                && transaction.TransactionDate <= lastDay);
 
         if (accountId is Guid onlyAccountId)
         {
@@ -159,12 +159,12 @@ public class TransactionRepository : ITransactionRepository
                 group.Key.Year,
                 group.Key.Month,
                 group.Sum(transaction => (long)transaction.AmountInCents)))
-            .ToListAsync();
+            .ToListAsync(cancellationToken);
     }
 
     // Donne la date de la plus ancienne opération des comptes de l'utilisateur, ou de ce compte seul. Un transfert compte aussi :
     // il dit que l'historique remonte jusque-là.
-    public async Task<DateOnly?> FindEarliestDateAsync(Guid userId, Guid? accountId)
+    public async Task<DateOnly?> FindEarliestDateAsync(Guid userId, Guid? accountId, CancellationToken cancellationToken = default)
     {
         var query = databaseContext.BankTransactions
             .AsNoTracking()
@@ -175,7 +175,7 @@ public class TransactionRepository : ITransactionRepository
             query = query.Where(transaction => transaction.BankAccountId == onlyAccountId);
         }
 
-        return await query.MinAsync(transaction => (DateOnly?)transaction.TransactionDate);
+        return await query.MinAsync(transaction => (DateOnly?)transaction.TransactionDate, cancellationToken);
     }
 
     // Garde de côté la nouvelle opération : elle ne sera écrite qu'avec les autres changements.

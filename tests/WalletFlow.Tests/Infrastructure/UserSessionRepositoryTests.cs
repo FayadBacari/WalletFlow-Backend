@@ -33,10 +33,11 @@ public class UserSessionRepositoryTests
     }
 
     // Crée une session sans l'enregistrer, avec une empreinte de la taille d'un vrai SHA-256.
-    private static UserSession CreateSession(User account, DateTime lastActivityAt)
+    private static UserSession CreateSession(User account, DateTime lastActivityAt, DateTime? createdAt = null)
     {
         return new UserSession
         {
+            CreatedAt = createdAt ?? lastActivityAt,
             Id = Convert.ToHexStringLower(Guid.NewGuid().ToByteArray()) + new string('0', 32),
             LastActivityAt = lastActivityAt,
             UserId = account.Id
@@ -105,7 +106,7 @@ public class UserSessionRepositoryTests
         var savedAccount = await SaveConfirmedAccountAsync(databaseContext, "test-session-connexion@exemple.test");
         var account = await databaseContext.Users.SingleAsync(row => row.Id == savedAccount.Id);
         var session = CreateSession(savedAccount, Now);
-        var device = new Device { DeviceToken = new string('a', 64), UserId = savedAccount.Id };
+        var device = new Device { DeviceToken = new string('a', 64), UserId = savedAccount.Id, LastUsedAt = Now };
 
         PrepareLogin(databaseContext, account, session, device, CreateLoginEvent(savedAccount));
         var saved = await TrySaveChangesAsync(databaseContext);
@@ -155,7 +156,7 @@ public class UserSessionRepositoryTests
         var account = await accountRepository.FindByIdAsync(savedAccount.Id);
         await SimulateConcurrentAttemptAsync(databaseContext, savedAccount.Id, 1);
         var session = CreateSession(savedAccount, Now);
-        var device = new Device { DeviceToken = new string('b', 64), UserId = savedAccount.Id };
+        var device = new Device { DeviceToken = new string('b', 64), UserId = savedAccount.Id, LastUsedAt = Now };
         var securityEvent = CreateLoginEvent(savedAccount);
 
         // Le compteur lu est 0, mais la base contient 1 : cette écriture doit être refusée.
@@ -321,7 +322,7 @@ public class UserSessionRepositoryTests
         var firstAccount = await SaveConfirmedAccountAsync(databaseContext, "test-appareil-premier@exemple.test");
         var secondAccount = await SaveConfirmedAccountAsync(databaseContext, "test-appareil-second@exemple.test");
         var deviceTokenHash = new string('c', 64);
-        databaseContext.Devices.Add(new Device { DeviceToken = deviceTokenHash, UserId = firstAccount.Id });
+        databaseContext.Devices.Add(new Device { DeviceToken = deviceTokenHash, UserId = firstAccount.Id, LastUsedAt = Now });
         await databaseContext.SaveChangesAsync();
 
         Assert.True(await repository.DeviceBelongsToAccountAsync(deviceTokenHash, firstAccount.Id));
@@ -400,22 +401,129 @@ public class UserSessionRepositoryTests
         Assert.NotNull(await repository.FindAsync(otherSession.Id));
     }
 
+    // SS §3 : le nettoyage efface une session inactive depuis la première date, et une session ouverte avant la seconde, même encore
+    // active. Les autres restent.
     [Fact]
-    public async Task CleanupDeletesOnlySessionsInactiveSinceTheDate()
+    public async Task CleanupDeletesSessionsInactiveOrOpenTooLong()
     {
         await using var databaseContext = CreateDatabaseContext();
         await using var transaction = await databaseContext.Database.BeginTransactionAsync();
         var repository = new UserSessionRepository(databaseContext);
         var savedAccount = await SaveConfirmedAccountAsync(databaseContext, "test-session-effacement@exemple.test");
-        var expiredSession = CreateSession(savedAccount, Now);
-        var activeSession = CreateSession(savedAccount, Now.AddSeconds(1));
-        await SaveSessionsDirectlyAsync(databaseContext, expiredSession, activeSession);
+        var inactiveSession = CreateSession(savedAccount, Now);
+        var tooOldSession = CreateSession(savedAccount, Now.AddSeconds(1), Now.AddHours(-12));
+        var activeSession = CreateSession(savedAccount, Now.AddSeconds(1), Now.AddHours(-12).AddSeconds(1));
+        await SaveSessionsDirectlyAsync(databaseContext, inactiveSession, tooOldSession, activeSession);
 
-        var deletedCount = await repository.DeleteInactiveSinceAsync(Now);
+        var deletedCount = await repository.DeleteExpiredAsync(Now, Now.AddHours(-12));
 
-        Assert.True(deletedCount >= 1);
-        Assert.Null(await repository.FindAsync(expiredSession.Id));
+        Assert.True(deletedCount >= 2);
+        Assert.Null(await repository.FindAsync(inactiveSession.Id));
+        Assert.Null(await repository.FindAsync(tooOldSession.Id));
         Assert.NotNull(await repository.FindAsync(activeSession.Id));
+    }
+
+    // SS §3 : la connexion de trop ferme les sessions les moins récemment actives du compte, et seulement les siennes.
+    [Fact]
+    public async Task OldestSessionsAreClosedBeyondTheKeptCount()
+    {
+        await using var databaseContext = CreateDatabaseContext();
+        await using var transaction = await databaseContext.Database.BeginTransactionAsync();
+        var repository = new UserSessionRepository(databaseContext);
+        var account = await SaveConfirmedAccountAsync(databaseContext, "test-session-plafond@exemple.test");
+        var other = await SaveConfirmedAccountAsync(databaseContext, "test-session-plafond-autre@exemple.test");
+        var sessions = Enumerable.Range(0, 4).Select(minute => CreateSession(account, Now.AddMinutes(minute))).ToList();
+        var otherSession = CreateSession(other, Now.AddMinutes(-10));
+        await SaveSessionsDirectlyAsync(databaseContext, sessions.Append(otherSession).ToArray());
+
+        await repository.PrepareOldestSessionsRemovalAsync(account.Id, 2);
+        await databaseContext.SaveChangesAsync();
+
+        var keptIds = await databaseContext.UserSessions.Where(session => session.UserId == account.Id).Select(session => session.Id).ToListAsync();
+        Assert.Equal(
+            new List<string> { sessions[2].Id, sessions[3].Id }.Order(StringComparer.Ordinal),
+            keptIds.Order(StringComparer.Ordinal));
+        Assert.NotNull(await repository.FindAsync(otherSession.Id));
+    }
+
+    // Ajoute directement un appareil de ce compte, utilisé à cette date.
+    private static async Task<Device> SaveDeviceAsync(WalletFlowDatabaseContext databaseContext, User account, DateTime lastUsedAt)
+    {
+        var device = new Device { DeviceToken = Convert.ToHexStringLower(Guid.NewGuid().ToByteArray()) + new string('0', 32), UserId = account.Id, LastUsedAt = lastUsedAt };
+        databaseContext.Devices.Add(device);
+        await databaseContext.SaveChangesAsync();
+
+        return device;
+    }
+
+    // SS §3 : un nouvel appareil de trop fait oublier les moins récemment utilisés du compte, et seulement les siens.
+    [Fact]
+    public async Task OldestDevicesAreForgottenBeyondTheKeptCount()
+    {
+        await using var databaseContext = CreateDatabaseContext();
+        await using var transaction = await databaseContext.Database.BeginTransactionAsync();
+        var repository = new UserSessionRepository(databaseContext);
+        var account = await SaveConfirmedAccountAsync(databaseContext, "test-appareil-plafond@exemple.test");
+        var other = await SaveConfirmedAccountAsync(databaseContext, "test-appareil-plafond-autre@exemple.test");
+        var oldest = await SaveDeviceAsync(databaseContext, account, Now.AddDays(-3));
+        var middle = await SaveDeviceAsync(databaseContext, account, Now.AddDays(-2));
+        var newest = await SaveDeviceAsync(databaseContext, account, Now.AddDays(-1));
+        var otherDevice = await SaveDeviceAsync(databaseContext, other, Now.AddDays(-30));
+
+        await repository.PrepareOldestDevicesRemovalAsync(account.Id, 2);
+        await databaseContext.SaveChangesAsync();
+
+        var keptIds = await databaseContext.Devices.Select(device => device.Id).ToListAsync();
+        Assert.DoesNotContain(oldest.Id, keptIds);
+        Assert.Contains(middle.Id, keptIds);
+        Assert.Contains(newest.Id, keptIds);
+        Assert.Contains(otherDevice.Id, keptIds);
+    }
+
+    // Une connexion depuis un appareil connu note sa date, sur l'appareil de ce compte seulement, et la date ne recule jamais.
+    [Fact]
+    public async Task ConnectionFromAKnownDeviceIsNoted()
+    {
+        await using var databaseContext = CreateDatabaseContext();
+        await using var transaction = await databaseContext.Database.BeginTransactionAsync();
+        var repository = new UserSessionRepository(databaseContext);
+        var account = await SaveConfirmedAccountAsync(databaseContext, "test-appareil-connexion@exemple.test");
+        var other = await SaveConfirmedAccountAsync(databaseContext, "test-appareil-connexion-autre@exemple.test");
+        var device = await SaveDeviceAsync(databaseContext, account, Now.AddDays(-5));
+
+        await repository.PrepareDeviceUseAsync(device.DeviceToken, other.Id, Now);
+        await repository.PrepareDeviceUseAsync(device.DeviceToken, account.Id, Now.AddDays(-10));
+        await databaseContext.SaveChangesAsync();
+        var unchanged = await databaseContext.Devices.AsNoTracking().SingleAsync(saved => saved.Id == device.Id);
+        await repository.PrepareDeviceUseAsync(device.DeviceToken, account.Id, Now);
+        await databaseContext.SaveChangesAsync();
+        var noted = await databaseContext.Devices.AsNoTracking().SingleAsync(saved => saved.Id == device.Id);
+
+        Assert.Equal((Now.AddDays(-5), Now), (unchanged.LastUsedAt, noted.LastUsedAt));
+    }
+
+    // SS §3 : le nettoyage oublie les appareils inutilisés depuis la date, sauf le plus récent de chaque compte : un compte qui n'a
+    // qu'un vieil appareil le garde, et sa prochaine connexion d'ailleurs déclenche encore l'alerte « nouvel appareil ».
+    [Fact]
+    public async Task ForgottenDevicesAreErasedExceptTheMostRecentOfEachAccount()
+    {
+        await using var databaseContext = CreateDatabaseContext();
+        await using var transaction = await databaseContext.Database.BeginTransactionAsync();
+        var repository = new UserSessionRepository(databaseContext);
+        var account = await SaveConfirmedAccountAsync(databaseContext, "test-appareil-oubli@exemple.test");
+        var lonely = await SaveConfirmedAccountAsync(databaseContext, "test-appareil-oubli-seul@exemple.test");
+        var forgotten = await SaveDeviceAsync(databaseContext, account, Now.AddYears(-2));
+        var alsoOld = await SaveDeviceAsync(databaseContext, account, Now.AddYears(-1).AddDays(-1));
+        var recent = await SaveDeviceAsync(databaseContext, account, Now.AddDays(-1));
+        var lonelyDevice = await SaveDeviceAsync(databaseContext, lonely, Now.AddYears(-3));
+
+        await repository.DeleteForgottenDevicesAsync(Now.AddYears(-1));
+
+        var keptIds = await databaseContext.Devices.Select(device => device.Id).ToListAsync();
+        Assert.DoesNotContain(forgotten.Id, keptIds);
+        Assert.DoesNotContain(alsoOld.Id, keptIds);
+        Assert.Contains(recent.Id, keptIds);
+        Assert.Contains(lonelyDevice.Id, keptIds);
     }
 
     // SS §3 : après une récupération, toutes les sessions du compte sont fermées, et seulement les siennes.
@@ -448,7 +556,7 @@ public class UserSessionRepositoryTests
         var repository = new UserSessionRepository(databaseContext);
         var savedAccount = await SaveConfirmedAccountAsync(databaseContext, "test-session-compte-efface@exemple.test");
         var savedSession = CreateSession(savedAccount, Now);
-        databaseContext.Devices.Add(new Device { DeviceToken = new string('f', 64), UserId = savedAccount.Id });
+        databaseContext.Devices.Add(new Device { DeviceToken = new string('f', 64), UserId = savedAccount.Id, LastUsedAt = Now });
         await SaveSessionsDirectlyAsync(databaseContext, savedSession);
 
         await databaseContext.Users

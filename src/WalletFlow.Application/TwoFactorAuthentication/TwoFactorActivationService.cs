@@ -51,9 +51,9 @@ public class TwoFactorActivationService
 
     // Premier temps : le mot de passe redemandé donne le secret. Une session volée ne peut donc pas enfermer le propriétaire dehors (SS §2).
     // Rien n'est écrit en base : le secret attend le premier code, en mémoire.
-    public async Task<TwoFactorActivationStartResult> StartAsync(Guid userId, string password, IPAddress? ipAddress)
+    public async Task<TwoFactorActivationStartResult> StartAsync(Guid userId, string password, IPAddress? ipAddress, CancellationToken cancellationToken = default)
     {
-        var account = await accountRepository.FindByIdAsync(userId);
+        var account = await accountRepository.FindByIdAsync(userId, cancellationToken);
 
         if (account == null)
         {
@@ -67,7 +67,7 @@ public class TwoFactorActivationService
 
         var normalizedPassword = PasswordRules.Normalize(password);
 
-        if (!await passwordHasher.VerifyAsync(normalizedPassword, account.PasswordHash))
+        if (!await passwordHasher.VerifyAsync(normalizedPassword, account.PasswordHash, cancellationToken))
         {
             await securityJournal.SaveEventNowAsync(SecurityEventType.TwoFactorActivation, SecurityEventResult.Failure, userId, ipAddress);
             return new TwoFactorActivationStartResult.WrongPassword();
@@ -84,7 +84,7 @@ public class TwoFactorActivationService
     }
 
     // Second temps : un premier code juste active tout, et les 10 codes de secours sont donnés une seule fois (GR Auth).
-    public async Task<TwoFactorActivationFinishResult> FinishAsync(Guid userId, string code, IPAddress? ipAddress)
+    public async Task<TwoFactorActivationFinishResult> FinishAsync(Guid userId, string code, IPAddress? ipAddress, CancellationToken cancellationToken = default)
     {
         var waitingSecret = waitingSecretStore.Find(userId);
 
@@ -93,28 +93,36 @@ public class TwoFactorActivationService
             return new TwoFactorActivationFinishResult.ActivationMustRestart();
         }
 
-        if (!codeCheckingService.CheckFirstCode(userId, waitingSecret, code))
+        var firstStep = codeCheckingService.CheckFirstCode(waitingSecret, code);
+        if (firstStep == null)
         {
             await securityJournal.SaveEventNowAsync(SecurityEventType.TwoFactorActivation, SecurityEventResult.Failure, userId, ipAddress);
             return new TwoFactorActivationFinishResult.WrongCode();
         }
 
-        return await SaveThenGiveBackupCodesAsync(userId, waitingSecret, ipAddress);
+        return await SaveThenGiveBackupCodesAsync(userId, waitingSecret, firstStep.Value, ipAddress, cancellationToken);
     }
 
-    // Prépare les codes de secours et le secret chiffré, enregistre le tout, puis oublie le secret en mémoire.
-    // Le hachage est lent : il passe avant la lecture du compte, pour que l'écriture suive de près la lecture.
-    private async Task<TwoFactorActivationFinishResult> SaveThenGiveBackupCodesAsync(Guid userId, string waitingSecret, IPAddress? ipAddress)
+    // Prépare les codes de secours et le secret chiffré, enregistre le tout avec le premier code noté comme utilisé, puis oublie
+    // le secret en mémoire. Le hachage est lent : il passe avant la lecture du compte, pour que l'écriture suive de près la lecture.
+    private async Task<TwoFactorActivationFinishResult> SaveThenGiveBackupCodesAsync(
+        Guid userId,
+        string waitingSecret,
+        long firstStep,
+        IPAddress? ipAddress,
+        CancellationToken cancellationToken = default)
     {
         var cleanedCodes = GenerateBackupCodes();
-        var backupCodes = await HashBackupCodesAsync(cleanedCodes, userId);
+        var backupCodes = await HashBackupCodesAsync(cleanedCodes, userId, cancellationToken);
         var encryptedSecret = secretProtector.Encrypt(waitingSecret, userId);
 
         var saved = await TrySaveActivationAsync(
             userId,
             encryptedSecret,
+            firstStep,
             backupCodes,
-            ipAddress);
+            ipAddress,
+            cancellationToken);
 
         waitingSecretStore.Remove(userId);
 
@@ -131,30 +139,35 @@ public class TwoFactorActivationService
     private async Task<bool> TrySaveActivationAsync(
         Guid userId,
         string encryptedSecret,
+        long firstStep,
         List<BackupCode> backupCodes,
-        IPAddress? ipAddress)
+        IPAddress? ipAddress,
+        CancellationToken cancellationToken = default)
     {
         return await savingService.SaveWithRetriesAsync(
-            () => PrepareActivationAsync(userId, encryptedSecret, backupCodes, ipAddress),
-            false);
+            () => PrepareActivationAsync(userId, encryptedSecret, firstStep, backupCodes, ipAddress, cancellationToken),
+            false,
+            cancellationToken);
     }
 
     // Un passage : lit le compte, refuse s'il a disparu ou s'il est déjà activé : un compte ne reçoit jamais 20 codes de secours.
-    // Sinon, prépare le secret chiffré, les codes de secours et l'événement du journal.
+    // Sinon, prépare le secret chiffré avec le premier code noté comme utilisé, les codes de secours et l'événement du journal.
     private async Task<PreparedChanges<bool>> PrepareActivationAsync(
         Guid userId,
         string encryptedSecret,
+        long firstStep,
         List<BackupCode> backupCodes,
-        IPAddress? ipAddress)
+        IPAddress? ipAddress,
+        CancellationToken cancellationToken = default)
     {
-        var account = await accountRepository.FindByIdAsync(userId);
+        var account = await accountRepository.FindByIdAsync(userId, cancellationToken);
 
         if (account == null || account.IsTwoFactorEnabled)
         {
             return PreparedChanges<bool>.NothingToSave(false);
         }
 
-        account.ActivateTwoFactor(encryptedSecret);
+        account.ActivateTwoFactor(encryptedSecret, firstStep);
         twoFactorRepository.PrepareBackupCodes(backupCodes);
         securityJournal.PrepareEvent(SecurityEventType.TwoFactorActivation, SecurityEventResult.Success, userId, ipAddress);
 
@@ -175,7 +188,7 @@ public class TwoFactorActivationService
     }
 
     // Hache chaque code de secours comme un mot de passe, avec le sel du compte : seule l'empreinte va en base (SS §2).
-    private async Task<List<BackupCode>> HashBackupCodesAsync(List<string> cleanedCodes, Guid userId)
+    private async Task<List<BackupCode>> HashBackupCodesAsync(List<string> cleanedCodes, Guid userId, CancellationToken cancellationToken = default)
     {
         var backupCodes = new List<BackupCode>();
 
@@ -183,7 +196,7 @@ public class TwoFactorActivationService
         {
             backupCodes.Add(new BackupCode
             {
-                CodeHash = await backupCodeHasher.HashAsync(cleanedCode, userId),
+                CodeHash = await backupCodeHasher.HashAsync(cleanedCode, userId, cancellationToken),
                 UserId = userId
             });
         }

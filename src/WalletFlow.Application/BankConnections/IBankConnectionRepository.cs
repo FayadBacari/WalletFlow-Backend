@@ -8,31 +8,31 @@ namespace WalletFlow.Application.BankConnections;
 public interface IBankConnectionRepository
 {
     // Donne les connexions de l'utilisateur.
-    Task<List<BankConnection>> FindConnectionsAsync(Guid userId);
+    Task<List<BankConnection>> FindConnectionsAsync(Guid userId, CancellationToken cancellationToken = default);
 
     // Cherche cette connexion parmi celles de l'utilisateur. Renvoie null si elle n'existe pas, ou si elle est à un autre.
-    Task<BankConnection?> FindConnectionAsync(Guid userId, Guid connectionId);
+    Task<BankConnection?> FindConnectionAsync(Guid userId, Guid connectionId, CancellationToken cancellationToken = default);
 
     // Cherche une connexion par son seul identifiant, pour la mettre à jour. Réservé à la tâche de fond,
     // et aux connexions d'abord trouvées parmi celles de l'utilisateur.
-    Task<BankConnection?> FindConnectionByIdAsync(Guid connectionId);
+    Task<BankConnection?> FindConnectionByIdAsync(Guid connectionId, CancellationToken cancellationToken = default);
 
     // Lit à nouveau en base l'identifiant chez le prestataire de cette connexion de l'utilisateur, sans rien suivre.
     // Renvoie null si elle n'existe plus.
-    Task<string?> ReadExternalIdAsync(Guid userId, Guid connectionId);
+    Task<string?> ReadExternalIdAsync(Guid userId, Guid connectionId, CancellationToken cancellationToken = default);
 
     // Donne les comptes de ces connexions.
-    Task<List<BankAccount>> FindAccountsAsync(List<Guid> connectionIds);
+    Task<List<BankAccount>> FindAccountsAsync(List<Guid> connectionIds, CancellationToken cancellationToken = default);
 
     // Donne les connexions qui ne sont pas expirées, sauf celles des comptes en suppression : la tâche de fond les met à jour.
-    Task<List<Guid>> FindConnectionIdsToUpdateAsync();
+    Task<List<Guid>> FindConnectionIdsToUpdateAsync(CancellationToken cancellationToken = default);
 
     // Donne les connexions pas encore expirées des comptes en suppression : leur autorisation reste à révoquer (SS §7). Rien
     // n'est suivi.
-    Task<List<Guid>> FindConnectionIdsToRevokeAsync();
+    Task<List<Guid>> FindConnectionIdsToRevokeAsync(CancellationToken cancellationToken = default);
 
     // Renvoie vrai si ce compte, reconnu par son identifiant stable, est déjà dans une autre connexion de l'utilisateur.
-    Task<bool> IsAccountConnectedElsewhereAsync(Guid userId, string stableId, Guid? exceptConnectionId);
+    Task<bool> IsAccountConnectedElsewhereAsync(Guid userId, string stableId, Guid? exceptConnectionId, CancellationToken cancellationToken = default);
 
     // Garde de côté une nouvelle connexion : elle ne sera enregistrée qu'avec les autres changements.
     void PrepareConnection(BankConnection connection);
@@ -46,5 +46,5 @@ public interface IBankConnectionRepository
 
     // Supprime la connexion de l'utilisateur, avec ses comptes et leurs transactions (GR Comptes), si son identifiant
     // chez le prestataire est toujours celui-ci. Écriture immédiate. Renvoie faux si rien n'a été supprimé.
-    Task<bool> DeleteAsync(Guid userId, Guid connectionId, string externalConnectionId);
+    Task<bool> DeleteAsync(Guid userId, Guid connectionId, string externalConnectionId, CancellationToken cancellationToken = default);
 }

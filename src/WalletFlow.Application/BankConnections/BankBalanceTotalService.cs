@@ -15,10 +15,10 @@ public class BankBalanceTotalService
 
     // Additionne les derniers soldes connus de tous les comptes de l'utilisateur. Le total tient dans un long :
     // il ne déborde jamais, même avec beaucoup de comptes au solde maximum.
-    public async Task<BankBalanceTotal> ReadAsync(Guid userId)
+    public async Task<BankBalanceTotal> ReadAsync(Guid userId, CancellationToken cancellationToken = default)
     {
-        var connections = await connectionRepository.FindConnectionsAsync(userId);
-        var accounts = await connectionRepository.FindAccountsAsync(connections.Select(connection => connection.Id).ToList());
+        var connections = await connectionRepository.FindConnectionsAsync(userId, cancellationToken);
+        var accounts = await connectionRepository.FindAccountsAsync(connections.Select(connection => connection.Id).ToList(), cancellationToken);
         long totalInCents = 0;
         DateTime? oldestBalanceUpdatedAt = null;
 

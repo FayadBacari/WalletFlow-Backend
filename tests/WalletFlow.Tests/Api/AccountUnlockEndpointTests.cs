@@ -107,7 +107,7 @@ public class AccountUnlockEndpointTests
         var response = await SendUnlockRequestAsync(browserClient, "jeton-invente");
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
-        Assert.Equal("Ce lien n'est plus valable. Si ton compte est encore bloqué, utilise « Mot de passe oublié ».", await ReadFieldErrorAsync(response, "Token"));
+        Assert.Equal("Ce lien n'est plus valable. Si ton compte est encore bloqué, utilise « Mot de passe oublié ».", await ReadFieldErrorAsync(response, "token"));
     }
 
     // Un lien ne sert jamais à un autre usage : un lien de déblocage ne doit jamais changer un mot de passe.
@@ -170,7 +170,7 @@ public class AccountUnlockEndpointTests
         }
 
         await WaitUntilAsync(() => api.LoggerProvider.Messages.Any(message =>
-            message.StartsWith("Warning") && message.Contains("n'a pas pu partir")));
+            message.StartsWith("Warning", StringComparison.Ordinal) && message.Contains("n'a pas pu partir")));
     }
 
     [Fact]
@@ -220,7 +220,7 @@ public class AccountUnlockEndpointTests
 
         var response = await browserClient.PostAsync(UnlockEndpoint, new StringContent("{}", Encoding.UTF8, "application/json"));
 
-        Assert.Equal("Le lien de déblocage est obligatoire.", await ReadFieldErrorAsync(response, "Token"));
+        Assert.Equal("Le lien de déblocage est obligatoire.", await ReadFieldErrorAsync(response, "token"));
     }
 
     [Fact]

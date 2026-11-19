@@ -32,7 +32,7 @@ public class PasswordRecoveryRequestService
 
     // Vérifie l'adresse et la limite, puis confie la suite à la file des e-mails.
     // La limite compte les demandes, qu'un compte existe ou non : elle ne révèle donc rien.
-    public async Task<PasswordRecoveryRequestResult> RequestAsync(string typedEmail, IPAddress? ipAddress)
+    public async Task<PasswordRecoveryRequestResult> RequestAsync(string typedEmail, IPAddress? ipAddress, CancellationToken cancellationToken = default)
     {
         var email = EmailAddressRules.Normalize(typedEmail);
 
@@ -49,13 +49,13 @@ public class PasswordRecoveryRequestService
         var now = clock.GetUtcNow().UtcDateTime;
 
         // Une demande seule ne touche aucune ligne existante : aucune autre requête ne peut empêcher son enregistrement.
-        await savingService.SaveWithRetriesAsync(() => PrepareRequestAsync(email, ipAddress, now), false);
+        await savingService.SaveWithRetriesAsync(() => PrepareRequestAsync(email, ipAddress, now, cancellationToken), false, cancellationToken);
 
         return new PasswordRecoveryRequestResult.RequestAccepted();
     }
 
     // Un passage : prépare l'entrée de la demande dans la file.
-    private Task<PreparedChanges<bool>> PrepareRequestAsync(string email, IPAddress? ipAddress, DateTime now)
+    private Task<PreparedChanges<bool>> PrepareRequestAsync(string email, IPAddress? ipAddress, DateTime now, CancellationToken cancellationToken = default)
     {
         emailRequests.PrepareRequest(EmailRequest.ForPasswordRecovery(email, ipAddress, now));
 

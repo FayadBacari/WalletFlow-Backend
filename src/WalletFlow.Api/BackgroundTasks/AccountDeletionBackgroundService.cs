@@ -7,40 +7,28 @@ namespace WalletFlow.Api.BackgroundTasks;
 // Chaque étape a son propre accès à la base : celle qui échoue va au journal technique, sans arrêter les autres, et sera
 // refaite au passage suivant. Le journal technique désigne le compte et la connexion par leur identifiant, jamais par une
 // adresse (SS §7).
-public class AccountDeletionBackgroundService : BackgroundService
+public class AccountDeletionBackgroundService : RecurringBackgroundService
 {
     public static readonly TimeSpan PassInterval = TimeSpan.FromHours(1);
 
-    private readonly IServiceScopeFactory scopeFactory;
-    private readonly TimeProvider clock;
     private readonly ILogger<AccountDeletionBackgroundService> logger;
 
-    // Reçoit de quoi créer un accès à la base pour chaque étape, l'horloge et le journal technique.
+    // Reçoit de quoi créer un accès à la base pour chaque étape, l'horloge, le bilan de santé des tâches et le journal technique.
     public AccountDeletionBackgroundService(
         IServiceScopeFactory scopeFactory,
         TimeProvider clock,
+        BackgroundTaskHealth health,
         ILogger<AccountDeletionBackgroundService> logger)
+        : base(scopeFactory, clock, PassInterval, health)
     {
-        this.scopeFactory = scopeFactory;
-        this.clock = clock;
         this.logger = logger;
     }
 
-    // Tourne tant que l'API tourne (nom imposé par le framework).
-    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
-    {
-        while (!stoppingToken.IsCancellationRequested)
-        {
-            await RunPassAsync();
-            await Task.Delay(PassInterval, clock, stoppingToken);
-        }
-    }
-
     // Fait un passage : les révocations en retard, puis les effacements dus.
-    public async Task RunPassAsync()
+    public override async Task RunPassAsync(CancellationToken cancellationToken = default)
     {
-        var revokedCount = await RetryRevocationsAsync();
-        var erasedCount = await EraseDueAccountsAsync();
+        var revokedCount = await RetryRevocationsAsync(cancellationToken);
+        var erasedCount = await EraseDueAccountsAsync(cancellationToken);
 
         logger.LogInformation(
             "{NombreDeRevocations} révocation(s) et {NombreDEffacements} effacement(s) de compte faits en arrière-plan.",
@@ -49,15 +37,15 @@ public class AccountDeletionBackgroundService : BackgroundService
     }
 
     // Réessaie de révoquer chaque connexion pas encore révoquée d'un compte en suppression.
-    private async Task<int> RetryRevocationsAsync()
+    private async Task<int> RetryRevocationsAsync(CancellationToken cancellationToken = default)
     {
         List<Guid> connectionIds;
 
         try
         {
-            connectionIds = await RunInScopeAsync<DeletedAccountBankRevocation, List<Guid>>(revocation => revocation.FindConnectionsToRevokeAsync());
+            connectionIds = await RunInScopeAsync<DeletedAccountBankRevocation, List<Guid>>(revocation => revocation.FindConnectionsToRevokeAsync(cancellationToken), cancellationToken);
         }
-        catch (Exception exception)
+        catch (Exception exception) when (!ShutdownCancellation.IsShutdown(exception, cancellationToken))
         {
             logger.LogError(exception, "La liste des connexions bancaires à révoquer ne peut pas être lue.");
             return 0;
@@ -69,12 +57,12 @@ public class AccountDeletionBackgroundService : BackgroundService
         {
             try
             {
-                if (await RunInScopeAsync<DeletedAccountBankRevocation, bool>(revocation => revocation.TryRevokeAsync(connectionId, null)))
+                if (await RunInScopeAsync<DeletedAccountBankRevocation, bool>(revocation => revocation.TryRevokeAsync(connectionId, null, cancellationToken), cancellationToken))
                 {
                     revokedCount = revokedCount + 1;
                 }
             }
-            catch (Exception exception)
+            catch (Exception exception) when (!ShutdownCancellation.IsShutdown(exception, cancellationToken))
             {
                 logger.LogError(exception, "La révocation de la connexion bancaire {IdentifiantConnexion} a échoué.", connectionId);
             }
@@ -86,15 +74,15 @@ public class AccountDeletionBackgroundService : BackgroundService
     // Efface chaque compte dont la suppression est demandée depuis 30 jours. Ses banques viennent d'avoir leur dernière tentative
     // de révocation, au début du passage : un prestataire qui ne répond toujours pas n'empêche pas l'effacement, l'autorisation
     // finira d'elle-même.
-    private async Task<int> EraseDueAccountsAsync()
+    private async Task<int> EraseDueAccountsAsync(CancellationToken cancellationToken = default)
     {
         List<Guid> userIds;
 
         try
         {
-            userIds = await RunInScopeAsync<AccountErasureService, List<Guid>>(erasure => erasure.FindAccountsToEraseAsync());
+            userIds = await RunInScopeAsync<AccountErasureService, List<Guid>>(erasure => erasure.FindAccountsToEraseAsync(cancellationToken), cancellationToken);
         }
-        catch (Exception exception)
+        catch (Exception exception) when (!ShutdownCancellation.IsShutdown(exception, cancellationToken))
         {
             logger.LogError(exception, "La liste des comptes à effacer ne peut pas être lue.");
             return 0;
@@ -106,27 +94,17 @@ public class AccountDeletionBackgroundService : BackgroundService
         {
             try
             {
-                if (await RunInScopeAsync<AccountErasureService, bool>(erasure => erasure.EraseAsync(userId)))
+                if (await RunInScopeAsync<AccountErasureService, bool>(erasure => erasure.EraseAsync(userId, cancellationToken), cancellationToken))
                 {
                     erasedCount = erasedCount + 1;
                 }
             }
-            catch (Exception exception)
+            catch (Exception exception) when (!ShutdownCancellation.IsShutdown(exception, cancellationToken))
             {
                 logger.LogError(exception, "L'effacement du compte {IdentifiantUtilisateur} a échoué.", userId);
             }
         }
 
         return erasedCount;
-    }
-
-    // Donne à chaque étape son propre accès à la base, oublié ensuite.
-    private async Task<TResult> RunInScopeAsync<TService, TResult>(Func<TService, Task<TResult>> step)
-        where TService : notnull
-    {
-        await using var scope = scopeFactory.CreateAsyncScope();
-        var service = scope.ServiceProvider.GetRequiredService<TService>();
-
-        return await step(service);
     }
 }

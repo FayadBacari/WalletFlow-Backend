@@ -39,16 +39,16 @@ public class ChartsController : ControllerBase
     // Ce sont des données financières : aucun navigateur ni intermédiaire ne doit les garder.
     [HttpGet("categories")]
     [EnableRateLimiting(RateLimitingConfiguration.CostlyReadPolicy)]
-    [ResponseCache(NoStore = true, Location = ResponseCacheLocation.None)]
-    public async Task<IActionResult> ReadCategoryExpenses([FromQuery] ChartPeriodRequest request)
+    [ProducesResponseType<CategoryExpenseChartResponse>(StatusCodes.Status200OK)]
+    public async Task<IActionResult> ReadCategoryExpenses([FromQuery] ChartPeriodRequest request, CancellationToken cancellationToken = default)
     {
         if (request.From is not DateOnly from || request.To is not DateOnly to)
         {
             return AnswerPeriodMissing(request);
         }
 
-        var result = await categoryExpenseService.ReadAsync(SessionClaims.ReadUserId(User), from, to, request.AccountId);
-        await RecordForeignAccessAsync(OwnedResource.BankAccount, request.AccountId);
+        var result = await categoryExpenseService.ReadAsync(SessionClaims.ReadUserId(User), from, to, request.AccountId, cancellationToken);
+        await RecordForeignAccessAsync(OwnedResource.BankAccount, request.AccountId, cancellationToken);
 
         if (result is ChartPeriodResult<List<CategoryExpense>>.Found found)
         {
@@ -65,16 +65,16 @@ public class ChartsController : ControllerBase
     // GET api/charts/months : les revenus, les dépenses et l'épargne de chaque mois que touche la période, dans l'ordre.
     [HttpGet("months")]
     [EnableRateLimiting(RateLimitingConfiguration.CostlyReadPolicy)]
-    [ResponseCache(NoStore = true, Location = ResponseCacheLocation.None)]
-    public async Task<IActionResult> ReadMonthlyTotals([FromQuery] ChartPeriodRequest request)
+    [ProducesResponseType<MonthlyTotalsChartResponse>(StatusCodes.Status200OK)]
+    public async Task<IActionResult> ReadMonthlyTotals([FromQuery] ChartPeriodRequest request, CancellationToken cancellationToken = default)
     {
         if (request.From is not DateOnly from || request.To is not DateOnly to)
         {
             return AnswerPeriodMissing(request);
         }
 
-        var result = await monthlyTotalsService.ReadAsync(SessionClaims.ReadUserId(User), from, to, request.AccountId);
-        await RecordForeignAccessAsync(OwnedResource.BankAccount, request.AccountId);
+        var result = await monthlyTotalsService.ReadAsync(SessionClaims.ReadUserId(User), from, to, request.AccountId, cancellationToken);
+        await RecordForeignAccessAsync(OwnedResource.BankAccount, request.AccountId, cancellationToken);
 
         if (result is ChartPeriodResult<List<MonthTotals>>.Found found)
         {
@@ -92,11 +92,11 @@ public class ChartsController : ControllerBase
     // catégorie par catégorie, avec le budget de chaque catégorie et la part déjà dépensée.
     [HttpGet("comparison")]
     [EnableRateLimiting(RateLimitingConfiguration.CostlyReadPolicy)]
-    [ResponseCache(NoStore = true, Location = ResponseCacheLocation.None)]
-    public async Task<IActionResult> ReadComparison([FromQuery] ChartAccountRequest request)
+    [ProducesResponseType<MonthComparisonResponse>(StatusCodes.Status200OK)]
+    public async Task<IActionResult> ReadComparison([FromQuery] ChartAccountRequest request, CancellationToken cancellationToken = default)
     {
-        var comparison = await comparisonService.ReadAsync(SessionClaims.ReadUserId(User), request.AccountId);
-        await RecordForeignAccessAsync(OwnedResource.BankAccount, request.AccountId);
+        var comparison = await comparisonService.ReadAsync(SessionClaims.ReadUserId(User), request.AccountId, cancellationToken);
+        await RecordForeignAccessAsync(OwnedResource.BankAccount, request.AccountId, cancellationToken);
         var categories = comparison.Categories
             .Select(category => new CategoryComparisonResponse(
                 category.CategoryId,
@@ -134,13 +134,14 @@ public class ChartsController : ControllerBase
     }
 
     // Note au journal si la ressource visée est à un autre utilisateur (SS §11). La réponse reste la même dans tous les cas.
-    private async Task RecordForeignAccessAsync(OwnedResource resource, Guid? resourceId)
+    private async Task RecordForeignAccessAsync(OwnedResource resource, Guid? resourceId, CancellationToken cancellationToken = default)
     {
         await foreignAccessJournal.RecordIfForeignAsync(
             SessionClaims.ReadUserId(User),
             HttpContext.Connection.RemoteIpAddress,
             resource,
-            resourceId);
+            resourceId,
+            cancellationToken);
     }
 
     // Refuse une période à l'envers, ou trop longue, sur le champ To.

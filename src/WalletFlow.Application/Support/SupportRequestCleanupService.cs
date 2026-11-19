@@ -17,10 +17,10 @@ public class SupportRequestCleanupService
 
     // Efface les demandes envoyées il y a plus d'un an, et renvoie leur nombre. Une demande envoyée il y a un an
     // exactement est encore gardée.
-    public async Task<int> DeleteOldRequestsAsync()
+    public async Task<int> DeleteOldRequestsAsync(CancellationToken cancellationToken = default)
     {
         var oldestKeptSendingTime = SupportRules.FindOldestKeptSendingTime(clock.GetUtcNow().UtcDateTime);
 
-        return await supportRepository.DeleteSentBeforeAsync(oldestKeptSendingTime);
+        return await supportRepository.DeleteSentBeforeAsync(oldestKeptSendingTime, cancellationToken);
     }
 }

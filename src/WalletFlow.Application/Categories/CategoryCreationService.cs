@@ -17,7 +17,7 @@ public class CategoryCreationService
     }
 
     // Crée une catégorie avec le nom tapé, s'il respecte les règles et si l'utilisateur ne l'utilise pas déjà.
-    public async Task<CategoryCreationResult> CreateAsync(Guid userId, string? typedName)
+    public async Task<CategoryCreationResult> CreateAsync(Guid userId, string? typedName, CancellationToken cancellationToken = default)
     {
         var name = CategoryRules.NormalizeName(typedName);
 
@@ -27,28 +27,29 @@ public class CategoryCreationService
         }
 
         return await savingService.SaveWithRetriesAsync(
-            () => PrepareNewCategoryAsync(userId, name),
-            new CategoryCreationResult.NotSaved());
+            () => PrepareNewCategoryAsync(userId, name, cancellationToken),
+            new CategoryCreationResult.NotSaved(),
+            cancellationToken);
     }
 
     // Un passage : compte les catégories, vérifie le nom, puis prépare la nouvelle catégorie.
     // « Autres » est réécrite en même temps : de deux créations simultanées, la seconde échoue et recompte.
     // Deux créations ne peuvent donc pas passer ensemble le contrôle du nombre maximum.
-    private async Task<PreparedChanges<CategoryCreationResult>> PrepareNewCategoryAsync(Guid userId, string name)
+    private async Task<PreparedChanges<CategoryCreationResult>> PrepareNewCategoryAsync(Guid userId, string name, CancellationToken cancellationToken = default)
     {
-        var otherCategory = await categoryRepository.FindOtherCategoryAsync(userId);
+        var otherCategory = await categoryRepository.FindOtherCategoryAsync(userId, cancellationToken);
 
         if (otherCategory == null)
         {
             return PreparedChanges<CategoryCreationResult>.NothingToSave(new CategoryCreationResult.NotSaved());
         }
 
-        if (await categoryRepository.CountAsync(userId) >= CategoryRules.MaximumCountPerUser)
+        if (await categoryRepository.CountAsync(userId, cancellationToken) >= CategoryRules.MaximumCountPerUser)
         {
             return PreparedChanges<CategoryCreationResult>.NothingToSave(new CategoryCreationResult.TooManyCategories());
         }
 
-        if (await categoryRepository.IsNameUsedAsync(userId, name, null))
+        if (await categoryRepository.IsNameUsedAsync(userId, name, null, cancellationToken))
         {
             return PreparedChanges<CategoryCreationResult>.NothingToSave(new CategoryCreationResult.NameAlreadyUsed());
         }

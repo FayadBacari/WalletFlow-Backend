@@ -1,8 +1,11 @@
+using System.Globalization;
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using WalletFlow.Api.Configuration;
+using WalletFlow.Application.Suggestions;
 using WalletFlow.Domain.AccountsAndCategories;
 using WalletFlow.Domain.BagsAndSuggestions;
 using WalletFlow.Domain.UsersAndSecurity;
@@ -43,6 +46,15 @@ public class SuggestionJourneyTests
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
 
         return JsonDocument.Parse(await response.Content.ReadAsStringAsync()).RootElement;
+    }
+
+    // Calcule le mois de ce compte comme la tâche horaire. La tâche entière n'est pas lancée : elle toucherait les comptes des
+    // autres tests de la base.
+    private static async Task CalculateMonthAsync(ApiFactoryWithRealDatabase api, Guid userId)
+    {
+        await using var scope = api.Services.CreateAsyncScope();
+        var calculation = scope.ServiceProvider.GetRequiredService<SuggestionCalculationService>();
+        await calculation.CalculateAsync(userId, calculation.FindEvaluatedMonth());
     }
 
     // Donne l'identifiant de la suggestion de cette règle dans une liste lue.
@@ -107,10 +119,15 @@ public class SuggestionJourneyTests
             var bagOfA = JsonDocument.Parse(await (await SendAsync(browserA, HttpMethod.Post, "/api/bags", new { name = "Épargne" }, csrfTokenA))
                 .Content.ReadAsStringAsync()).RootElement.GetProperty("id").GetGuid();
 
+            var beforeCalculation = await ListAsync(browserA);
+            await CalculateMonthAsync(api, accountA.Id);
+            await CalculateMonthAsync(api, accountB.Id);
             var listOfA = await ListAsync(browserA);
             var listOfB = await ListAsync(browserB);
 
-            Assert.Equal(month.ToString("yyyy-MM-dd"), listOfA.GetProperty("month").GetString());
+            Assert.Equal(0, beforeCalculation.GetProperty("suggestions").GetArrayLength());
+
+            Assert.Equal(month.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), listOfA.GetProperty("month").GetString());
             Assert.Equal(2, listOfA.GetProperty("suggestions").GetArrayLength());
             Assert.Equal(0, listOfB.GetProperty("suggestions").GetArrayLength());
             var unallocated = IdOf(listOfA, "unallocatedMoney");

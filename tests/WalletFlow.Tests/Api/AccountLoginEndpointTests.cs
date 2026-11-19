@@ -1,11 +1,17 @@
+using System.Globalization;
 using System.Net;
 using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
+using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.AspNetCore.TestHost;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Net.Http.Headers;
 using WalletFlow.Api.Configuration;
 using WalletFlow.Api.Contracts;
 using WalletFlow.Api.Controllers;
+using WalletFlow.Api.Filters;
+using WalletFlow.Application.Security;
 using WalletFlow.Application.UserSessions;
 using WalletFlow.Domain.UsersAndSecurity;
 using static WalletFlow.Tests.Api.LoginRequestTestValues;
@@ -310,10 +316,10 @@ public class AccountLoginEndpointTests
 
     // Les champs manquants donnent des messages en français, sans nom interne du code.
     [Theory]
-    [InlineData("""{"password":"Mot-De-Passe-Valide-1"}""", "Email", "L'adresse e-mail est obligatoire.")]
-    [InlineData("""{"email":"utilisateur@exemple.test"}""", "Password", "Le mot de passe est obligatoire.")]
-    [InlineData("""{"email":null,"password":"Mot-De-Passe-Valide-1"}""", "Email", "L'adresse e-mail est obligatoire.")]
-    [InlineData("""{"email":"utilisateur@exemple.test","password":""}""", "Password", "Le mot de passe est obligatoire.")]
+    [InlineData("""{"password":"Mot-De-Passe-Valide-1"}""", "email", "L'adresse e-mail est obligatoire.")]
+    [InlineData("""{"email":"utilisateur@exemple.test"}""", "password", "Le mot de passe est obligatoire.")]
+    [InlineData("""{"email":null,"password":"Mot-De-Passe-Valide-1"}""", "email", "L'adresse e-mail est obligatoire.")]
+    [InlineData("""{"email":"utilisateur@exemple.test","password":""}""", "password", "Le mot de passe est obligatoire.")]
     public async Task MissingFieldIsRefusedWithItsFrenchMessage(string rawJson, string fieldName, string message)
     {
         using var api = new ApiFactoryWithFakes();
@@ -441,5 +447,46 @@ public class AccountLoginEndpointTests
         Assert.DoesNotContain(FindCookie(response, "__Host-walletflow-session")!.Value.ToString(), logText);
         Assert.DoesNotContain(FindCookie(response, "__Host-walletflow-device")!.Value.ToString(), logText);
         Assert.DoesNotContain(csrfToken, logText);
+    }
+
+    // --- Serveur saturé
+
+    // Un outil de hachage qui refuse tout calcul, comme Argon2 quand sa file d'attente est pleine.
+    private sealed class SaturatedPasswordHasher : IPasswordHasher
+    {
+        public Task<string> HashAsync(string password, CancellationToken cancellationToken = default)
+        {
+            throw new ServerBusyException();
+        }
+
+        public Task<bool> VerifyAsync(string password, string storedHash, CancellationToken cancellationToken = default)
+        {
+            throw new ServerBusyException();
+        }
+    }
+
+    // SS §6 : sous une rafale de connexions, Argon2 refuse les calculs de trop. La connexion répond alors « serveur occupé » (503)
+    // avec le délai après lequel réessayer, sans rien changer. La réponse est la même pour une adresse connue et pour une
+    // adresse inconnue : elle ne révèle aucun compte.
+    [Fact]
+    public async Task SaturatedServerAnswersBusyTheSameWayForEveryAddress()
+    {
+        using var api = new ApiFactoryWithFakes();
+        var account = await AddAccountAsync(api);
+        using var saturatedApi = api.WithWebHostBuilder(builder => builder.ConfigureTestServices(services =>
+            services.AddSingleton<IPasswordHasher>(new SaturatedPasswordHasher())));
+        var client = saturatedApi.CreateClient(new WebApplicationFactoryClientOptions { BaseAddress = new Uri("https://localhost") });
+
+        var knownAddress = await SendLoginRequestAsync(client, Email, ValidPassword);
+        var unknownAddress = await SendLoginRequestAsync(client, "inconnu@exemple.test", ValidPassword);
+
+        foreach (var response in new[] { knownAddress, unknownAddress })
+        {
+            await AssertProblemTitleAsync(response, HttpStatusCode.ServiceUnavailable, ErrorMessages.ServerBusy);
+            Assert.Equal(((int)ServerBusyExceptionFilter.RetryDelay.TotalSeconds).ToString(CultureInfo.InvariantCulture), Assert.Single(response.Headers.GetValues("Retry-After")));
+        }
+
+        Assert.Equal(0, account.FailedLoginAttemptCount);
+        Assert.Empty(api.SessionRepository.SavedSessions);
     }
 }

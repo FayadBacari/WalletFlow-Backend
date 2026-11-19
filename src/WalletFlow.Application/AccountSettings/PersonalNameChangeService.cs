@@ -21,7 +21,7 @@ public class PersonalNameChangeService
     }
 
     // Enregistre le nom et le prénom tapés. Un champ vide, ou fait seulement d'espaces, efface ce qu'il y avait.
-    public async Task<PersonalNameChangeResult> ChangeAsync(Guid userId, string? typedLastName, string? typedFirstName)
+    public async Task<PersonalNameChangeResult> ChangeAsync(Guid userId, string? typedLastName, string? typedFirstName, CancellationToken cancellationToken = default)
     {
         var lastName = PersonalNameRules.Normalize(typedLastName);
         var firstName = PersonalNameRules.Normalize(typedFirstName);
@@ -38,14 +38,15 @@ public class PersonalNameChangeService
         }
 
         return await savingService.SaveWithRetriesAsync(
-            () => PrepareNewNameAsync(userId, lastName, firstName),
-            new PersonalNameChangeResult.NotSaved());
+            () => PrepareNewNameAsync(userId, lastName, firstName, cancellationToken),
+            new PersonalNameChangeResult.NotSaved(),
+            cancellationToken);
     }
 
     // Un passage : lit le compte, puis prépare le nouveau nom et le nouveau prénom.
-    private async Task<PreparedChanges<PersonalNameChangeResult>> PrepareNewNameAsync(Guid userId, string? lastName, string? firstName)
+    private async Task<PreparedChanges<PersonalNameChangeResult>> PrepareNewNameAsync(Guid userId, string? lastName, string? firstName, CancellationToken cancellationToken = default)
     {
-        var account = await accountRepository.FindByIdAsync(userId);
+        var account = await accountRepository.FindByIdAsync(userId, cancellationToken);
 
         if (account == null)
         {

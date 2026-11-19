@@ -114,6 +114,7 @@ public class AccountDeletionJourneyTests
             await new AccountDeletionBackgroundService(
                 api.Services.GetRequiredService<IServiceScopeFactory>(),
                 api.Services.GetRequiredService<TimeProvider>(),
+                new BackgroundTaskHealth(),
                 NullLogger<AccountDeletionBackgroundService>.Instance).RunPassAsync();
 
             Assert.False(await databaseContext.Users.AnyAsync(row => row.Id == userId));

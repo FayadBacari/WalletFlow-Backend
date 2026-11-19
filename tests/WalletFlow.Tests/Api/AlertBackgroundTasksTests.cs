@@ -19,7 +19,7 @@ namespace WalletFlow.Tests.Api;
 
 // Vérifie les deux tâches de fond des notifications : le calcul des suggestions du mois (GR Sacs), puis l'alerte des
 // autorisations bancaires à renouveler et l'effacement des vieilles alertes (GR Comptes, SS §7). Une panne ne les arrête pas.
-public class AlertBackgroundTasksTests
+public sealed class AlertBackgroundTasksTests : IDisposable
 {
     private readonly SuggestionServices services = new SuggestionServices();
     private readonly MemoryLoggerProvider loggerProvider = new MemoryLoggerProvider();
@@ -55,6 +55,7 @@ public class AlertBackgroundTasksTests
         return new SuggestionsBackgroundService(
             serviceProvider.GetRequiredService<IServiceScopeFactory>(),
             services.Bank.Clock,
+            new BackgroundTaskHealth(),
             new Logger<SuggestionsBackgroundService>(new LoggerFactory(new ILoggerProvider[] { loggerProvider })));
     }
 
@@ -65,13 +66,14 @@ public class AlertBackgroundTasksTests
         return new AlertsBackgroundService(
             serviceProvider.GetRequiredService<IServiceScopeFactory>(),
             services.Bank.Clock,
+            new BackgroundTaskHealth(),
             new Logger<AlertsBackgroundService>(new LoggerFactory(new ILoggerProvider[] { loggerProvider })));
     }
 
     // Les messages du journal technique de ce niveau.
     private List<string> ReadMessages(LogLevel level)
     {
-        return loggerProvider.Messages.Where(message => message.StartsWith(level + " : ")).ToList();
+        return loggerProvider.Messages.Where(message => message.StartsWith(level + " : ", StringComparison.Ordinal)).ToList();
     }
 
     // Garde un compte confirmé, avec 50 € hors de tout sac et une opération d'octobre : son mois propose une suggestion.
@@ -232,5 +234,11 @@ public class AlertBackgroundTasksTests
         Assert.Contains(ReadMessages(LogLevel.Error), message => message.Contains("L'effacement des vieilles alertes a échoué."));
         services.Alerts.IsDown = false;
         Assert.Single(services.Alerts.SavedAlerts);
+    }
+
+    // Libère le journal technique à la fin du test.
+    public void Dispose()
+    {
+        loggerProvider.Dispose();
     }
 }

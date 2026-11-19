@@ -38,8 +38,8 @@ public class TransactionsController : ControllerBase
     // Ce sont des données financières : aucun navigateur ni intermédiaire ne doit les garder.
     [HttpGet]
     [EnableRateLimiting(RateLimitingConfiguration.CostlyReadPolicy)]
-    [ResponseCache(NoStore = true, Location = ResponseCacheLocation.None)]
-    public async Task<IActionResult> Search([FromQuery] TransactionSearchRequest request)
+    [ProducesResponseType<TransactionPageResponse>(StatusCodes.Status200OK)]
+    public async Task<IActionResult> Search([FromQuery] TransactionSearchRequest request, CancellationToken cancellationToken = default)
     {
         var page = request.Page ?? 1;
         var result = await searchService.SearchAsync(
@@ -50,13 +50,14 @@ public class TransactionsController : ControllerBase
             request.To,
             request.AccountId,
             request.CategoryId,
-            page);
+            page,
+            cancellationToken);
 
         if (result is TransactionSearchResult.Found found)
         {
             // Le compte ou la catégorie d'un autre ne filtre rien de visible, mais la tentative est notée.
-            await RecordForeignAccessAsync(OwnedResource.BankAccount, request.AccountId);
-            await RecordForeignAccessAsync(OwnedResource.Category, request.CategoryId);
+            await RecordForeignAccessAsync(OwnedResource.BankAccount, request.AccountId, cancellationToken);
+            await RecordForeignAccessAsync(OwnedResource.Category, request.CategoryId, cancellationToken);
             var items = found.Page.Items.Select(CreateResponse).ToList();
             return Ok(new TransactionPageResponse(items, page, TransactionSearchService.PageSize, found.Page.TotalCount));
         }
@@ -83,13 +84,17 @@ public class TransactionsController : ControllerBase
     // les prochaines opérations qui ont le même libellé aussi. Les opérations déjà reçues ne changent pas.
     [HttpPut("{transactionId:guid}/category")]
     [RequestSizeLimit(RequestSizeConfiguration.MaximumTransactionRequestBytes)]
-    public async Task<IActionResult> ChangeCategory(Guid transactionId, TransactionCategoryRequest request)
+    [ProducesResponseType<TransactionResponse>(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    public async Task<IActionResult> ChangeCategory(Guid transactionId, TransactionCategoryRequest request, CancellationToken cancellationToken = default)
     {
         var result = await categoryChangeService.ChangeAsync(
             SessionClaims.ReadUserId(User),
             transactionId,
             request.CategoryId,
-            request.ApplyToFutureTransactions);
+            request.ApplyToFutureTransactions,
+            cancellationToken);
 
         if (result is TransactionCategoryChangeResult.Changed changed)
         {
@@ -98,13 +103,13 @@ public class TransactionsController : ControllerBase
 
         if (result is TransactionCategoryChangeResult.TransactionNotFound)
         {
-            await RecordForeignAccessAsync(OwnedResource.Transaction, transactionId);
+            await RecordForeignAccessAsync(OwnedResource.Transaction, transactionId, cancellationToken);
             return Problem(statusCode: StatusCodes.Status404NotFound);
         }
 
         if (result is TransactionCategoryChangeResult.CategoryNotFound)
         {
-            await RecordForeignAccessAsync(OwnedResource.Category, request.CategoryId);
+            await RecordForeignAccessAsync(OwnedResource.Category, request.CategoryId, cancellationToken);
             return Problem(statusCode: StatusCodes.Status404NotFound);
         }
 
@@ -120,9 +125,12 @@ public class TransactionsController : ControllerBase
     // ou retire cette marque. Un transfert n'est compté ni en dépense ni en revenu.
     [HttpPut("{transactionId:guid}/transfer")]
     [RequestSizeLimit(RequestSizeConfiguration.MaximumTransactionRequestBytes)]
-    public async Task<IActionResult> MarkTransfer(Guid transactionId, TransactionTransferRequest request)
+    [ProducesResponseType<TransactionResponse>(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    public async Task<IActionResult> MarkTransfer(Guid transactionId, TransactionTransferRequest request, CancellationToken cancellationToken = default)
     {
-        var result = await transferService.MarkAsync(SessionClaims.ReadUserId(User), transactionId, request.IsInternalTransfer);
+        var result = await transferService.MarkAsync(SessionClaims.ReadUserId(User), transactionId, request.IsInternalTransfer, cancellationToken);
 
         if (result is TransactionTransferResult.Marked marked)
         {
@@ -131,7 +139,7 @@ public class TransactionsController : ControllerBase
 
         if (result is TransactionTransferResult.NotFound)
         {
-            await RecordForeignAccessAsync(OwnedResource.Transaction, transactionId);
+            await RecordForeignAccessAsync(OwnedResource.Transaction, transactionId, cancellationToken);
             return Problem(statusCode: StatusCodes.Status404NotFound);
         }
 
@@ -139,13 +147,14 @@ public class TransactionsController : ControllerBase
     }
 
     // Note au journal si la ressource visée est à un autre utilisateur (SS §11). La réponse reste la même dans tous les cas.
-    private async Task RecordForeignAccessAsync(OwnedResource resource, Guid? resourceId)
+    private async Task RecordForeignAccessAsync(OwnedResource resource, Guid? resourceId, CancellationToken cancellationToken = default)
     {
         await foreignAccessJournal.RecordIfForeignAsync(
             SessionClaims.ReadUserId(User),
             HttpContext.Connection.RemoteIpAddress,
             resource,
-            resourceId);
+            resourceId,
+            cancellationToken);
     }
 
     // Donne le message d'un champ refusé.

@@ -29,11 +29,14 @@ public class AccountConfirmationController : ControllerBase
     [HttpPost("confirm-email")]
     [EnableRateLimiting(RateLimitingConfiguration.ConfirmationPolicy)]
     [RequestSizeLimit(RequestSizeConfiguration.MaximumAccountRequestBytes)]
-    public async Task<IActionResult> ConfirmAccount(ConfirmAccountRequest request)
+    [ProducesResponseType<MessageResponse>(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status503ServiceUnavailable, Description = OpenApiConfiguration.ServerBusyDescription)]
+    public async Task<IActionResult> ConfirmAccount(ConfirmAccountRequest request, CancellationToken cancellationToken = default)
     {
         var result = await confirmationService.ConfirmAsync(
             request.Token,
-            request.Password);
+            request.Password,
+            cancellationToken);
 
         if (result is AccountConfirmationResult.AccountConfirmed)
         {

@@ -87,8 +87,6 @@ public static class TwoFactorAuthenticationRules
     // Écrit un code de secours comme il est remis à l'utilisateur : ABCDE-12345, plus facile à recopier.
     public static string FormatBackupCode(string cleanedCode)
     {
-        return cleanedCode.Substring(0, BackupCodeDashPosition)
-            + "-"
-            + cleanedCode.Substring(BackupCodeDashPosition);
+        return string.Concat(cleanedCode.AsSpan(0, BackupCodeDashPosition), "-", cleanedCode.AsSpan(BackupCodeDashPosition));
     }
 }

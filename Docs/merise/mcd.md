@@ -18,6 +18,7 @@
 | date_fin_blocage         |
 | date_demande_suppression |
 | dernier_mois_suggestions |
+| dernier_pas_totp         |
 
 | CODE_SECOURS                  |
 |-------------------------------|
@@ -35,16 +36,18 @@
 | nouvel_email           |
 | nb_essais_jeton        |
 
-| APPAREIL        |
-|-----------------|
-| **id_appareil** |
-| jeton_appareil  |
-| jeton_push      |
+| APPAREIL                         |
+|----------------------------------|
+| **id_appareil**                  |
+| jeton_appareil                   |
+| jeton_push                       |
+| date_derniere_connexion_appareil |
 
 | SESSION                |
 |------------------------|
 | **id_session**         |
 | date_derniere_activite |
+| date_creation_session  |
 
 | EVENEMENT_SECURITE   |
 |----------------------|

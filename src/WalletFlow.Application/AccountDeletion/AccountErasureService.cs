@@ -30,27 +30,27 @@ public class AccountErasureService
     }
 
     // Donne les comptes dont la suppression est demandée depuis 30 jours ou plus.
-    public async Task<List<Guid>> FindAccountsToEraseAsync()
+    public async Task<List<Guid>> FindAccountsToEraseAsync(CancellationToken cancellationToken = default)
     {
         var now = clock.GetUtcNow().UtcDateTime;
 
-        return await accountRepository.FindAccountsToEraseAsync(now - AccountDeletionRules.ErasureDelay);
+        return await accountRepository.FindAccountsToEraseAsync(now - AccountDeletionRules.ErasureDelay, cancellationToken);
     }
 
     // Efface ce compte, avec l'e-mail qui le confirme, si sa suppression est toujours demandée depuis 30 jours. Renvoie faux si
     // le compte n'est plus à effacer : une connexion a annulé la demande, ou il est déjà effacé.
-    public async Task<bool> EraseAsync(Guid userId)
+    public async Task<bool> EraseAsync(Guid userId, CancellationToken cancellationToken = default)
     {
-        return await savingService.SaveWithRetriesAsync(() => PrepareErasureAsync(userId), false);
+        return await savingService.SaveWithRetriesAsync(() => PrepareErasureAsync(userId, cancellationToken), false, cancellationToken);
     }
 
     // Un passage : relit le compte, vérifie que son effacement est dû, puis le prépare avec l'e-mail. Le compte est effacé en
     // vérifiant sa version : une connexion qui annule la demande au même instant fait recommencer le passage, qui ne trouve
     // alors plus rien à effacer.
-    private async Task<PreparedChanges<bool>> PrepareErasureAsync(Guid userId)
+    private async Task<PreparedChanges<bool>> PrepareErasureAsync(Guid userId, CancellationToken cancellationToken = default)
     {
         var now = clock.GetUtcNow().UtcDateTime;
-        var account = await accountRepository.FindByIdAsync(userId);
+        var account = await accountRepository.FindByIdAsync(userId, cancellationToken);
 
         if (account == null || !account.IsDueForErasureAt(now))
         {

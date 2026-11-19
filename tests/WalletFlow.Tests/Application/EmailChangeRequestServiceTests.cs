@@ -182,4 +182,30 @@ public class EmailChangeRequestServiceTests
         Assert.DoesNotContain(tools.TwoFactorRepository.SavedBackupCodes, savedCode => savedCode.UsedAt != null);
         Assert.Empty(tools.EmailRequests.SavedRequests);
     }
+
+    // SS §2 : le code de l'application qui autorise la demande est noté avec elle : il ne resservira plus.
+    [Fact]
+    public async Task AuthenticatorCodeIsNotedWithTheRequest()
+    {
+        var activatedAccount = tools.AddActivatedAccount();
+
+        var result = await RequestAsync(activatedAccount.UserAccount.Id, TwoFactorServicesWithFakeTools.AccountPassword, code: tools.CalculateCurrentCode(activatedAccount.Secret));
+
+        Assert.IsType<EmailChangeRequestResult.RequestAccepted>(result);
+        Assert.Equal(tools.CurrentStep(), activatedAccount.UserAccount.LastAuthenticatorStep);
+    }
+
+    // Une autre requête se sert du même code juste avant l'enregistrement : la demande n'entre pas dans la file (SS §2).
+    [Fact]
+    public async Task CodeUsedByAnotherRequestMeanwhileRefusesTheRequest()
+    {
+        var activatedAccount = tools.AddActivatedAccount();
+        tools.AccountRepository.AuthenticatorStepUsedBeforeSave = tools.CurrentStep();
+
+        var result = await RequestAsync(activatedAccount.UserAccount.Id, TwoFactorServicesWithFakeTools.AccountPassword, code: tools.CalculateCurrentCode(activatedAccount.Secret));
+
+        Assert.IsType<EmailChangeRequestResult.WrongPasswordOrCode>(result);
+        Assert.Empty(tools.EmailRequests.SavedRequests);
+        Assert.Null(tools.AccountRepository.AuthenticatorStepUsedBeforeSave);
+    }
 }

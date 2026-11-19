@@ -1,8 +1,12 @@
 using System.Net;
+using System.Net.Http.Json;
+using System.Text.Json;
+using System.Text.RegularExpressions;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Infrastructure;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Net.Http.Headers;
 using WalletFlow.Api.Authentication;
@@ -235,7 +239,7 @@ public class UserSessionEndpointTests
 
         var response = await SendLogoutRequestAsync(browserClient, null);
 
-        await AssertProblemTitleAsync(response, HttpStatusCode.BadRequest, ApiErrorConfiguration.RefusedRequestTitle);
+        await CsrfRefusalAssertions.AssertCsrfRefusalAsync(response);
         Assert.Single(api.SessionRepository.SavedSessions);
     }
 
@@ -250,8 +254,41 @@ public class UserSessionEndpointTests
 
         var response = await SendLogoutRequestAsync(browserClient, "jeton-invente");
 
-        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        await CsrfRefusalAssertions.AssertCsrfRefusalAsync(response);
         Assert.Single(api.SessionRepository.SavedSessions);
+    }
+
+    // Le refus a le même texte en mode production : le site peut s'y fier partout.
+    [Fact]
+    public async Task CsrfRefusalIsTheSameInProductionMode()
+    {
+        using var productionApi = new ApiFactoryInProduction();
+        await AddAccountAsync(productionApi);
+        var browserClient = CreateBrowserClient(productionApi);
+        await SendLoginRequestAsync(browserClient);
+
+        var response = await SendLogoutRequestAsync(browserClient, null);
+
+        await CsrfRefusalAssertions.AssertCsrfRefusalAsync(response);
+        Assert.Single(productionApi.SessionRepository.SavedSessions);
+    }
+
+    // La clé de l'erreur est le nom du champ qui porte le jeton dans la réponse de GET api/account/csrf-token : le site sait
+    // quel jeton redemander.
+    [Fact]
+    public async Task RefusalKeyIsTheFieldThatCarriesTheToken()
+    {
+        using var api = new ApiFactoryWithFakes();
+        await AddAccountAsync(api);
+        var browserClient = CreateBrowserClient(api);
+        await SendLoginRequestAsync(browserClient);
+
+        var tokenAnswer = await browserClient.GetAsync(CsrfTokenEndpoint);
+        var refusal = await SendLogoutRequestAsync(browserClient, null);
+
+        var tokenField = Assert.Single(JsonDocument.Parse(await tokenAnswer.Content.ReadAsStringAsync()).RootElement.EnumerateObject());
+        var errorField = Assert.Single(JsonDocument.Parse(await refusal.Content.ReadAsStringAsync()).RootElement.GetProperty("errors").EnumerateObject());
+        Assert.Equal(tokenField.Name, errorField.Name);
     }
 
     // Le jeton est lié à l'utilisateur : celui d'un compte ne sert pas à un autre compte.
@@ -268,7 +305,7 @@ public class UserSessionEndpointTests
         await SendLoginRequestAsync(browserClient, "autre-utilisateur@exemple.test");
         var response = await SendLogoutRequestAsync(browserClient, csrfToken);
 
-        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        await CsrfRefusalAssertions.AssertCsrfRefusalAsync(response);
     }
 
     // SS §6 : le jeton n'est lu que dans l'en-tête, jamais dans un formulaire qu'un site piégé pourrait construire.
@@ -284,7 +321,7 @@ public class UserSessionEndpointTests
 
         var response = await browserClient.PostAsync(LogoutEndpoint, form);
 
-        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        await CsrfRefusalAssertions.AssertCsrfRefusalAsync(response);
         Assert.Single(api.SessionRepository.SavedSessions);
     }
 
@@ -433,7 +470,6 @@ public class UserSessionEndpointTests
         Assert.IsType<AesGcmTotpSecretProtector>(scope.ServiceProvider.GetRequiredService<ITotpSecretProtector>());
         Assert.IsType<InMemoryWaitingLoginStore>(scope.ServiceProvider.GetRequiredService<IWaitingLoginStore>());
         Assert.IsType<InMemoryWaitingSecretStore>(scope.ServiceProvider.GetRequiredService<IWaitingSecretStore>());
-        Assert.IsType<InMemoryUsedAuthenticatorCodesRegister>(scope.ServiceProvider.GetRequiredService<IUsedAuthenticatorCodesRegister>());
         Assert.NotNull(scope.ServiceProvider.GetRequiredService<TwoFactorLoginService>());
         Assert.NotNull(scope.ServiceProvider.GetRequiredService<TwoFactorActivationService>());
         Assert.NotNull(scope.ServiceProvider.GetRequiredService<TwoFactorDeactivationService>());
@@ -494,5 +530,50 @@ public class UserSessionEndpointTests
         var publicRoutes = new List<string> { "api/account/confirm-email", "api/account/confirm-email-change", "api/account/disable-two-factor", "api/account/forgot-password", "api/account/login", "api/account/login/two-factor", "api/account/register", "api/account/reset-password", "api/account/unlock", "api/support-requests/visitor" };
 
         Assert.Equal(publicRoutes, ListRoutesWithAttribute<IgnoreAntiforgeryTokenAttribute>(api));
+    }
+
+    // Chaque écriture qui demande le jeton donne le même refus clair sans lui. Celles de l'administrateur aussi : un simple
+    // utilisateur les reçoit, car le jeton est vérifié avant le rôle (SS §6).
+    [Fact]
+    public async Task EveryWriteRouteGivesTheClearRefusalWithoutCsrfToken()
+    {
+        using var api = new ApiFactoryWithFakes();
+        await AddAccountAsync(api);
+        var browserClient = CreateBrowserClient(api);
+        await SendLoginRequestAsync(browserClient);
+        var routeProvider = api.Services.GetRequiredService<IActionDescriptorCollectionProvider>();
+        var writeMethods = new List<string> { HttpMethod.Post.Method, HttpMethod.Put.Method, HttpMethod.Delete.Method, HttpMethod.Patch.Method };
+        var routesRefusedOtherwise = new List<string>();
+        var testedRouteCount = 0;
+
+        foreach (var route in routeProvider.ActionDescriptors.Items)
+        {
+            var writeMethod = route.EndpointMetadata.OfType<IHttpMethodMetadata>()
+                .SelectMany(metadata => metadata.HttpMethods)
+                .Intersect(writeMethods)
+                .SingleOrDefault();
+
+            if (writeMethod == null || route.EndpointMetadata.OfType<IgnoreAntiforgeryTokenAttribute>().Any())
+            {
+                continue;
+            }
+
+            var template = route.AttributeRouteInfo!.Template!;
+            var address = "/" + Regex.Replace(Regex.Replace(template, "\\{[^}]*:guid\\}", Guid.NewGuid().ToString()), "\\{[^}]*\\}", "valeur");
+            var request = new HttpRequestMessage(new HttpMethod(writeMethod), address) { Content = JsonContent.Create(new { }) };
+            testedRouteCount = testedRouteCount + 1;
+
+            try
+            {
+                await CsrfRefusalAssertions.AssertCsrfRefusalAsync(await browserClient.SendAsync(request));
+            }
+            catch (Xunit.Sdk.XunitException failure)
+            {
+                routesRefusedOtherwise.Add(writeMethod + " " + template + " : " + failure.Message);
+            }
+        }
+
+        Assert.Empty(routesRefusedOtherwise);
+        Assert.True(testedRouteCount >= 35, "L'inventaire n'a trouvé que " + testedRouteCount + " routes : il ne regarde plus les bonnes.");
     }
 }

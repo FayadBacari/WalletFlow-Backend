@@ -24,6 +24,7 @@ CREATE TABLE utilisateur (
     date_fin_blocage         TIMESTAMPTZ,
     date_demande_suppression TIMESTAMPTZ,
     dernier_mois_suggestions DATE,
+    dernier_pas_totp         BIGINT,
     CONSTRAINT ck_utilisateur_email CHECK (email_utilisateur = lower(email_utilisateur)),
     CONSTRAINT ck_utilisateur_nom CHECK (char_length(nom_utilisateur) >= 1),
     CONSTRAINT ck_utilisateur_prenom CHECK (char_length(prenom_utilisateur) >= 1),
@@ -33,7 +34,8 @@ CREATE TABLE utilisateur (
         canal_notification IN ('email', 'telephone', 'les_deux')),
     CONSTRAINT ck_utilisateur_mois_suggestions CHECK (EXTRACT(DAY FROM dernier_mois_suggestions) = 1),
     CONSTRAINT ck_utilisateur_tentatives CHECK (nb_tentatives_echouees BETWEEN 0 AND 5),
-    CONSTRAINT ck_utilisateur_blocages CHECK (nb_blocages BETWEEN 0 AND 8)
+    CONSTRAINT ck_utilisateur_blocages CHECK (nb_blocages BETWEEN 0 AND 8),
+    CONSTRAINT ck_utilisateur_pas_totp CHECK (dernier_pas_totp IS NULL OR (double_auth_activee AND dernier_pas_totp > 0))
 );
 
 CREATE TABLE code_secours (
@@ -64,19 +66,24 @@ CREATE TABLE jeton (
     CONSTRAINT ck_jeton_essais_type CHECK (nb_essais_jeton = 0 OR type_jeton = 'desactivation_double_auth')
 );
 
+-- Un appareil inutilisé depuis un an est oublié, sauf le plus récent du compte ; un compte en garde 20 au plus (SS §3).
 CREATE TABLE appareil (
-    id_appareil    UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
-    jeton_appareil CHAR(64)     NOT NULL UNIQUE,
-    jeton_push     VARCHAR(255),
-    id_utilisateur UUID         NOT NULL
-        REFERENCES utilisateur (id_utilisateur) ON DELETE CASCADE
+    id_appareil                      UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
+    jeton_appareil                   CHAR(64)     NOT NULL UNIQUE,
+    jeton_push                       VARCHAR(255),
+    id_utilisateur                   UUID         NOT NULL
+        REFERENCES utilisateur (id_utilisateur) ON DELETE CASCADE,
+    date_derniere_connexion_appareil TIMESTAMPTZ  NOT NULL DEFAULT now()
 );
 
+-- Une session expire après 30 minutes sans activité, et 12 heures après sa création ; un compte en garde 10 au plus (SS §3).
 CREATE TABLE session (
     id_session             CHAR(64)     PRIMARY KEY,
     date_derniere_activite TIMESTAMPTZ  NOT NULL DEFAULT now(),
     id_utilisateur         UUID         NOT NULL
-        REFERENCES utilisateur (id_utilisateur) ON DELETE CASCADE
+        REFERENCES utilisateur (id_utilisateur) ON DELETE CASCADE,
+    date_creation_session  TIMESTAMPTZ  NOT NULL DEFAULT now(),
+    CONSTRAINT ck_session_dates CHECK (date_creation_session <= date_derniere_activite)
 );
 
 CREATE TABLE evenement_securite (
@@ -411,16 +418,18 @@ CREATE TRIGGER tg_sac_avant_suppression
 -- Les mouvements de ses sacs sont supprimés avant les sacs eux-mêmes, et ses
 -- événements du journal perdent l'adresse IP (l'identifiant part avec ON DELETE SET NULL).
 -- SECURITY DEFINER : la fonction a les droits du propriétaire du script, car l'application
--- ne peut pas modifier le journal elle-même (section 8).
+-- ne peut pas modifier le journal elle-même (section 8). Elle cherche les tables temporaires
+-- en dernier, et nomme le schéma de chaque table : une table temporaire de l'application ne
+-- peut donc ni prendre la place d'une vraie table, ni faire exécuter son code avec ces droits.
 CREATE FUNCTION fn_utilisateur_avant_suppression() RETURNS trigger LANGUAGE plpgsql
-    SECURITY DEFINER SET search_path = public AS $$
+    SECURITY DEFINER SET search_path = public, pg_temp AS $$
 BEGIN
-    DELETE FROM mouvement_sac m
-    USING sac s
+    DELETE FROM public.mouvement_sac m
+    USING public.sac s
     WHERE s.id_utilisateur = OLD.id_utilisateur
       AND s.id_sac IN (m.id_sac_depart, m.id_sac_arrivee);
 
-    UPDATE evenement_securite
+    UPDATE public.evenement_securite
     SET adresse_ip_evenement = NULL
     WHERE id_utilisateur = OLD.id_utilisateur;
 
@@ -451,13 +460,14 @@ CREATE TRIGGER tg_parametrer_controle
 
 -- SS §11 : le journal de sécurité est conservé un an. L'application ne peut pas effacer le journal elle-même
 -- (section 8) : cette fonction, qu'elle appelle chaque jour, efface seulement les événements de plus d'un an,
--- et renvoie leur nombre. SECURITY DEFINER : la fonction a les droits du propriétaire du script.
+-- et renvoie leur nombre. SECURITY DEFINER : la fonction a les droits du propriétaire du script. Comme la fonction
+-- précédente, elle cherche les tables temporaires en dernier et nomme le schéma de sa table.
 CREATE FUNCTION fn_effacer_vieux_evenements() RETURNS integer LANGUAGE plpgsql
-    SECURITY DEFINER SET search_path = public AS $$
+    SECURITY DEFINER SET search_path = public, pg_temp AS $$
 DECLARE
     nb_effaces integer;
 BEGIN
-    DELETE FROM evenement_securite
+    DELETE FROM public.evenement_securite
     WHERE date_evenement < now() - interval '1 year';
 
     GET DIAGNOSTICS nb_effaces = ROW_COUNT;
@@ -503,8 +513,11 @@ $$;
 -- administrateur de PostgreSQL (SS §8 et §14). Il ne peut pas lancer cette fonction.
 -- Il ne peut qu'ajouter des événements au journal de sécurité, jamais les modifier
 -- ni les effacer (SS §11). Seule la fonction fn_effacer_vieux_evenements efface ceux de plus d'un an.
+-- Il ne crée aucun objet dans le schéma public : une table ou une fonction à lui pourrait y cacher du code. PostgreSQL 15
+-- retire déjà ce droit à tous les rôles ; la révocation ci-dessous le retire aussi avec PostgreSQL 13 et 14.
 
 CREATE ROLE walletflow_app LOGIN;
+REVOKE CREATE ON SCHEMA public FROM PUBLIC;
 GRANT USAGE ON SCHEMA public TO walletflow_app;
 GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO walletflow_app;
 REVOKE INSERT, UPDATE, DELETE ON type_alerte FROM walletflow_app;
@@ -519,7 +532,7 @@ GRANT UPDATE (
     email_utilisateur, mot_de_passe_hash, nom_utilisateur, prenom_utilisateur,
     email_confirme, double_auth_activee, secret_totp_chiffre, canal_notification,
     nb_tentatives_echouees, nb_blocages, date_fin_blocage, date_demande_suppression,
-    dernier_mois_suggestions)
+    dernier_mois_suggestions, dernier_pas_totp)
     ON utilisateur TO walletflow_app;
 REVOKE EXECUTE ON FUNCTION fn_effacer_vieux_evenements() FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION fn_effacer_vieux_evenements() TO walletflow_app;

@@ -17,25 +17,26 @@ public class SuggestionRepository : ISuggestionRepository
     }
 
     // Donne toutes les suggestions de l'utilisateur. Elles passent par l'index ix_suggestion_utilisateur.
-    public async Task<List<SavingsSuggestion>> FindAllAsync(Guid userId)
+    public async Task<List<SavingsSuggestion>> FindAllAsync(Guid userId, CancellationToken cancellationToken = default)
     {
         return await databaseContext.SavingsSuggestions
             .Where(suggestion => suggestion.UserId == userId)
-            .ToListAsync();
+            .ToListAsync(cancellationToken);
     }
 
     // Cherche la suggestion par son identifiant et par son utilisateur : celle d'un autre n'est jamais trouvée.
-    public async Task<SavingsSuggestion?> FindAsync(Guid userId, Guid suggestionId)
+    public async Task<SavingsSuggestion?> FindAsync(Guid userId, Guid suggestionId, CancellationToken cancellationToken = default)
     {
         return await databaseContext.SavingsSuggestions.SingleOrDefaultAsync(suggestion =>
             suggestion.Id == suggestionId
-            && suggestion.UserId == userId);
+            && suggestion.UserId == userId,
+            cancellationToken);
     }
 
     // Cherche les utilisateurs en SQL, par paquets, dans l'ordre de leur identifiant : un utilisateur dont le calcul échoue
     // ne bloque pas les suivants, puisque le paquet suivant commence après lui. Une opération existe dès qu'un compte d'une
     // de ses connexions en a une : chaque EXISTS s'arrête à la première ligne trouvée par l'index de sa table.
-    public async Task<List<Guid>> FindUsersToCalculateAsync(DateOnly month, Guid? afterUserId, int count)
+    public async Task<List<Guid>> FindUsersToCalculateAsync(DateOnly month, Guid? afterUserId, int count, CancellationToken cancellationToken = default)
     {
         var users = databaseContext.Users
             .AsNoTracking()
@@ -58,24 +59,24 @@ public class SuggestionRepository : ISuggestionRepository
             .OrderBy(user => user.Id)
             .Select(user => user.Id)
             .Take(count)
-            .ToListAsync();
+            .ToListAsync(cancellationToken);
     }
 
     // Additionne en SQL, en bigint, les mouvements liés aux suggestions de l'utilisateur. Seule une suggestion acceptée crée
     // un mouvement. Les suggestions de l'utilisateur sont lues d'abord : la somme passe alors par l'index unique du lien
     // id_suggestion, sans parcourir les mouvements de tous les utilisateurs.
-    public async Task<long> SumSavedAsync(Guid userId)
+    public async Task<long> SumSavedAsync(Guid userId, CancellationToken cancellationToken = default)
     {
         var suggestionIds = await databaseContext.SavingsSuggestions
             .Where(suggestion => suggestion.UserId == userId && suggestion.Status == SuggestionStatus.Accepted)
             .Select(suggestion => suggestion.Id)
-            .ToListAsync();
+            .ToListAsync(cancellationToken);
 
         return await databaseContext.BagMovements
             .Where(movement =>
                 movement.SavingsSuggestionId != null
                 && suggestionIds.Contains(movement.SavingsSuggestionId.Value))
-            .SumAsync(movement => (long)movement.AmountInCents);
+            .SumAsync(movement => (long)movement.AmountInCents, cancellationToken);
     }
 
     // Garde de côté la nouvelle suggestion : elle ne sera écrite qu'avec les autres changements.

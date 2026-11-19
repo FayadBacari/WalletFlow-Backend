@@ -41,7 +41,7 @@ public class EmailChangeRequestService
     }
 
     // Vérifie la nouvelle adresse, l'identité et la limite, puis confie les e-mails à la file.
-    public async Task<EmailChangeRequestResult> RequestAsync(EmailChangeAttempt attempt)
+    public async Task<EmailChangeRequestResult> RequestAsync(EmailChangeAttempt attempt, CancellationToken cancellationToken = default)
     {
         var newEmail = EmailAddressRules.Normalize(attempt.NewEmail);
         if (!EmailAddressRules.IsValid(newEmail))
@@ -49,7 +49,7 @@ public class EmailChangeRequestService
             return new EmailChangeRequestResult.InvalidEmailAddress();
         }
 
-        var account = await accountRepository.FindByIdAsync(attempt.UserId);
+        var account = await accountRepository.FindByIdAsync(attempt.UserId, cancellationToken);
         if (account == null)
         {
             return new EmailChangeRequestResult.WrongPassword();
@@ -65,10 +65,10 @@ public class EmailChangeRequestService
         var checkedPasswordHash = account.PasswordHash;
         var checkedTotpSecret = account.EncryptedTotpSecret;
 
-        var identityCheck = await identityChecking.CheckAsync(account, attempt.Password, attempt.Code);
+        var identityCheck = await identityChecking.CheckAsync(account, attempt.Password, attempt.Code, cancellationToken);
         if (!identityCheck.IsConfirmed)
         {
-            return await RefuseAsync(account, attempt.IpAddress);
+            return await RefuseAsync(account, attempt.IpAddress, cancellationToken);
         }
 
         // La limite par adresse ne compte que les demandes du propriétaire du compte : une session volée ne peut pas l'épuiser (SS §6).
@@ -84,25 +84,26 @@ public class EmailChangeRequestService
             CheckedPasswordHash = checkedPasswordHash,
             CheckedTotpSecret = checkedTotpSecret,
             BackupCodeId = identityCheck.BackupCodeId,
+            AuthenticatorStep = identityCheck.AuthenticatorStep,
             IpAddress = attempt.IpAddress
         };
 
-        if (!await savingService.SaveWithRetriesAsync(() => PrepareRequestAsync(change), false))
+        if (!await savingService.SaveWithRetriesAsync(() => PrepareRequestAsync(change, cancellationToken), false, cancellationToken))
         {
-            return await RefuseAsync(account, attempt.IpAddress);
+            return await RefuseAsync(account, attempt.IpAddress, cancellationToken);
         }
 
         return new EmailChangeRequestResult.RequestAccepted();
     }
 
-    // Un passage : prépare l'entrée de la demande dans la file d'e-mails. Si un code de secours a servi, relit d'abord le compte,
-    // vérifie que le mot de passe et le secret contrôlés sont toujours les bons, et prépare l'usage du code : le code n'est
-    // dépensé que si la demande entre dans la file. Le compte est alors contrôlé à l'enregistrement, même s'il n'a pas changé.
-    private async Task<PreparedChanges<bool>> PrepareRequestAsync(EmailChangeToRequest change)
+    // Un passage : prépare l'entrée de la demande dans la file d'e-mails. Si un code a servi, relit d'abord le compte, vérifie que
+    // le mot de passe et le secret contrôlés sont toujours les bons, et prépare l'usage du code : le code n'est dépensé que si la
+    // demande entre dans la file. Le compte est alors contrôlé à l'enregistrement, même s'il n'a pas changé.
+    private async Task<PreparedChanges<bool>> PrepareRequestAsync(EmailChangeToRequest change, CancellationToken cancellationToken = default)
     {
-        if (change.BackupCodeId != null)
+        if (change.BackupCodeId != null || change.AuthenticatorStep != null)
         {
-            var account = await accountRepository.FindByIdAsync(change.UserId);
+            var account = await accountRepository.FindByIdAsync(change.UserId, cancellationToken);
             if (account == null
                 || account.PasswordHash != change.CheckedPasswordHash
                 || account.EncryptedTotpSecret != change.CheckedTotpSecret)
@@ -110,7 +111,7 @@ public class EmailChangeRequestService
                 return PreparedChanges<bool>.NothingToSave(false);
             }
 
-            if (!await identityChecking.TryPrepareBackupCodeUseAsync(change.BackupCodeId, change.IpAddress))
+            if (!await identityChecking.TryPrepareCodeUseAsync(account, change.BackupCodeId, change.AuthenticatorStep, change.IpAddress, cancellationToken))
             {
                 return PreparedChanges<bool>.NothingToSave(false);
             }
@@ -128,7 +129,7 @@ public class EmailChangeRequestService
     }
 
     // Note le refus dans le journal. Avec la double authentification, un mauvais mot de passe et un mauvais code reçoivent le même refus.
-    private async Task<EmailChangeRequestResult> RefuseAsync(User account, IPAddress? ipAddress)
+    private async Task<EmailChangeRequestResult> RefuseAsync(User account, IPAddress? ipAddress, CancellationToken cancellationToken = default)
     {
         await securityJournal.SaveEventNowAsync(SecurityEventType.EmailChange, SecurityEventResult.Failure, account.Id, ipAddress);
 
@@ -141,13 +142,14 @@ public class EmailChangeRequestService
     }
 
     // Ce qu'un passage doit enregistrer, et ce qui a été vérifié avant.
-    private class EmailChangeToRequest
+    private sealed class EmailChangeToRequest
     {
         public required Guid UserId { get; init; }
         public required string NewEmail { get; init; }
         public required string CheckedPasswordHash { get; init; }
         public required string? CheckedTotpSecret { get; init; }
         public required Guid? BackupCodeId { get; init; }
+        public required long? AuthenticatorStep { get; init; }
         public required IPAddress? IpAddress { get; init; }
     }
 }

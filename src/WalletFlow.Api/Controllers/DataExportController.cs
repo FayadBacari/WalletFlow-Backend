@@ -31,8 +31,9 @@ public class DataExportController : ControllerBase
     // porte le mot de passe, et chaque téléchargement est noté au journal.
     [HttpPost("export")]
     [RequestSizeLimit(RequestSizeConfiguration.MaximumAccountRequestBytes)]
-    [ResponseCache(NoStore = true, Location = ResponseCacheLocation.None)]
-    public async Task<IActionResult> Export(DataExportRequest request)
+    [ProducesResponseType<DataExportFile>(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status503ServiceUnavailable, Description = OpenApiConfiguration.ServerBusyDescription)]
+    public async Task<IActionResult> Export(DataExportRequest request, CancellationToken cancellationToken = default)
     {
         var result = await exportService.ExportAsync(new DataExportAttempt
         {
@@ -40,7 +41,8 @@ public class DataExportController : ControllerBase
             Password = request.Password,
             Code = request.Code,
             IpAddress = HttpContext.Connection.RemoteIpAddress
-        });
+        },
+        cancellationToken);
 
         if (result is DataExportResult.Exported exported)
         {
@@ -55,7 +57,7 @@ public class DataExportController : ControllerBase
 
         if (result is DataExportResult.TooManyExports)
         {
-            return Problem(statusCode: StatusCodes.Status429TooManyRequests);
+            return this.AnswerTooManyRequests(RetryDelays.DataExport);
         }
 
         if (result is DataExportResult.AccountGone)

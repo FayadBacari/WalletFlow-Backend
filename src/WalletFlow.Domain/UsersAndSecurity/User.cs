@@ -18,6 +18,7 @@ public class User
     private DateTime? lockoutEndsAt = null;
     private DateTime? deletionRequestedAt = null;
     private DateOnly? lastSuggestionMonth = null;
+    private long? lastAuthenticatorStep = null;
     private NotificationChannel notificationChannel = NotificationChannel.Email;
 
     // id_utilisateur
@@ -117,14 +118,41 @@ public class User
         init => lastSuggestionMonth = value;
     }
 
+    // dernier_pas_totp : pas de temps (30 secondes) du dernier code de l'application accepté, vide sans double authentification.
+    // Un code de ce pas, ou d'un pas plus ancien, ne sert plus (SS §2) : même après un redémarrage, même sur un autre serveur.
+    public long? LastAuthenticatorStep
+    {
+        get => lastAuthenticatorStep;
+        init => lastAuthenticatorStep = value;
+    }
+
+    // Renvoie vrai si un code de l'application de ce pas de temps peut servir : la double authentification est activée, et
+    // ce pas est plus récent que celui du dernier code accepté.
+    public bool CanUseAuthenticatorStep(long step)
+    {
+        return isTwoFactorEnabled && step > 0 && (lastAuthenticatorStep == null || step > lastAuthenticatorStep);
+    }
+
+    // Note qu'un code de ce pas de temps vient de servir : ni lui ni aucun code plus ancien ne serviront plus. Un code qui ne peut
+    // pas servir est refusé : il ne doit jamais être accepté une seconde fois.
+    public void UseAuthenticatorStep(long step)
+    {
+        if (!CanUseAuthenticatorStep(step))
+        {
+            throw new InvalidOperationException("Ce code de l'application a déjà servi, ou un code plus récent a servi.");
+        }
+
+        lastAuthenticatorStep = step;
+    }
+
     // Renvoie vrai si le compte est bloqué à cette date. Le blocage finit à sa date de fin exacte.
     public bool IsLockedAt(DateTime now)
     {
         return lockoutEndsAt != null && lockoutEndsAt > now;
     }
 
-    // Compte un essai de plus, avant même de vérifier le mot de passe : des requêtes simultanées
-    // ne peuvent donc pas tester plus de 5 mots de passe. Le dernier essai bloque aussitôt le compte :
+    // Compte un essai de plus. La connexion ne donne le résultat d'un mot de passe qu'une fois son essai compté : des requêtes
+    // simultanées ne peuvent donc pas tester plus de 5 mots de passe. Le dernier essai bloque aussitôt le compte :
     // si le serveur s'arrête ensuite, le blocage a quand même une date de fin.
     // Renvoie vrai si c'est cet essai qui bloque le compte.
     public bool CountLoginAttempt(DateTime now)
@@ -242,23 +270,49 @@ public class User
         email = newEmail;
     }
 
-    // Active la double authentification avec son secret chiffré : l'un ne va jamais sans l'autre (DD §3).
-    public void ActivateTwoFactor(string encryptedSecret)
+    // Active la double authentification avec son secret chiffré : l'un ne va jamais sans l'autre (DD §3). Le premier code, qui
+    // vient de prouver que l'application est bien réglée, est noté comme utilisé : il ne pourra pas resservir pour se connecter.
+    public void ActivateTwoFactor(string encryptedSecret, long firstStep)
     {
         if (string.IsNullOrEmpty(encryptedSecret))
         {
             throw new ArgumentException("Le secret chiffré de la double authentification est vide.", nameof(encryptedSecret));
         }
 
+        if (firstStep <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(firstStep), "Le pas de temps du premier code doit être positif.");
+        }
+
         isTwoFactorEnabled = true;
         encryptedTotpSecret = encryptedSecret;
+        lastAuthenticatorStep = firstStep;
     }
 
-    // Désactive la double authentification et oublie son secret : l'un ne reste jamais sans l'autre (DD §3).
+    // Remplace le secret chiffré par le même secret, chiffré avec une autre clé (SS §7). Le secret lui-même ne change pas :
+    // le pas du dernier code reste valable. Sans double authentification, il n'y a pas de secret à remplacer.
+    public void ReplaceEncryptedTotpSecret(string newEncryptedSecret)
+    {
+        if (!isTwoFactorEnabled)
+        {
+            throw new InvalidOperationException("La double authentification n'est pas activée : il n'y a pas de secret à remplacer.");
+        }
+
+        if (string.IsNullOrEmpty(newEncryptedSecret))
+        {
+            throw new ArgumentException("Le nouveau secret chiffré est vide.", nameof(newEncryptedSecret));
+        }
+
+        encryptedTotpSecret = newEncryptedSecret;
+    }
+
+    // Désactive la double authentification et oublie son secret, avec le pas de son dernier code : l'un ne reste jamais sans
+    // l'autre (DD §3), et un nouveau secret repart sans passé.
     public void DeactivateTwoFactor()
     {
         isTwoFactorEnabled = false;
         encryptedTotpSecret = null;
+        lastAuthenticatorStep = null;
     }
 
     // Demande la suppression du compte à cette date : il sera effacé 30 jours après, sauf si l'utilisateur se reconnecte

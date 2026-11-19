@@ -34,7 +34,11 @@ public class AccountLoginController : ControllerBase
     [ServiceFilter(typeof(MinimumAnswerDurationFilter))]
     [EnableRateLimiting(RateLimitingConfiguration.LoginPolicy)]
     [RequestSizeLimit(RequestSizeConfiguration.MaximumAccountRequestBytes)]
-    public async Task<IActionResult> LogIn(LoginRequest request)
+    [ProducesResponseType<LoginResponse>(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized, Description = OpenApiConfiguration.WrongCredentialsDescription)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden, Description = OpenApiConfiguration.EmailNotConfirmedDescription)]
+    [ProducesResponseType(StatusCodes.Status503ServiceUnavailable, Description = OpenApiConfiguration.ServerBusyDescription)]
+    public async Task<IActionResult> LogIn(LoginRequest request, CancellationToken cancellationToken = default)
     {
         var result = await loginService.LogInAsync(new LoginAttempt
         {
@@ -43,7 +47,8 @@ public class AccountLoginController : ControllerBase
             IpAddress = HttpContext.Connection.RemoteIpAddress,
             DeviceToken = Request.Cookies[SessionCookiesConfiguration.DeviceCookieName],
             SessionToken = Request.Cookies[SessionCookiesConfiguration.SessionCookieName]
-        });
+        },
+        cancellationToken);
 
         if (result is AccountLoginResult.LoggedIn loggedIn)
         {

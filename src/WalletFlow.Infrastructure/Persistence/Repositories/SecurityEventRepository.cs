@@ -18,6 +18,8 @@ public class SecurityEventRepository : ISecurityEventRepository
     // Enregistre tout de suite un événement, seul : rien d'autre ne doit attendre l'unité de travail.
     // Si son compte vient d'être effacé, l'événement est gardé comme ceux d'un compte supprimé : sans identifiant ni adresse IP (GR Suppression).
     // Si le compte qu'une action de l'administrateur vise vient d'être effacé, l'action est gardée sans lui (DD §4.5).
+    // L'écriture ne s'annule jamais, même si le client abandonne sa requête : sinon, il suffirait de raccrocher pour ne laisser
+    // aucune trace dans le journal.
     public async Task SaveEventAsync(SecurityEvent securityEvent)
     {
         databaseContext.ThrowIfChangesArePending();
@@ -25,7 +27,7 @@ public class SecurityEventRepository : ISecurityEventRepository
 
         try
         {
-            await databaseContext.SaveChangesAsync();
+            await databaseContext.SaveChangesAsync(CancellationToken.None);
         }
         catch (DbUpdateException exception)
         {
@@ -46,19 +48,19 @@ public class SecurityEventRepository : ISecurityEventRepository
 
             databaseContext.Entry(securityEvent).State = EntityState.Detached;
             databaseContext.SecurityEvents.Add(keptEvent);
-            await databaseContext.SaveChangesAsync();
+            await databaseContext.SaveChangesAsync(CancellationToken.None);
         }
     }
 
     // Lit la date du dernier événement réussi de ce type pour ce compte. Le journal garde un an d'événements (SS §11).
-    public async Task<DateTime?> FindLastSuccessAsync(SecurityEventType type, Guid accountId)
+    public async Task<DateTime?> FindLastSuccessAsync(SecurityEventType type, Guid accountId, CancellationToken cancellationToken = default)
     {
         return await databaseContext.SecurityEvents.AsNoTracking()
             .Where(securityEvent =>
                 securityEvent.UserId == accountId
                 && securityEvent.Type == type
                 && securityEvent.Result == SecurityEventResult.Success)
-            .MaxAsync(securityEvent => (DateTime?)securityEvent.OccurredAt);
+            .MaxAsync(securityEvent => (DateTime?)securityEvent.OccurredAt, cancellationToken);
     }
 
     // Prépare un événement : il partira avec les autres changements, dans la même transaction, à l'appel de l'unité de travail.
@@ -69,13 +71,13 @@ public class SecurityEventRepository : ISecurityEventRepository
 
     // Appelle la fonction de la base qui efface les événements de plus d'un an : l'utilisateur de l'application n'a pas le droit
     // d'effacer le journal lui-même (MPD, section 8 du script). Cette écriture est immédiate, et n'emporte rien d'autre.
-    public async Task<int> DeleteExpiredEventsAsync()
+    public async Task<int> DeleteExpiredEventsAsync(CancellationToken cancellationToken = default)
     {
         databaseContext.ThrowIfChangesArePending();
 
         return await databaseContext.Database
             .SqlQuery<int>($"SELECT fn_effacer_vieux_evenements() AS \"Value\"")
-            .SingleAsync();
+            .SingleAsync(cancellationToken);
     }
 
     // Recrée l'événement sans identifiant de compte ni adresse IP. Le reste ne change pas : identifiant, type, résultat et date.

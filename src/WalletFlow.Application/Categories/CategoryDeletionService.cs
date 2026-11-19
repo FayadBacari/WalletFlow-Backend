@@ -22,11 +22,11 @@ public class CategoryDeletionService
     }
 
     // Supprime la catégorie si elle est à l'utilisateur et n'est pas « Autres ».
-    public async Task<CategoryDeletionResult> DeleteAsync(Guid userId, Guid categoryId)
+    public async Task<CategoryDeletionResult> DeleteAsync(Guid userId, Guid categoryId, CancellationToken cancellationToken = default)
     {
         for (var tryNumber = 1; tryNumber <= MaximumTries; tryNumber++)
         {
-            var category = await categoryRepository.FindAsync(userId, categoryId);
+            var category = await categoryRepository.FindAsync(userId, categoryId, cancellationToken);
 
             if (category == null)
             {
@@ -40,9 +40,9 @@ public class CategoryDeletionService
 
             // Une autre requête peut l'avoir supprimée juste après la lecture, ou un interblocage peut avoir tout annulé :
             // la suppression ne supprime alors rien, et le passage suivant relit la catégorie.
-            if (await categoryRepository.DeleteAsync(userId, categoryId))
+            if (await categoryRepository.DeleteAsync(userId, categoryId, cancellationToken))
             {
-                await budgetAlerts.CheckAsync(userId);
+                await budgetAlerts.CheckAsync(userId, cancellationToken);
                 return new CategoryDeletionResult.Deleted();
             }
         }

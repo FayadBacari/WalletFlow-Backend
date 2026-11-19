@@ -175,7 +175,7 @@ public class ConcurrentCategoryRequestsTests
             Assert.Equal(SimultaneousRequestCount - 1, results.Count(result => result is CategoryCreationResult.NameAlreadyUsed));
             await using var databaseContext = LocalTestDatabase.CreateDatabaseContext();
             Assert.Equal(1, await databaseContext.Categories.CountAsync(row =>
-                row.UserId == account.Id && row.Name.ToLower() == "abonnements"));
+                row.UserId == account.Id && EF.Functions.ILike(row.Name, "abonnements")));
         }
         finally
         {

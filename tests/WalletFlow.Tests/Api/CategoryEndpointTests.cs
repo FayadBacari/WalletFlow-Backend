@@ -1,4 +1,5 @@
 using System.Net;
+using WalletFlow.Application.Persistence;
 using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
@@ -198,7 +199,7 @@ public class CategoryEndpointTests
         var response = await SendAsync(user.Client, HttpMethod.Post, CategoriesEndpoint, new { name = "   " }, user.CsrfToken);
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
-        Assert.Equal(ErrorMessages.CategoryNameBreaksRules, await ReadFieldErrorAsync(response, "Name"));
+        Assert.Equal(ErrorMessages.CategoryNameBreaksRules, await ReadFieldErrorAsync(response, "name"));
         Assert.Equal(8, api.CategoryRepository.SavedCategories.Count);
     }
 
@@ -211,7 +212,7 @@ public class CategoryEndpointTests
         var response = await SendAsync(user.Client, HttpMethod.Post, CategoriesEndpoint, new { name = "LOISIRS" }, user.CsrfToken);
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
-        Assert.Equal(ErrorMessages.CategoryNameAlreadyUsed, await ReadFieldErrorAsync(response, "Name"));
+        Assert.Equal(ErrorMessages.CategoryNameAlreadyUsed, await ReadFieldErrorAsync(response, "name"));
     }
 
     // SS §6 : 100 catégories au plus.
@@ -369,7 +370,7 @@ public class CategoryEndpointTests
         var response = await SendRawBudgetAsync(user, leisure.Id, """{ "monthlyBudgetInCents": 0 }""");
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
-        Assert.Equal(ErrorMessages.CategoryBudgetBreaksRules, await ReadFieldErrorAsync(response, "MonthlyBudgetInCents"));
+        Assert.Equal(ErrorMessages.CategoryBudgetBreaksRules, await ReadFieldErrorAsync(response, "monthlyBudgetInCents"));
         Assert.Null(leisure.MonthlyBudgetInCents);
     }
 
@@ -479,5 +480,20 @@ public class CategoryEndpointTests
         Assert.Contains("1 à " + CategoryRules.MaximumNameLength + " caractères", ErrorMessages.CategoryNameBreaksRules);
         Assert.Equal(1_000_000_000, CategoryRules.MaximumMonthlyBudgetInCents);
         Assert.Contains("10 000 000 €", ErrorMessages.CategoryBudgetBreaksRules);
+    }
+
+    // Un budget que d'autres requêtes changent à chaque essai répond 409 : l'ancien budget reste, l'utilisateur peut réessayer.
+    [Fact]
+    public async Task BudgetThatNeverSavesAsksToRetry()
+    {
+        using var api = new ApiFactoryWithFakes();
+        var user = await LogInWithCategoriesAsync(api);
+        var leisure = FindCategory(api, user.Account, "Loisirs");
+        api.CategoryRepository.Conflicts = DatabaseChangesSavingService.MaximumTries;
+
+        var response = await SendAsync(user.Client, HttpMethod.Put, BudgetAddress(leisure.Id), new { monthlyBudgetInCents = 3000 }, user.CsrfToken);
+
+        await AssertProblemTitleAsync(response, HttpStatusCode.Conflict, ErrorMessages.CategoriesChangedMeanwhile);
+        Assert.Null(leisure.MonthlyBudgetInCents);
     }
 }

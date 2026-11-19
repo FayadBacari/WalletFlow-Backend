@@ -2,7 +2,6 @@ using System.Globalization;
 using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
-using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
@@ -21,20 +20,12 @@ public class EnableBankingClient : IBankDataProvider
     public static readonly Uri ApiAddress = new Uri("https://api.enablebanking.com/");
     public static readonly TimeSpan BankListLifetime = TimeSpan.FromHours(6);
 
-    // Montant le plus grand lu en texte : bien au-delà des limites de la SS §5, assez petit pour ne jamais déborder.
-    private const decimal LargestReadAmount = 1_000_000_000_000m;
-
     // Longueur la plus grande du navigateur transmis à la banque.
     public const int MaximumHeaderLength = 512;
 
     // Le plus grand nombre de pages d'opérations lues pour un compte, bien au-delà d'un an d'opérations. Au-delà, la lecture
     // s'arrête comme une panne : un prestataire qui donnerait des pages sans fin ne bloque jamais une mise à jour.
     public const int MaximumTransactionPages = 200;
-
-    // Les statuts d'opération et les sens de l'argent d'Enable Banking (codes ISO 20022).
-    public const string BookedStatus = "BOOK";
-    public const string CreditIndicator = "CRDT";
-    public const string DebitIndicator = "DBIT";
 
     // Les erreurs d'Enable Banking qui disent que la session ne sert plus : il faut une nouvelle autorisation.
     private static readonly List<string> SessionEndedErrors = new List<string>
@@ -69,7 +60,7 @@ public class EnableBankingClient : IBankDataProvider
     }
 
     // Donne les banques françaises qui permettent de lire les comptes de particuliers. La liste est gardée 6 heures.
-    public async Task<List<ProvidedBank>> ListBanksAsync()
+    public async Task<List<ProvidedBank>> ListBanksAsync(CancellationToken cancellationToken = default)
     {
         var now = clock.GetUtcNow();
 
@@ -82,7 +73,8 @@ public class EnableBankingClient : IBankDataProvider
         }
 
         var response = await SendAsync<AspspListResponse>(
-            HttpMethod.Get, "aspsps?country=" + Country + "&psu_type=" + PersonalAccounts + "&service=AIS", null, null, "aspsps");
+            HttpMethod.Get, "aspsps?country=" + Country + "&psu_type=" + PersonalAccounts + "&service=AIS", null, null, "aspsps",
+            cancellationToken);
         var banks = new List<ProvidedBank>();
 
         foreach (var bank in response.Aspsps ?? new List<AspspData>())
@@ -103,7 +95,7 @@ public class EnableBankingClient : IBankDataProvider
     }
 
     // Commence l'autorisation : la banque renverra l'utilisateur à l'adresse fixe du site, avec le state (SS §7).
-    public async Task<string> StartAuthorizationAsync(BankAuthorizationRequest request)
+    public async Task<string> StartAuthorizationAsync(BankAuthorizationRequest request, CancellationToken cancellationToken = default)
     {
         var body = new StartAuthorizationBody(
             new AccessBody(new DateTimeOffset(request.ValidUntil, TimeSpan.Zero)),
@@ -112,7 +104,7 @@ public class EnableBankingClient : IBankDataProvider
             request.ReturnAddress,
             PersonalAccounts);
 
-        var response = await SendAsync<StartAuthorizationResponse>(HttpMethod.Post, "auth", body, null, "auth");
+        var response = await SendAsync<StartAuthorizationResponse>(HttpMethod.Post, "auth", body, null, "auth", cancellationToken);
 
         if (!Uri.TryCreate(response.Url, UriKind.Absolute, out var bankAddress) || bankAddress.Scheme != Uri.UriSchemeHttps)
         {
@@ -123,9 +115,9 @@ public class EnableBankingClient : IBankDataProvider
     }
 
     // Termine l'autorisation avec le code renvoyé par la banque. Un code refusé lève AuthorizationRefused.
-    public async Task<ProvidedSession> CreateSessionAsync(string code)
+    public async Task<ProvidedSession> CreateSessionAsync(string code, CancellationToken cancellationToken = default)
     {
-        var response = await SendAsync<AuthorizeSessionResponse>(HttpMethod.Post, "sessions", new AuthorizeSessionBody(code), null, "sessions");
+        var response = await SendAsync<AuthorizeSessionResponse>(HttpMethod.Post, "sessions", new AuthorizeSessionBody(code), null, "sessions", cancellationToken);
 
         if (string.IsNullOrWhiteSpace(response.SessionId) || response.Access?.ValidUntil is not DateTimeOffset validUntil)
         {
@@ -143,7 +135,7 @@ public class EnableBankingClient : IBankDataProvider
 
             accounts.Add(new ProvidedAccount(
                 account.Uid,
-                ComputeStableId(account.IdentificationHash),
+                EnableBankingConversions.ComputeStableId(account.IdentificationHash),
                 account.Details ?? account.Product,
                 account.Currency ?? string.Empty));
         }
@@ -152,9 +144,9 @@ public class EnableBankingClient : IBankDataProvider
     }
 
     // Donne les comptes d'une session. Une session qui n'est plus autorisée lève SessionEnded.
-    public async Task<List<SessionAccount>> ReadSessionAccountsAsync(string sessionId)
+    public async Task<List<SessionAccount>> ReadSessionAccountsAsync(string sessionId, CancellationToken cancellationToken = default)
     {
-        var response = await SendAsync<SessionResponse>(HttpMethod.Get, "sessions/" + Uri.EscapeDataString(sessionId), null, null, "sessions/{id}");
+        var response = await SendAsync<SessionResponse>(HttpMethod.Get, "sessions/" + Uri.EscapeDataString(sessionId), null, null, "sessions/{id}", cancellationToken);
 
         if (response.Status != AuthorizedStatus)
         {
@@ -167,7 +159,7 @@ public class EnableBankingClient : IBankDataProvider
         {
             if (!string.IsNullOrWhiteSpace(account.Uid) && !string.IsNullOrWhiteSpace(account.IdentificationHash))
             {
-                accounts.Add(new SessionAccount(account.Uid, ComputeStableId(account.IdentificationHash)));
+                accounts.Add(new SessionAccount(account.Uid, EnableBankingConversions.ComputeStableId(account.IdentificationHash)));
             }
         }
 
@@ -175,17 +167,18 @@ public class EnableBankingClient : IBankDataProvider
     }
 
     // Donne les soldes d'un compte. Quand l'utilisateur est là, ses en-têtes sont transmis à la banque (DSP2).
-    public async Task<List<ProvidedBalance>> ReadBalancesAsync(string accountUid, UserPresence? presence)
+    public async Task<List<ProvidedBalance>> ReadBalancesAsync(string accountUid, UserPresence? presence, CancellationToken cancellationToken = default)
     {
         var response = await SendAsync<BalancesResponse>(
-            HttpMethod.Get, "accounts/" + Uri.EscapeDataString(accountUid) + "/balances", null, presence, "accounts/{id}/balances");
+            HttpMethod.Get, "accounts/" + Uri.EscapeDataString(accountUid) + "/balances", null, presence, "accounts/{id}/balances",
+            cancellationToken);
         var balances = new List<ProvidedBalance>();
 
         foreach (var balance in response.Balances ?? new List<BalanceResource>())
         {
             balances.Add(new ProvidedBalance(
                 balance.BalanceType ?? string.Empty,
-                ReadCents(balance.BalanceAmount?.Amount),
+                EnableBankingConversions.ReadCents(balance.BalanceAmount?.Amount),
                 balance.BalanceAmount?.Currency ?? string.Empty));
         }
 
@@ -195,7 +188,7 @@ public class EnableBankingClient : IBankDataProvider
     // Donne les opérations d'un compte depuis ce jour, compris (UTC). La stratégie « longest » d'Enable Banking lit
     // la plus longue période que la banque permet à partir de ce jour, au lieu de refuser une période trop ancienne.
     // Chaque page suivante est demandée avec les mêmes paramètres et la clé reçue, jusqu'à ce qu'aucune clé ne vienne.
-    public async Task<List<ProvidedTransaction>> ReadTransactionsAsync(string accountUid, DateOnly startDate, UserPresence? presence)
+    public async Task<List<ProvidedTransaction>> ReadTransactionsAsync(string accountUid, DateOnly startDate, UserPresence? presence, CancellationToken cancellationToken = default)
     {
         var firstPagePath = "accounts/" + Uri.EscapeDataString(accountUid)
             + "/transactions?date_from=" + startDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)
@@ -212,11 +205,11 @@ public class EnableBankingClient : IBankDataProvider
                 path = path + "&continuation_key=" + Uri.EscapeDataString(continuationKey);
             }
 
-            var response = await SendAsync<TransactionsResponse>(HttpMethod.Get, path, null, presence, "accounts/{id}/transactions");
+            var response = await SendAsync<TransactionsResponse>(HttpMethod.Get, path, null, presence, "accounts/{id}/transactions", cancellationToken);
 
             foreach (var transaction in response.Transactions ?? new List<TransactionResource>())
             {
-                transactions.Add(ReadTransaction(transaction));
+                transactions.Add(EnableBankingConversions.ReadTransaction(transaction));
             }
 
             if (string.IsNullOrEmpty(response.ContinuationKey))
@@ -230,120 +223,26 @@ public class EnableBankingClient : IBankDataProvider
         throw Unavailable("accounts/{id}/transactions", "Enable Banking a donné trop de pages d'opérations.");
     }
 
-    // Traduit une opération d'Enable Banking. Le sens vient de l'indicateur crédit ou débit, jamais du signe du montant :
-    // un montant sans sens connu est illisible. La date est la date comptable, ou à défaut la date de valeur.
-    private static ProvidedTransaction ReadTransaction(TransactionResource transaction)
-    {
-        var amountInCents = ReadCents(transaction.TransactionAmount?.Amount);
-        long? signedAmountInCents = null;
-
-        if (amountInCents is long amount && transaction.CreditDebitIndicator == CreditIndicator)
-        {
-            signedAmountInCents = Math.Abs(amount);
-        }
-
-        if (amountInCents is long debitAmount && transaction.CreditDebitIndicator == DebitIndicator)
-        {
-            signedAmountInCents = -Math.Abs(debitAmount);
-        }
-
-        return new ProvidedTransaction(
-            transaction.EntryReference,
-            transaction.Status == BookedStatus,
-            ReadDate(transaction.BookingDate) ?? ReadDate(transaction.ValueDate),
-            signedAmountInCents,
-            transaction.TransactionAmount?.Currency ?? string.Empty,
-            ChooseLabel(transaction));
-    }
-
-    // Le libellé : le texte que la banque joint à l'opération, sinon le nom de l'autre partie, sinon le type d'opération.
-    private static string ChooseLabel(TransactionResource transaction)
-    {
-        var lines = new List<string>();
-
-        foreach (var line in transaction.RemittanceInformation ?? new List<string?>())
-        {
-            if (!string.IsNullOrWhiteSpace(line))
-            {
-                lines.Add(line);
-            }
-        }
-
-        if (lines.Count > 0)
-        {
-            return string.Join(" ", lines);
-        }
-
-        var otherPartyName = transaction.CreditDebitIndicator == CreditIndicator
-            ? transaction.Debtor?.Name
-            : transaction.Creditor?.Name;
-
-        if (!string.IsNullOrWhiteSpace(otherPartyName))
-        {
-            return otherPartyName;
-        }
-
-        return transaction.BankTransactionCode?.Description ?? string.Empty;
-    }
-
-    // Lit une date écrite comme « 2026-11-12 ». Renvoie null si elle est absente ou illisible.
-    private static DateOnly? ReadDate(string? date)
-    {
-        if (DateOnly.TryParseExact(date, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var readDate))
-        {
-            return readDate;
-        }
-
-        return null;
-    }
-
     // Révoque la session. Une session déjà finie, ou inconnue, compte comme révoquée. Le corps de la réponse n'est pas lu.
-    public async Task RevokeSessionAsync(string sessionId)
+    public async Task RevokeSessionAsync(string sessionId, CancellationToken cancellationToken = default)
     {
         try
         {
-            using var response = await SendRequestAsync(HttpMethod.Delete, "sessions/" + Uri.EscapeDataString(sessionId), null, null, "sessions/{id}");
+            using var response = await SendRequestAsync(HttpMethod.Delete, "sessions/" + Uri.EscapeDataString(sessionId), null, null, "sessions/{id}", cancellationToken);
         }
         catch (BankProviderException exception) when (exception.Failure == BankProviderFailure.SessionEnded)
         {
         }
     }
 
-    // L'identifiant stable d'Enable Banking peut dépasser les 100 caractères de id_compte_externe : on garde son empreinte
-    // SHA-256, toujours de 64 caractères, et toujours la même pour le même compte.
-    public static string ComputeStableId(string identificationHash)
-    {
-        return Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(identificationHash)));
-    }
-
-    // Lit un montant écrit en texte, comme « -12.34 », en centimes. Renvoie null s'il n'est pas un nombre de centimes lisible.
-    public static long? ReadCents(string? amount)
-    {
-        if (!decimal.TryParse(amount, NumberStyles.AllowLeadingSign | NumberStyles.AllowDecimalPoint, CultureInfo.InvariantCulture, out var value)
-            || value > LargestReadAmount
-            || value < -LargestReadAmount)
-        {
-            return null;
-        }
-
-        var cents = value * 100;
-
-        if (cents != decimal.Truncate(cents))
-        {
-            return null;
-        }
-
-        return (long)cents;
-    }
-
     // Envoie une requête signée, et lit sa réponse JSON. Toute panne ou tout refus devient une BankProviderException.
-    private async Task<TResponse> SendAsync<TResponse>(HttpMethod method, string path, object? body, UserPresence? presence, string routeName)
+    private async Task<TResponse> SendAsync<TResponse>(HttpMethod method, string path, object? body, UserPresence? presence, string routeName, CancellationToken cancellationToken = default)
     {
-        using var response = await SendRequestAsync(method, path, body, presence, routeName);
+        using var response = await SendRequestAsync(method, path, body, presence, routeName, cancellationToken);
 
         try
         {
-            var result = await response.Content.ReadFromJsonAsync<TResponse>(JsonOptions);
+            var result = await response.Content.ReadFromJsonAsync<TResponse>(JsonOptions, cancellationToken);
 
             if (result == null)
             {
@@ -359,7 +258,7 @@ public class EnableBankingClient : IBankDataProvider
     }
 
     // Envoie une requête signée, et renvoie sa réponse si elle est un succès. Sinon, lève une BankProviderException.
-    private async Task<HttpResponseMessage> SendRequestAsync(HttpMethod method, string path, object? body, UserPresence? presence, string routeName)
+    private async Task<HttpResponseMessage> SendRequestAsync(HttpMethod method, string path, object? body, UserPresence? presence, string routeName, CancellationToken cancellationToken = default)
     {
         using var request = new HttpRequestMessage(method, path);
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", tokenSigner.GetToken());
@@ -374,13 +273,14 @@ public class EnableBankingClient : IBankDataProvider
         HttpResponseMessage response;
         try
         {
-            response = await httpClient.SendAsync(request);
+            response = await httpClient.SendAsync(request, cancellationToken);
         }
         catch (HttpRequestException exception)
         {
             throw Unavailable(routeName, "Enable Banking ne répond pas.", exception);
         }
-        catch (TaskCanceledException exception)
+        // Une requête abandonnée par son client, ou l'arrêt de l'API, n'est pas une banque muette : l'annulation remonte telle quelle.
+        catch (TaskCanceledException exception) when (!cancellationToken.IsCancellationRequested)
         {
             throw Unavailable(routeName, "Enable Banking n'a pas répondu à temps.", exception);
         }
@@ -389,7 +289,7 @@ public class EnableBankingClient : IBankDataProvider
         {
             using (response)
             {
-                throw await ReadFailureAsync(response, routeName);
+                throw await ReadFailureAsync(response, routeName, cancellationToken);
             }
         }
 
@@ -397,13 +297,13 @@ public class EnableBankingClient : IBankDataProvider
     }
 
     // Traduit une réponse d'erreur en raison d'échec, et l'écrit dans le journal technique.
-    private async Task<BankProviderException> ReadFailureAsync(HttpResponseMessage response, string routeName)
+    private async Task<BankProviderException> ReadFailureAsync(HttpResponseMessage response, string routeName, CancellationToken cancellationToken = default)
     {
         string? errorCode = null;
 
         try
         {
-            errorCode = (await response.Content.ReadFromJsonAsync<ErrorResponse>(JsonOptions))?.Error;
+            errorCode = (await response.Content.ReadFromJsonAsync<ErrorResponse>(JsonOptions, cancellationToken))?.Error;
         }
         catch (JsonException)
         {

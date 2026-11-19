@@ -42,17 +42,17 @@ public class EmailChangeConfirmationService
 
     // Change l'adresse si le lien est encore valable et si le mot de passe est le bon. Un mauvais mot de passe ne consomme pas le lien.
     // L'ancienne adresse est prévenue en arrière-plan, par un e-mail qui n'entre dans la file qu'avec le changement (GR Compte).
-    public async Task<EmailChangeConfirmationResult> ConfirmAsync(string linkToken, string password, IPAddress? ipAddress)
+    public async Task<EmailChangeConfirmationResult> ConfirmAsync(string linkToken, string password, IPAddress? ipAddress, CancellationToken cancellationToken = default)
     {
         var tokenHash = tokenGenerator.HashToken(linkToken);
 
-        var token = await FindUsableTokenAsync(tokenHash);
+        var token = await FindUsableTokenAsync(tokenHash, cancellationToken);
         if (token == null)
         {
             return new EmailChangeConfirmationResult.LinkNoLongerValid();
         }
 
-        var account = await accountRepository.FindByIdAsync(token.UserId);
+        var account = await accountRepository.FindByIdAsync(token.UserId, cancellationToken);
         if (account == null || !account.IsEmailConfirmed)
         {
             return new EmailChangeConfirmationResult.LinkNoLongerValid();
@@ -61,15 +61,16 @@ public class EmailChangeConfirmationService
         var checkedPasswordHash = account.PasswordHash;
         var normalizedPassword = PasswordRules.Normalize(password);
 
-        if (!await passwordHasher.VerifyAsync(normalizedPassword, checkedPasswordHash))
+        if (!await passwordHasher.VerifyAsync(normalizedPassword, checkedPasswordHash, cancellationToken))
         {
             await securityJournal.SaveEventNowAsync(SecurityEventType.EmailChange, SecurityEventResult.Failure, account.Id, ipAddress);
             return new EmailChangeConfirmationResult.WrongPassword();
         }
 
         return await savingService.SaveWithRetriesAsync(
-            () => PrepareNewEmailAsync(tokenHash, checkedPasswordHash, ipAddress),
-            new EmailChangeConfirmationResult.LinkNoLongerValid());
+            () => PrepareNewEmailAsync(tokenHash, checkedPasswordHash, ipAddress, cancellationToken),
+            new EmailChangeConfirmationResult.LinkNoLongerValid(),
+            cancellationToken);
     }
 
     // Un passage : relit le lien et son compte, les vérifie, puis prépare la nouvelle adresse, le lien utilisé, l'effacement
@@ -79,15 +80,16 @@ public class EmailChangeConfirmationService
     private async Task<PreparedChanges<EmailChangeConfirmationResult>> PrepareNewEmailAsync(
         string tokenHash,
         string checkedPasswordHash,
-        IPAddress? ipAddress)
+        IPAddress? ipAddress,
+        CancellationToken cancellationToken = default)
     {
-        var token = await FindUsableTokenAsync(tokenHash);
+        var token = await FindUsableTokenAsync(tokenHash, cancellationToken);
         if (token == null || token.NewEmail == null)
         {
             return PreparedChanges<EmailChangeConfirmationResult>.NothingToSave(new EmailChangeConfirmationResult.LinkNoLongerValid());
         }
 
-        var account = await accountRepository.FindByIdAsync(token.UserId);
+        var account = await accountRepository.FindByIdAsync(token.UserId, cancellationToken);
         if (account == null
             || !account.IsEmailConfirmed
             || account.PasswordHash != checkedPasswordHash)
@@ -96,7 +98,7 @@ public class EmailChangeConfirmationService
         }
 
         // Le premier compte qui confirme une adresse la garde : un autre compte l'a peut-être prise depuis la demande.
-        if (await accountRepository.FindByEmailAsync(token.NewEmail) != null)
+        if (await accountRepository.FindByEmailAsync(token.NewEmail, cancellationToken) != null)
         {
             return PreparedChanges<EmailChangeConfirmationResult>.NothingToSave(new EmailChangeConfirmationResult.EmailAlreadyUsed());
         }
@@ -106,7 +108,7 @@ public class EmailChangeConfirmationService
 
         account.ReplaceEmail(token.NewEmail);
         token.MarkAsUsed(now);
-        await accountRepository.PrepareOldAddressLinksRemovalAsync(account.Id);
+        await accountRepository.PrepareOldAddressLinksRemovalAsync(account.Id, cancellationToken);
         securityJournal.PrepareEvent(SecurityEventType.EmailChange, SecurityEventResult.Success, account.Id, ipAddress);
         emailRequests.PrepareRequest(EmailRequest.ForEmailChangedNotice(account.Id, oldEmail, ipAddress, now));
 
@@ -114,9 +116,9 @@ public class EmailChangeConfirmationService
     }
 
     // Cherche le jeton du lien. Renvoie null s'il n'existe pas, s'il a déjà servi ou s'il a expiré.
-    private async Task<EmailToken?> FindUsableTokenAsync(string tokenHash)
+    private async Task<EmailToken?> FindUsableTokenAsync(string tokenHash, CancellationToken cancellationToken = default)
     {
-        var token = await accountRepository.FindTokenAsync(tokenHash, EmailTokenType.EmailChange);
+        var token = await accountRepository.FindTokenAsync(tokenHash, EmailTokenType.EmailChange, cancellationToken);
 
         if (token == null || !token.CanBeUsedAt(clock.GetUtcNow().UtcDateTime))
         {

@@ -70,8 +70,8 @@ public class AccountDeletionRepositoryTests
             UserId = userId
         };
         databaseContext.SecurityEvents.Add(ownEvent);
-        databaseContext.UserSessions.Add(new UserSession { Id = CreateHash(), LastActivityAt = Now, UserId = userId });
-        databaseContext.Devices.Add(new Device { DeviceToken = CreateHash(), UserId = userId });
+        databaseContext.UserSessions.Add(new UserSession { CreatedAt = Now, Id = CreateHash(), LastActivityAt = Now, UserId = userId });
+        databaseContext.Devices.Add(new Device { DeviceToken = CreateHash(), UserId = userId, LastUsedAt = Now });
         databaseContext.EmailTokens.Add(new EmailToken { Type = EmailTokenType.PasswordRecovery, TokenHash = CreateHash(), ExpiresAt = Now.AddMinutes(30), UserId = userId });
         databaseContext.BackupCodes.Add(new BackupCode { CodeHash = "empreinte-de-code-de-test", UserId = userId });
         databaseContext.EmailRequests.Add(EmailRequest.ForNewDevice(userId, IpAddress, Now));

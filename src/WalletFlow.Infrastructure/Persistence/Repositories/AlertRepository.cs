@@ -18,39 +18,41 @@ public class AlertRepository : IAlertRepository
     }
 
     // Donne les 10 types d'alerte, que le script SQL a remplis.
-    public async Task<List<AlertType>> FindTypesAsync()
+    public async Task<List<AlertType>> FindTypesAsync(CancellationToken cancellationToken = default)
     {
-        return await databaseContext.AlertTypes.AsNoTracking().ToListAsync();
+        return await databaseContext.AlertTypes.AsNoTracking().ToListAsync(cancellationToken);
     }
 
     // Donne les choix enregistrés de l'utilisateur, toujours lus en base.
-    public async Task<List<AlertPreference>> FindPreferencesAsync(Guid userId)
+    public async Task<List<AlertPreference>> FindPreferencesAsync(Guid userId, CancellationToken cancellationToken = default)
     {
         return await databaseContext.AlertPreferences
             .AsNoTracking()
             .Where(preference => preference.UserId == userId)
-            .ToListAsync();
+            .ToListAsync(cancellationToken);
     }
 
     // Cherche le choix de l'utilisateur pour ce type d'alerte, par la clé primaire de parametrer.
-    public async Task<AlertPreference?> FindPreferenceAsync(Guid userId, AlertKind kind)
+    public async Task<AlertPreference?> FindPreferenceAsync(Guid userId, AlertKind kind, CancellationToken cancellationToken = default)
     {
         return await databaseContext.AlertPreferences.SingleOrDefaultAsync(preference =>
             preference.UserId == userId
-            && preference.Kind == kind);
+            && preference.Kind == kind,
+            cancellationToken);
     }
 
     // Un type est activé tant qu'aucun choix enregistré ne le désactive.
-    public async Task<bool> IsEnabledAsync(Guid userId, AlertKind kind)
+    public async Task<bool> IsEnabledAsync(Guid userId, AlertKind kind, CancellationToken cancellationToken = default)
     {
         return !await databaseContext.AlertPreferences.AnyAsync(preference =>
             preference.UserId == userId
             && preference.Kind == kind
-            && !preference.IsEnabled);
+            && !preference.IsEnabled,
+            cancellationToken);
     }
 
     // Donne les alertes de budget de l'utilisateur pour ce mois, par l'index ix_alerte_utilisateur.
-    public async Task<List<Alert>> FindBudgetAlertsAsync(Guid userId, DateOnly month)
+    public async Task<List<Alert>> FindBudgetAlertsAsync(Guid userId, DateOnly month, CancellationToken cancellationToken = default)
     {
         return await databaseContext.Alerts
             .AsNoTracking()
@@ -58,28 +60,30 @@ public class AlertRepository : IAlertRepository
                 alert.UserId == userId
                 && alert.Kind == AlertKind.BudgetReached
                 && alert.Month == month)
-            .ToListAsync();
+            .ToListAsync(cancellationToken);
     }
 
     // Cherche l'alerte d'objectif du sac, par l'index ix_alerte_sac.
-    public async Task<Alert?> FindBagAlertAsync(Guid bagId)
+    public async Task<Alert?> FindBagAlertAsync(Guid bagId, CancellationToken cancellationToken = default)
     {
         return await databaseContext.Alerts.SingleOrDefaultAsync(alert =>
             alert.BagId == bagId
-            && alert.Kind == AlertKind.BagGoalReached);
+            && alert.Kind == AlertKind.BagGoalReached,
+            cancellationToken);
     }
 
     // Cherche l'alerte d'autorisation de la connexion, par l'index ix_alerte_connexion.
-    public async Task<Alert?> FindConnectionAlertAsync(Guid connectionId)
+    public async Task<Alert?> FindConnectionAlertAsync(Guid connectionId, CancellationToken cancellationToken = default)
     {
         return await databaseContext.Alerts.SingleOrDefaultAsync(alert =>
             alert.ConnectionId == connectionId
-            && alert.Kind == AlertKind.BankAuthorizationToRenew);
+            && alert.Kind == AlertKind.BankAuthorizationToRenew,
+            cancellationToken);
     }
 
     // Cherche en SQL les connexions à prévenir : une autorisation qui finit avant la limite, sans alerte, et sans choix
     // de l'utilisateur qui coupe cette alerte.
-    public async Task<List<Guid>> FindConnectionsToWarnAsync(DateTime authorizationEndLimit)
+    public async Task<List<Guid>> FindConnectionsToWarnAsync(DateTime authorizationEndLimit, CancellationToken cancellationToken = default)
     {
         return await databaseContext.BankConnections
             .AsNoTracking()
@@ -94,14 +98,14 @@ public class AlertRepository : IAlertRepository
                     && preference.Kind == AlertKind.BankAuthorizationToRenew
                     && !preference.IsEnabled))
             .Select(connection => connection.Id)
-            .ToListAsync();
+            .ToListAsync(cancellationToken);
     }
 
     // Lit l'alerte, puis le nom de ce qu'elle vise. Si la catégorie, le sac ou la connexion vient de disparaître,
     // l'alerte est partie avec (ON DELETE CASCADE) : il n'y a plus rien à envoyer.
-    public async Task<AlertEmailContent?> ReadEmailContentAsync(Guid alertId)
+    public async Task<AlertEmailContent?> ReadEmailContentAsync(Guid alertId, CancellationToken cancellationToken = default)
     {
-        var alert = await databaseContext.Alerts.AsNoTracking().SingleOrDefaultAsync(saved => saved.Id == alertId);
+        var alert = await databaseContext.Alerts.AsNoTracking().SingleOrDefaultAsync(saved => saved.Id == alertId, cancellationToken);
 
         if (alert == null)
         {
@@ -117,7 +121,7 @@ public class AlertRepository : IAlertRepository
                 .AsNoTracking()
                 .Where(category => category.Id == categoryId)
                 .Select(category => category.Name)
-                .SingleOrDefaultAsync();
+                .SingleOrDefaultAsync(cancellationToken);
 
             return categoryName == null
                 ? null
@@ -135,7 +139,7 @@ public class AlertRepository : IAlertRepository
                 .AsNoTracking()
                 .Where(bag => bag.Id == bagId)
                 .Select(bag => bag.Name)
-                .SingleOrDefaultAsync();
+                .SingleOrDefaultAsync(cancellationToken);
 
             return bagName == null ? null : new AlertEmailContent.BagGoalReached { BagName = bagName };
         }
@@ -146,7 +150,7 @@ public class AlertRepository : IAlertRepository
                 .AsNoTracking()
                 .Where(saved => saved.Id == connectionId)
                 .Select(saved => new { saved.BankName, saved.AuthorizationExpiresAt })
-                .SingleOrDefaultAsync();
+                .SingleOrDefaultAsync(cancellationToken);
 
             return connection == null
                 ? null
@@ -181,12 +185,12 @@ public class AlertRepository : IAlertRepository
     // Une seule instruction. Seules les alertes de budget et de suggestion ont un mois : la base le garantit
     // (ck_alerte_contenu), et une alerte de sac ou de connexion n'est jamais touchée. Cette écriture est immédiate :
     // elle refuse de partir si des changements attendent l'unité de travail.
-    public async Task<int> DeleteMonthAlertsBeforeAsync(DateOnly firstKeptMonth)
+    public async Task<int> DeleteMonthAlertsBeforeAsync(DateOnly firstKeptMonth, CancellationToken cancellationToken = default)
     {
         databaseContext.ThrowIfChangesArePending();
 
         return await databaseContext.Alerts
             .Where(alert => alert.Month < firstKeptMonth)
-            .ExecuteDeleteAsync();
+            .ExecuteDeleteAsync(cancellationToken);
     }
 }

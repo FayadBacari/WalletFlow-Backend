@@ -32,36 +32,37 @@ public class BankAuthorizationAlertService
     }
 
     // Donne les connexions dont l'utilisateur doit être prévenu maintenant.
-    public async Task<List<Guid>> FindConnectionsToWarnAsync()
+    public async Task<List<Guid>> FindConnectionsToWarnAsync(CancellationToken cancellationToken = default)
     {
         var now = clock.GetUtcNow().UtcDateTime;
 
-        return await alertRepository.FindConnectionsToWarnAsync(now + BankConnectionRules.RenewalWarningDelay);
+        return await alertRepository.FindConnectionsToWarnAsync(now + BankConnectionRules.RenewalWarningDelay, cancellationToken);
     }
 
     // Prévient l'utilisateur de cette connexion si son autorisation est toujours à renouveler. Renvoie vrai si l'alerte part.
-    public async Task<bool> WarnAsync(Guid connectionId)
+    public async Task<bool> WarnAsync(Guid connectionId, CancellationToken cancellationToken = default)
     {
         return await savingService.SaveWithRetriesAsync(
-            () => PrepareWarningAsync(connectionId, clock.GetUtcNow().UtcDateTime),
-            false);
+            () => PrepareWarningAsync(connectionId, clock.GetUtcNow().UtcDateTime, cancellationToken),
+            false,
+            cancellationToken);
     }
 
     // Un passage. La connexion est réécrite avec l'alerte, en vérifiant sa version : un renouvellement enregistré entre-temps
     // fait échouer cet enregistrement, et le passage suivant trouve la nouvelle date de fin. Dans l'autre sens, l'alerte
     // enregistrée d'abord fait échouer le renouvellement, qui relit tout et l'efface.
-    private async Task<PreparedChanges<bool>> PrepareWarningAsync(Guid connectionId, DateTime now)
+    private async Task<PreparedChanges<bool>> PrepareWarningAsync(Guid connectionId, DateTime now, CancellationToken cancellationToken = default)
     {
-        var connection = await connectionRepository.FindConnectionByIdAsync(connectionId);
+        var connection = await connectionRepository.FindConnectionByIdAsync(connectionId, cancellationToken);
 
         if (connection == null
             || !AlertRules.IsAuthorizationToRenew(connection.AuthorizationExpiresAt, now)
-            || await alertRepository.FindConnectionAlertAsync(connectionId) != null)
+            || await alertRepository.FindConnectionAlertAsync(connectionId, cancellationToken) != null)
         {
             return PreparedChanges<bool>.NothingToSave(false);
         }
 
-        if (!await alertPreparation.TryPrepareAsync(Alert.ForBankAuthorization(connection.UserId, connection.Id, now)))
+        if (!await alertPreparation.TryPrepareAsync(Alert.ForBankAuthorization(connection.UserId, connection.Id, now), cancellationToken))
         {
             return PreparedChanges<bool>.NothingToSave(false);
         }

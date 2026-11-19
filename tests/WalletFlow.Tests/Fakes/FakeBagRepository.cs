@@ -66,7 +66,7 @@ public class FakeBagRepository : IBagRepository, ITransactionalFakeRepository
     }
 
     // Donne les sacs gardés pour cet utilisateur.
-    public Task<List<Bag>> FindAllAsync(Guid userId)
+    public Task<List<Bag>> FindAllAsync(Guid userId, CancellationToken cancellationToken = default)
     {
         lock (pendingChangesLock)
         {
@@ -82,7 +82,7 @@ public class FakeBagRepository : IBagRepository, ITransactionalFakeRepository
     }
 
     // Cherche le sac parmi ceux de l'utilisateur.
-    public Task<Bag?> FindAsync(Guid userId, Guid bagId)
+    public Task<Bag?> FindAsync(Guid userId, Guid bagId, CancellationToken cancellationToken = default)
     {
         lock (pendingChangesLock)
         {
@@ -98,7 +98,7 @@ public class FakeBagRepository : IBagRepository, ITransactionalFakeRepository
     }
 
     // Compte les sacs gardés pour cet utilisateur, puis laisse passer l'autre requête simulée s'il y en a une.
-    public Task<int> CountAsync(Guid userId)
+    public Task<int> CountAsync(Guid userId, CancellationToken cancellationToken = default)
     {
         lock (pendingChangesLock)
         {
@@ -117,7 +117,7 @@ public class FakeBagRepository : IBagRepository, ITransactionalFakeRepository
     }
 
     // Calcule le solde de chaque sac de l'utilisateur à partir des mouvements gardés.
-    public Task<Dictionary<Guid, long>> SumBalancesAsync(Guid userId)
+    public Task<Dictionary<Guid, long>> SumBalancesAsync(Guid userId, CancellationToken cancellationToken = default)
     {
         lock (pendingChangesLock)
         {
@@ -141,7 +141,7 @@ public class FakeBagRepository : IBagRepository, ITransactionalFakeRepository
     }
 
     // Compte les mouvements gardés depuis cette date dont un côté est un sac de l'utilisateur.
-    public Task<int> CountMovementsSinceAsync(Guid userId, DateTime since)
+    public Task<int> CountMovementsSinceAsync(Guid userId, DateTime since, CancellationToken cancellationToken = default)
     {
         lock (pendingChangesLock)
         {
@@ -155,7 +155,7 @@ public class FakeBagRepository : IBagRepository, ITransactionalFakeRepository
     }
 
     // Donne la page demandée de l'historique, comme la vraie base : les plus récents d'abord, puis par identifiant.
-    public Task<BagHistoryPage> FindHistoryAsync(Guid userId, Guid bagId, int page, int pageSize)
+    public Task<BagHistoryPage> FindHistoryAsync(Guid userId, Guid bagId, int page, int pageSize, CancellationToken cancellationToken = default)
     {
         lock (pendingChangesLock)
         {
@@ -185,7 +185,7 @@ public class FakeBagRepository : IBagRepository, ITransactionalFakeRepository
     }
 
     // Cherche le compte gardé, et retient la version de sa ligne au moment de cette lecture.
-    public Task<User?> FindUserAsync(Guid userId)
+    public Task<User?> FindUserAsync(Guid userId, CancellationToken cancellationToken = default)
     {
         lock (pendingChangesLock)
         {

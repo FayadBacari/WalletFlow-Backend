@@ -4,6 +4,9 @@ namespace WalletFlow.Application.Configuration;
 // Ces liens pointent uniquement vers le domaine de WalletFlow, en HTTPS (SS §9).
 public class PublicWebsiteSettings
 {
+    // La page du site où écrire au support.
+    public const string SupportPagePath = "/support";
+
     public string PublicWebsiteAddress { get; }
 
     // Refuse une adresse absente ou qui n'est pas en HTTPS.
@@ -26,6 +29,12 @@ public class PublicWebsiteSettings
     public string BuildPageAddress(string pagePath)
     {
         return PublicWebsiteAddress + pagePath;
+    }
+
+    // Donne l'adresse de la page où écrire au support : les e-mails de sécurité et du support y renvoient (SS §9).
+    public string BuildSupportPageAddress()
+    {
+        return BuildPageAddress(SupportPagePath);
     }
 
     // Construit un lien vers une page du site, qui demande une action avant de l'accomplir (SS §2).

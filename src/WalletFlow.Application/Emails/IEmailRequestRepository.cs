@@ -11,11 +11,11 @@ public interface IEmailRequestRepository
     void PrepareRequest(EmailRequest request);
 
     // Donne l'identifiant de la demande dont l'heure d'essai est passée depuis le plus longtemps, ou null s'il n'y en a pas.
-    Task<Guid?> FindNextDueIdAsync(DateTime now);
+    Task<Guid?> FindNextDueIdAsync(DateTime now, CancellationToken cancellationToken = default);
 
     // Cherche une demande par son identifiant. Renvoie null si elle n'est plus dans la file.
     // La demande lue est suivie : ses essais ratés seront enregistrés.
-    Task<EmailRequest?> FindAsync(Guid requestId);
+    Task<EmailRequest?> FindAsync(Guid requestId, CancellationToken cancellationToken = default);
 
     // Prépare la sortie d'une demande de la file.
     void PrepareRemoval(EmailRequest request);

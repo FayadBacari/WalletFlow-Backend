@@ -18,39 +18,42 @@ public class CategoryRepository : ICategoryRepository
     }
 
     // Donne toutes les catégories de l'utilisateur.
-    public async Task<List<Category>> FindAllAsync(Guid userId)
+    public async Task<List<Category>> FindAllAsync(Guid userId, CancellationToken cancellationToken = default)
     {
         return await databaseContext.Categories
             .Where(category => category.UserId == userId)
-            .ToListAsync();
+            .ToListAsync(cancellationToken);
     }
 
     // Cherche la catégorie par son identifiant et par son utilisateur : celle d'un autre n'est jamais trouvée.
-    public async Task<Category?> FindAsync(Guid userId, Guid categoryId)
+    public async Task<Category?> FindAsync(Guid userId, Guid categoryId, CancellationToken cancellationToken = default)
     {
         return await databaseContext.Categories.SingleOrDefaultAsync(category =>
             category.Id == categoryId
-            && category.UserId == userId);
+            && category.UserId == userId,
+            cancellationToken);
     }
 
     // Cherche la catégorie « Autres » de l'utilisateur : l'index ux_categorie_autres garantit qu'il n'y en a qu'une.
-    public async Task<Category?> FindOtherCategoryAsync(Guid userId)
+    public async Task<Category?> FindOtherCategoryAsync(Guid userId, CancellationToken cancellationToken = default)
     {
         return await databaseContext.Categories.SingleOrDefaultAsync(category =>
             category.UserId == userId
-            && category.IsOtherCategory);
+            && category.IsOtherCategory,
+            cancellationToken);
     }
 
     // Compte les catégories de l'utilisateur.
-    public async Task<int> CountAsync(Guid userId)
+    public async Task<int> CountAsync(Guid userId, CancellationToken cancellationToken = default)
     {
         return await databaseContext.Categories.CountAsync(category =>
-            category.UserId == userId);
+            category.UserId == userId,
+            cancellationToken);
     }
 
     // Compare avec lower() de PostgreSQL, comme l'index unique ux_categorie_nom : .NET ne met pas toujours les mêmes lettres
     // en minuscules que la base. La requête reste paramétrée (SS §5) : chaque valeur part comme un paramètre, jamais collée au texte.
-    public async Task<bool> IsNameUsedAsync(Guid userId, string name, Guid? renamedCategoryId)
+    public async Task<bool> IsNameUsedAsync(Guid userId, string name, Guid? renamedCategoryId, CancellationToken cancellationToken = default)
     {
         var excludedCategoryId = renamedCategoryId ?? Guid.Empty;
 
@@ -62,7 +65,7 @@ public class CategoryRepository : ICategoryRepository
                       AND id_categorie <> {excludedCategoryId}
                       AND lower(nom_categorie) = lower({name})) AS "Value"
                 """)
-            .SingleAsync();
+            .SingleAsync(cancellationToken);
     }
 
     // Garde de côté la nouvelle catégorie : elle ne sera écrite qu'avec les autres changements.
@@ -81,14 +84,14 @@ public class CategoryRepository : ICategoryRepository
 
     // Les deux écritures forment une seule transaction SQL. Cette écriture est immédiate : elle refuse de partir si des changements
     // attendent l'unité de travail, pour ne jamais les emporter avec elle.
-    public async Task<bool> DeleteAsync(Guid userId, Guid categoryId)
+    public async Task<bool> DeleteAsync(Guid userId, Guid categoryId, CancellationToken cancellationToken = default)
     {
         databaseContext.ThrowIfChangesArePending();
 
         // Une transaction déjà ouverte par l'appelant couvre les deux écritures : EF Core refuse d'en ouvrir une seconde.
         if (databaseContext.Database.CurrentTransaction != null)
         {
-            return await DeleteThenMoveTransactionsAsync(userId, categoryId);
+            return await DeleteThenMoveTransactionsAsync(userId, categoryId, cancellationToken);
         }
 
         // Un interblocage avec une autre requête fait annuler toute la transaction par PostgreSQL : rien n'est supprimé ni déplacé,
@@ -96,9 +99,9 @@ public class CategoryRepository : ICategoryRepository
         // d'un appelant, au-dessus, l'interblocage annule aussi ses autres écritures : lui seul peut la rejouer.
         try
         {
-            await using var transaction = await databaseContext.Database.BeginTransactionAsync();
-            var isDeleted = await DeleteThenMoveTransactionsAsync(userId, categoryId);
-            await transaction.CommitAsync();
+            await using var transaction = await databaseContext.Database.BeginTransactionAsync(cancellationToken);
+            var isDeleted = await DeleteThenMoveTransactionsAsync(userId, categoryId, cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
 
             return isDeleted;
         }
@@ -114,14 +117,14 @@ public class CategoryRepository : ICategoryRepository
     // Les règles de la catégorie disparaissent avec elle (ON DELETE CASCADE), ses suggestions restent sans catégorie (SET NULL).
     // Ses suggestions sans réponse sont ensuite retirées (GR Sacs) : celles d'un dépassement encore proposées et sans catégorie.
     // Ses suggestions acceptées restent, pour que les économies déjà réalisées restent comptées.
-    private async Task<bool> DeleteThenMoveTransactionsAsync(Guid userId, Guid categoryId)
+    private async Task<bool> DeleteThenMoveTransactionsAsync(Guid userId, Guid categoryId, CancellationToken cancellationToken = default)
     {
         var deletedCount = await databaseContext.Categories
             .Where(category =>
                 category.Id == categoryId
                 && category.UserId == userId
                 && !category.IsOtherCategory)
-            .ExecuteDeleteAsync();
+            .ExecuteDeleteAsync(cancellationToken);
 
         if (deletedCount == 0)
         {
@@ -131,11 +134,11 @@ public class CategoryRepository : ICategoryRepository
         var otherCategoryId = await databaseContext.Categories
             .Where(category => category.UserId == userId && category.IsOtherCategory)
             .Select(category => category.Id)
-            .SingleAsync();
+            .SingleAsync(cancellationToken);
 
         await databaseContext.BankTransactions
             .Where(transaction => transaction.CategoryId == categoryId)
-            .ExecuteUpdateAsync(setters => setters.SetProperty(transaction => transaction.CategoryId, otherCategoryId));
+            .ExecuteUpdateAsync(setters => setters.SetProperty(transaction => transaction.CategoryId, otherCategoryId), cancellationToken);
 
         await databaseContext.SavingsSuggestions
             .Where(suggestion =>
@@ -143,7 +146,7 @@ public class CategoryRepository : ICategoryRepository
                 && suggestion.Rule == SuggestionRule.CategoryOverrun
                 && suggestion.Status == SuggestionStatus.Proposed
                 && suggestion.CategoryId == null)
-            .ExecuteDeleteAsync();
+            .ExecuteDeleteAsync(cancellationToken);
 
         return true;
     }

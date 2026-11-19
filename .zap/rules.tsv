@@ -1,0 +1,4 @@
+# Règles d'OWASP ZAP pour la CI (voir l'étape « Attaquer l'API en marche » de .github/workflows/ci.yml).
+# Une règle absente de ce fichier compte comme WARN : son alerte arrête la vérification. Chaque ligne change le traitement d'une
+# règle : son numéro, IGNORE, INFO, WARN ou FAIL, puis sa raison, séparés par des tabulations. Une alerte ne s'écarte qu'après
+# avoir vérifié qu'elle ne signale pas une vraie faille, et toujours avec sa raison.

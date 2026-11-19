@@ -30,7 +30,9 @@ public class EmailChangeController : ControllerBase
     [HttpPost("email")]
     [EnableRateLimiting(RateLimitingConfiguration.EmailChangePolicy)]
     [RequestSizeLimit(RequestSizeConfiguration.MaximumAccountRequestBytes)]
-    public async Task<IActionResult> RequestEmailChange(ChangeEmailRequest request)
+    [ProducesResponseType<MessageResponse>(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status503ServiceUnavailable, Description = OpenApiConfiguration.ServerBusyDescription)]
+    public async Task<IActionResult> RequestEmailChange(ChangeEmailRequest request, CancellationToken cancellationToken = default)
     {
         var result = await emailChangeRequestService.RequestAsync(new EmailChangeAttempt
         {
@@ -39,7 +41,8 @@ public class EmailChangeController : ControllerBase
             NewEmail = request.NewEmail,
             Code = request.Code,
             IpAddress = HttpContext.Connection.RemoteIpAddress
-        });
+        },
+        cancellationToken);
 
         if (result is EmailChangeRequestResult.RequestAccepted)
         {
@@ -48,7 +51,7 @@ public class EmailChangeController : ControllerBase
 
         if (result is EmailChangeRequestResult.TooManyRequests)
         {
-            return StatusCode(StatusCodes.Status429TooManyRequests);
+            return this.AnswerTooManyRequests(RetryDelays.PerEmailAddress);
         }
 
         return AnswerRefusal(result);

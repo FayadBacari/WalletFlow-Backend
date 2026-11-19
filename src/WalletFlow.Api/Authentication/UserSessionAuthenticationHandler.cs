@@ -39,7 +39,7 @@ public class UserSessionAuthenticationHandler : AuthenticationHandler<Authentica
             return AuthenticateResult.NoResult();
         }
 
-        var ownerId = await sessionService.FindOwnerAndRecordActivityAsync(sessionToken);
+        var ownerId = await sessionService.FindOwnerAndRecordActivityAsync(sessionToken, Context.RequestAborted);
         if (ownerId == null)
         {
             return AuthenticateResult.NoResult();

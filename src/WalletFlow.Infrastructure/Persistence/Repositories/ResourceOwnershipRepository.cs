@@ -18,7 +18,7 @@ public class ResourceOwnershipRepository : IResourceOwnershipRepository
 
     // Lit l'utilisateur de la ressource. Un compte bancaire et une opération appartiennent à l'utilisateur de leur connexion.
     // La demande de support d'un visiteur n'a pas d'utilisateur : personne d'autre ne la possède.
-    public async Task<Guid?> FindOwnerAsync(OwnedResource resource, Guid resourceId)
+    public async Task<Guid?> FindOwnerAsync(OwnedResource resource, Guid resourceId, CancellationToken cancellationToken = default)
     {
         switch (resource)
         {
@@ -26,27 +26,27 @@ public class ResourceOwnershipRepository : IResourceOwnershipRepository
                 return await databaseContext.Categories.AsNoTracking()
                     .Where(category => category.Id == resourceId)
                     .Select(category => (Guid?)category.UserId)
-                    .SingleOrDefaultAsync();
+                    .SingleOrDefaultAsync(cancellationToken);
             case OwnedResource.Suggestion:
                 return await databaseContext.SavingsSuggestions.AsNoTracking()
                     .Where(suggestion => suggestion.Id == resourceId)
                     .Select(suggestion => (Guid?)suggestion.UserId)
-                    .SingleOrDefaultAsync();
+                    .SingleOrDefaultAsync(cancellationToken);
             case OwnedResource.SupportRequest:
                 return await databaseContext.SupportRequests.AsNoTracking()
                     .Where(request => request.Id == resourceId)
                     .Select(request => request.UserId)
-                    .SingleOrDefaultAsync();
+                    .SingleOrDefaultAsync(cancellationToken);
             case OwnedResource.Bag:
                 return await databaseContext.Bags.AsNoTracking()
                     .Where(bag => bag.Id == resourceId)
                     .Select(bag => (Guid?)bag.UserId)
-                    .SingleOrDefaultAsync();
+                    .SingleOrDefaultAsync(cancellationToken);
             case OwnedResource.BankConnection:
                 return await databaseContext.BankConnections.AsNoTracking()
                     .Where(connection => connection.Id == resourceId)
                     .Select(connection => (Guid?)connection.UserId)
-                    .SingleOrDefaultAsync();
+                    .SingleOrDefaultAsync(cancellationToken);
             case OwnedResource.BankAccount:
                 return await databaseContext.BankAccounts.AsNoTracking()
                     .Where(account => account.Id == resourceId)
@@ -55,7 +55,7 @@ public class ResourceOwnershipRepository : IResourceOwnershipRepository
                         account => account.BankConnectionId,
                         connection => connection.Id,
                         (account, connection) => (Guid?)connection.UserId)
-                    .SingleOrDefaultAsync();
+                    .SingleOrDefaultAsync(cancellationToken);
             default:
                 return await databaseContext.BankTransactions.AsNoTracking()
                     .Where(transaction => transaction.Id == resourceId)
@@ -69,7 +69,7 @@ public class ResourceOwnershipRepository : IResourceOwnershipRepository
                         connectionId => connectionId,
                         connection => connection.Id,
                         (connectionId, connection) => (Guid?)connection.UserId)
-                    .SingleOrDefaultAsync();
+                    .SingleOrDefaultAsync(cancellationToken);
         }
     }
 }

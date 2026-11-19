@@ -24,10 +24,10 @@ public class AlertSettingsController : ControllerBase
     // GET api/alert-settings : le canal et les 10 types d'alerte, avec le choix de l'utilisateur. Ce sont des données
     // personnelles : aucun navigateur ni intermédiaire ne doit les garder.
     [HttpGet]
-    [ResponseCache(NoStore = true, Location = ResponseCacheLocation.None)]
-    public async Task<IActionResult> Read()
+    [ProducesResponseType<AlertSettingsResponse>(StatusCodes.Status200OK)]
+    public async Task<IActionResult> Read(CancellationToken cancellationToken = default)
     {
-        var settings = await settingsService.ReadAsync(SessionClaims.ReadUserId(User));
+        var settings = await settingsService.ReadAsync(SessionClaims.ReadUserId(User), cancellationToken);
 
         if (settings == null)
         {
@@ -40,7 +40,9 @@ public class AlertSettingsController : ControllerBase
     // PUT api/alert-settings/channel : garde le canal choisi. Les alertes partent par e-mail tant que l'application mobile n'existe pas.
     [HttpPut("channel")]
     [RequestSizeLimit(RequestSizeConfiguration.MaximumAlertSettingsRequestBytes)]
-    public async Task<IActionResult> ChangeChannel(AlertChannelRequest request)
+    [ProducesResponseType<AlertSettingsResponse>(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    public async Task<IActionResult> ChangeChannel(AlertChannelRequest request, CancellationToken cancellationToken = default)
     {
         if (!WebsiteNames.TryReadNotificationChannel(request.Channel, out var channel))
         {
@@ -48,21 +50,24 @@ public class AlertSettingsController : ControllerBase
             return ValidationProblem();
         }
 
-        return Answer(await settingsService.ChangeChannelAsync(SessionClaims.ReadUserId(User), channel));
+        return Answer(await settingsService.ChangeChannelAsync(SessionClaims.ReadUserId(User), channel, cancellationToken));
     }
 
     // PUT api/alert-settings/alerts/{type} : active ou désactive ce type d'alerte. Un type inconnu répond comme une adresse
     // qui n'existe pas ; une alerte de sécurité ne se désactive pas.
     [HttpPut("alerts/{type}")]
     [RequestSizeLimit(RequestSizeConfiguration.MaximumAlertSettingsRequestBytes)]
-    public async Task<IActionResult> Switch(string type, AlertSwitchRequest request)
+    [ProducesResponseType<AlertSettingsResponse>(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    public async Task<IActionResult> Switch(string type, AlertSwitchRequest request, CancellationToken cancellationToken = default)
     {
         if (!WebsiteNames.TryReadAlertKind(type, out var kind))
         {
             return Problem(statusCode: StatusCodes.Status404NotFound);
         }
 
-        return Answer(await settingsService.SwitchAsync(SessionClaims.ReadUserId(User), kind, request.IsEnabled));
+        return Answer(await settingsService.SwitchAsync(SessionClaims.ReadUserId(User), kind, request.IsEnabled, cancellationToken));
     }
 
     // Donne la réponse d'un changement de réglage.

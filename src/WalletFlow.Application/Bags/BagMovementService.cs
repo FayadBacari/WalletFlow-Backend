@@ -34,7 +34,7 @@ public class BagMovementService
 
     // Déplace ce montant. Un côté null est l'argent disponible : au moins un des deux côtés est un sac,
     // et les deux côtés sont différents (DD §7.2).
-    public async Task<BagMovementResult> MoveAsync(Guid userId, Guid? sourceBagId, Guid? destinationBagId, int amountInCents)
+    public async Task<BagMovementResult> MoveAsync(Guid userId, Guid? sourceBagId, Guid? destinationBagId, int amountInCents, CancellationToken cancellationToken = default)
     {
         if (sourceBagId == null && destinationBagId == null)
         {
@@ -52,8 +52,9 @@ public class BagMovementService
         }
 
         return await savingService.SaveWithRetriesAsync(
-            () => PrepareMovementAsync(userId, sourceBagId, destinationBagId, amountInCents),
-            new BagMovementResult.NotSaved());
+            () => PrepareMovementAsync(userId, sourceBagId, destinationBagId, amountInCents, cancellationToken),
+            new BagMovementResult.NotSaved(),
+            cancellationToken);
     }
 
     // Un passage. La ligne de l'utilisateur est lue d'abord, puis réécrite avec le mouvement : si un autre déplacement
@@ -63,9 +64,10 @@ public class BagMovementService
         Guid userId,
         Guid? sourceBagId,
         Guid? destinationBagId,
-        int amountInCents)
+        int amountInCents,
+        CancellationToken cancellationToken = default)
     {
-        var user = await bagRepository.FindUserAsync(userId);
+        var user = await bagRepository.FindUserAsync(userId, cancellationToken);
 
         if (user == null)
         {
@@ -73,7 +75,7 @@ public class BagMovementService
         }
 
         var now = clock.GetUtcNow().UtcDateTime;
-        var problem = await movementChecks.FindProblemAsync(userId, sourceBagId, destinationBagId, amountInCents, now);
+        var problem = await movementChecks.FindProblemAsync(userId, sourceBagId, destinationBagId, amountInCents, now, cancellationToken);
 
         if (problem != null)
         {
@@ -92,7 +94,7 @@ public class BagMovementService
 
         if (destinationBagId is Guid arrivalBagId)
         {
-            await goalAlerts.PrepareAfterArrivalAsync(userId, arrivalBagId, amountInCents, now);
+            await goalAlerts.PrepareAfterArrivalAsync(userId, arrivalBagId, amountInCents, now, cancellationToken);
         }
 
         bagRepository.PrepareUserCheck(user);

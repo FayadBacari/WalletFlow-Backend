@@ -39,18 +39,18 @@ public class BankBalanceUpdateService
     }
 
     // Met à jour toutes les connexions de l'utilisateur, qui est là : une fois par minute au plus (SS §6).
-    public async Task<BankUpdateResult> UpdateForUserAsync(Guid userId, UserPresence presence)
+    public async Task<BankUpdateResult> UpdateForUserAsync(Guid userId, UserPresence presence, CancellationToken cancellationToken = default)
     {
         if (!updateLimiter.TryCountUpdate(userId))
         {
             return new BankUpdateResult.TooManyUpdates();
         }
 
-        var connections = await connectionRepository.FindConnectionsAsync(userId);
+        var connections = await connectionRepository.FindConnectionsAsync(userId, cancellationToken);
 
         foreach (var connection in connections)
         {
-            await UpdateConnectionAsync(connection.Id, presence);
+            await UpdateConnectionAsync(connection.Id, presence, cancellationToken);
         }
 
         return new BankUpdateResult.Updated();
@@ -58,9 +58,9 @@ public class BankBalanceUpdateService
 
     // Met à jour une connexion : lit sa session, ses soldes et ses opérations chez le prestataire, puis enregistre le résultat.
     // Sans l'utilisateur (presence null), la lecture compte dans les 4 lectures par jour de la banque.
-    public async Task UpdateConnectionAsync(Guid connectionId, UserPresence? presence)
+    public async Task UpdateConnectionAsync(Guid connectionId, UserPresence? presence, CancellationToken cancellationToken = default)
     {
-        var connection = await connectionRepository.FindConnectionByIdAsync(connectionId);
+        var connection = await connectionRepository.FindConnectionByIdAsync(connectionId, cancellationToken);
 
         if (connection == null || connection.Status == BankConnectionStatus.Expired)
         {
@@ -71,7 +71,7 @@ public class BankBalanceUpdateService
         var readSessionId = connection.ExternalConnectionId;
         var reading = connection.HasAuthorizationEnded(now)
             ? new BankReading(BankReadingOutcome.SessionEnded, new Dictionary<Guid, int>(), new Dictionary<Guid, List<ReceivedTransaction>>())
-            : await ReadBankAsync(connection, presence, UsersCalendar.FindToday(clock.GetUtcNow()));
+            : await ReadBankAsync(connection, presence, UsersCalendar.FindToday(clock.GetUtcNow()), cancellationToken);
 
         if (reading.Outcome == BankReadingOutcome.TryLater)
         {
@@ -79,25 +79,26 @@ public class BankBalanceUpdateService
         }
 
         var addedCount = await savingService.SaveWithRetriesAsync(
-            () => PrepareUpdateAsync(connectionId, readSessionId, reading, now),
-            0);
+            () => PrepareUpdateAsync(connectionId, readSessionId, reading, now, cancellationToken),
+            0,
+            cancellationToken);
 
         if (addedCount > 0)
         {
-            await budgetAlerts.CheckAsync(connection.UserId);
+            await budgetAlerts.CheckAsync(connection.UserId, cancellationToken);
         }
     }
 
     // Lit chez le prestataire le solde et les opérations de chaque compte gardé, retrouvé dans la session par son identifiant stable.
-    private async Task<BankReading> ReadBankAsync(BankConnection connection, UserPresence? presence, DateOnly today)
+    private async Task<BankReading> ReadBankAsync(BankConnection connection, UserPresence? presence, DateOnly today, CancellationToken cancellationToken = default)
     {
-        var storedAccounts = await connectionRepository.FindAccountsAsync(new List<Guid> { connection.Id });
+        var storedAccounts = await connectionRepository.FindAccountsAsync(new List<Guid> { connection.Id }, cancellationToken);
         var balances = new Dictionary<Guid, int>();
         var transactions = new Dictionary<Guid, List<ReceivedTransaction>>();
 
         try
         {
-            var sessionAccounts = await bankProvider.ReadSessionAccountsAsync(connection.ExternalConnectionId);
+            var sessionAccounts = await bankProvider.ReadSessionAccountsAsync(connection.ExternalConnectionId, cancellationToken);
 
             foreach (var storedAccount in storedAccounts)
             {
@@ -108,14 +109,14 @@ public class BankBalanceUpdateService
                     continue;
                 }
 
-                var balance = ProvidedBalanceChoice.Choose(await bankProvider.ReadBalancesAsync(sessionAccount.Uid, presence));
+                var balance = ProvidedBalanceChoice.Choose(await bankProvider.ReadBalancesAsync(sessionAccount.Uid, presence, cancellationToken));
 
                 if (balance != null)
                 {
                     balances[storedAccount.Id] = balance.Value;
                 }
 
-                var receivedTransactions = await ReadTransactionsAsync(storedAccount.Id, sessionAccount.Uid, presence, today);
+                var receivedTransactions = await ReadTransactionsAsync(storedAccount.Id, sessionAccount.Uid, presence, today, cancellationToken);
 
                 if (receivedTransactions != null)
                 {
@@ -142,13 +143,13 @@ public class BankBalanceUpdateService
     // Lit les opérations du compte depuis le jour choisi. Si la banque refuse ou ne répond pas pour les opérations,
     // le solde déjà lu est quand même enregistré : les opérations arriveront à la mise à jour suivante, qui repart
     // de la dernière opération gardée. Une session finie, elle, fait expirer toute la connexion.
-    private async Task<List<ReceivedTransaction>?> ReadTransactionsAsync(Guid accountId, string accountUid, UserPresence? presence, DateOnly today)
+    private async Task<List<ReceivedTransaction>?> ReadTransactionsAsync(Guid accountId, string accountUid, UserPresence? presence, DateOnly today, CancellationToken cancellationToken = default)
     {
-        var startDate = await transactionArrival.ChooseReadingStartAsync(accountId, today);
+        var startDate = await transactionArrival.ChooseReadingStartAsync(accountId, today, cancellationToken);
 
         try
         {
-            return TransactionReception.Receive(await bankProvider.ReadTransactionsAsync(accountUid, startDate, presence));
+            return TransactionReception.Receive(await bankProvider.ReadTransactionsAsync(accountUid, startDate, presence, cancellationToken));
         }
         catch (BankProviderException exception) when (exception.Failure != BankProviderFailure.SessionEnded)
         {
@@ -158,9 +159,9 @@ public class BankBalanceUpdateService
 
     // Un passage : relit la connexion, puis note ce que la lecture a donné. Une connexion supprimée ou renouvelée entre-temps
     // n'est pas touchée : ce qui a été lu appartenait à son ancienne session. Renvoie le nombre d'opérations nouvelles.
-    private async Task<PreparedChanges<int>> PrepareUpdateAsync(Guid connectionId, string readSessionId, BankReading reading, DateTime now)
+    private async Task<PreparedChanges<int>> PrepareUpdateAsync(Guid connectionId, string readSessionId, BankReading reading, DateTime now, CancellationToken cancellationToken = default)
     {
-        var connection = await connectionRepository.FindConnectionByIdAsync(connectionId);
+        var connection = await connectionRepository.FindConnectionByIdAsync(connectionId, cancellationToken);
 
         if (connection == null
             || connection.ExternalConnectionId != readSessionId
@@ -181,7 +182,7 @@ public class BankBalanceUpdateService
             return PreparedChanges<int>.SaveThenReturn(0);
         }
 
-        var accounts = await connectionRepository.FindAccountsAsync(new List<Guid> { connectionId });
+        var accounts = await connectionRepository.FindAccountsAsync(new List<Guid> { connectionId }, cancellationToken);
         var addedCount = 0;
 
         foreach (var account in accounts)
@@ -193,7 +194,7 @@ public class BankBalanceUpdateService
 
             if (reading.Transactions.TryGetValue(account.Id, out var receivedTransactions))
             {
-                addedCount = addedCount + await transactionArrival.PrepareNewTransactionsAsync(connection.UserId, account.Id, receivedTransactions);
+                addedCount = addedCount + await transactionArrival.PrepareNewTransactionsAsync(connection.UserId, account.Id, receivedTransactions, cancellationToken);
             }
         }
 

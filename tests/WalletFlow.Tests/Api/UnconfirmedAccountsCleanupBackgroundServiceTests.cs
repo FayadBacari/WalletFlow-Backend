@@ -25,6 +25,7 @@ public class UnconfirmedAccountsCleanupBackgroundServiceTests
         return new UnconfirmedAccountsCleanupBackgroundService(
             serviceProvider.GetRequiredService<IServiceScopeFactory>(),
             clock,
+            new BackgroundTaskHealth(),
             logger ?? NullLogger<UnconfirmedAccountsCleanupBackgroundService>.Instance);
     }
 
@@ -39,10 +40,10 @@ public class UnconfirmedAccountsCleanupBackgroundServiceTests
             accountRepository,
             new Logger<UnconfirmedAccountsCleanupBackgroundService>(loggerFactory));
 
-        await cleanupTask.RunCleanupAsync();
+        await cleanupTask.RunPassAsync();
 
         Assert.Contains(loggerProvider.Messages, message =>
-            message.StartsWith("Error") && message.Contains("a échoué"));
+            message.StartsWith("Error", StringComparison.Ordinal) && message.Contains("a échoué"));
     }
 
     [Fact]
@@ -51,7 +52,7 @@ public class UnconfirmedAccountsCleanupBackgroundServiceTests
         var accountRepository = new FakeUserAccountRepository();
         var cleanupTask = CreateCleanupTask(accountRepository);
 
-        await cleanupTask.RunCleanupAsync();
+        await cleanupTask.RunPassAsync();
 
         Assert.Single(accountRepository.CleanupDates);
     }
@@ -63,10 +64,10 @@ public class UnconfirmedAccountsCleanupBackgroundServiceTests
         var accountRepository = new FakeUserAccountRepository { FailsDuringCleanup = true };
         var cleanupTask = CreateCleanupTask(accountRepository);
 
-        await cleanupTask.RunCleanupAsync();
+        await cleanupTask.RunPassAsync();
 
         accountRepository.FailsDuringCleanup = false;
-        await cleanupTask.RunCleanupAsync();
+        await cleanupTask.RunPassAsync();
 
         Assert.Single(accountRepository.CleanupDates);
     }

@@ -16,7 +16,7 @@ public class MinimumAnswerDurationTests
         TimeSpan.FromMilliseconds(ApiFactoryWithMinimumAnswerDuration.MinimumMilliseconds - 5);
 
     // Une réponse, et le temps qu'elle a pris.
-    private class TimedResponse
+    private sealed class TimedResponse
     {
         public required HttpStatusCode StatusCode { get; init; }
         public required TimeSpan Duration { get; init; }

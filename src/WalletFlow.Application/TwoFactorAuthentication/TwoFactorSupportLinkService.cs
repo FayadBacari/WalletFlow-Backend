@@ -55,19 +55,21 @@ public class TwoFactorSupportLinkService
 
     // Compte d'abord l'essai, puis vérifie le mot de passe lu avec le lien. S'il est bon, désactive la double authentification,
     // puis ferme toutes les sessions du compte.
-    public async Task<TwoFactorSupportLinkResult> DeactivateAsync(string linkToken, string password, IPAddress? ipAddress)
+    public async Task<TwoFactorSupportLinkResult> DeactivateAsync(string linkToken, string password, IPAddress? ipAddress, CancellationToken cancellationToken = default)
     {
         var tokenHash = tokenGenerator.HashToken(linkToken);
+        // L'essai compte même si le client raccroche : il ne peut pas essayer plus de 5 mots de passe en abandonnant ses requêtes.
         var attempt = await savingService.SaveWithRetriesAsync(
-            () => PrepareTryAsync(tokenHash),
-            PasswordTry.Refused(new TwoFactorSupportLinkResult.LinkNoLongerValid()));
+            () => PrepareTryAsync(tokenHash, CancellationToken.None),
+            PasswordTry.Refused(new TwoFactorSupportLinkResult.LinkNoLongerValid()),
+            CancellationToken.None);
 
         if (attempt.Refusal != null)
         {
             return attempt.Refusal;
         }
 
-        if (!await passwordHasher.VerifyAsync(PasswordRules.Normalize(password), attempt.PasswordHash))
+        if (!await passwordHasher.VerifyAsync(PasswordRules.Normalize(password), attempt.PasswordHash, cancellationToken))
         {
             await securityJournal.SaveEventNowAsync(SecurityEventType.TwoFactorDeactivation, SecurityEventResult.Failure, attempt.AccountId, ipAddress);
 
@@ -75,8 +77,9 @@ public class TwoFactorSupportLinkService
         }
 
         var deactivated = await savingService.SaveWithRetriesAsync(
-            () => PrepareDeactivationAsync(tokenHash, attempt, ipAddress),
-            false);
+            () => PrepareDeactivationAsync(tokenHash, attempt, ipAddress, cancellationToken),
+            false,
+            cancellationToken);
 
         if (!deactivated)
         {
@@ -85,30 +88,30 @@ public class TwoFactorSupportLinkService
 
         // Après l'enregistrement, et pas pendant : une connexion en cours a soit déjà ouvert sa session, effacée ici, soit
         // trouvera la double authentification désactivée (SS §3).
-        await sessionRepository.DeleteAllForUserAsync(attempt.AccountId);
+        await sessionRepository.DeleteAllForUserAsync(attempt.AccountId, cancellationToken);
         return new TwoFactorSupportLinkResult.Deactivated();
     }
 
     // Un passage : lit le lien et son compte, vérifie le lien et la règle des 7 jours, puis compte l'essai. Le lien est réécrit
     // avec sa version : de deux essais simultanés, le second échoue, relit le lien, et compte après le premier.
-    private async Task<PreparedChanges<PasswordTry>> PrepareTryAsync(string tokenHash)
+    private async Task<PreparedChanges<PasswordTry>> PrepareTryAsync(string tokenHash, CancellationToken cancellationToken = default)
     {
         var now = clock.GetUtcNow().UtcDateTime;
-        var token = await accountRepository.FindTokenAsync(tokenHash, EmailTokenType.TwoFactorDeactivation);
+        var token = await accountRepository.FindTokenAsync(tokenHash, EmailTokenType.TwoFactorDeactivation, cancellationToken);
 
         if (token == null || !token.CanBeUsedAt(now) || !token.HasPasswordTriesLeft())
         {
             return PreparedChanges<PasswordTry>.NothingToSave(PasswordTry.Refused(new TwoFactorSupportLinkResult.LinkNoLongerValid()));
         }
 
-        var account = await accountRepository.FindByIdAsync(token.UserId);
+        var account = await accountRepository.FindByIdAsync(token.UserId, cancellationToken);
 
         if (account == null || !account.IsTwoFactorEnabled)
         {
             return PreparedChanges<PasswordTry>.NothingToSave(PasswordTry.Refused(new TwoFactorSupportLinkResult.LinkNoLongerValid()));
         }
 
-        if (!await IsPasswordOldEnoughAsync(account.Id, now))
+        if (!await IsPasswordOldEnoughAsync(account.Id, now, cancellationToken))
         {
             return PreparedChanges<PasswordTry>.NothingToSave(PasswordTry.Refused(new TwoFactorSupportLinkResult.PasswordChangedRecently()));
         }
@@ -127,24 +130,24 @@ public class TwoFactorSupportLinkService
     // le mot de passe vérifié est toujours le bon, la double authentification est toujours activée, et le mot de passe a toujours
     // au moins 7 jours. Puis prépare la désactivation, les codes de secours effacés, le lien utilisé, l'événement du journal et
     // l'alerte. Le 5e essai peut réussir : le lien n'a alors plus d'essai, mais il n'a pas encore servi.
-    private async Task<PreparedChanges<bool>> PrepareDeactivationAsync(string tokenHash, PasswordTry attempt, IPAddress? ipAddress)
+    private async Task<PreparedChanges<bool>> PrepareDeactivationAsync(string tokenHash, PasswordTry attempt, IPAddress? ipAddress, CancellationToken cancellationToken = default)
     {
         var now = clock.GetUtcNow().UtcDateTime;
-        var token = await accountRepository.FindTokenAsync(tokenHash, EmailTokenType.TwoFactorDeactivation);
-        var account = await accountRepository.FindByIdAsync(attempt.AccountId);
+        var token = await accountRepository.FindTokenAsync(tokenHash, EmailTokenType.TwoFactorDeactivation, cancellationToken);
+        var account = await accountRepository.FindByIdAsync(attempt.AccountId, cancellationToken);
 
         if (token == null
             || !token.CanBeUsedAt(now)
             || account == null
             || account.PasswordHash != attempt.PasswordHash
             || !account.IsTwoFactorEnabled
-            || !await IsPasswordOldEnoughAsync(account.Id, now))
+            || !await IsPasswordOldEnoughAsync(account.Id, now, cancellationToken))
         {
             return PreparedChanges<bool>.NothingToSave(false);
         }
 
         account.DeactivateTwoFactor();
-        await twoFactorRepository.PrepareBackupCodesRemovalAsync(account.Id);
+        await twoFactorRepository.PrepareBackupCodesRemovalAsync(account.Id, cancellationToken);
         token.MarkAsUsed(now);
         securityJournal.PrepareEvent(SecurityEventType.TwoFactorDeactivation, SecurityEventResult.Success, account.Id, ipAddress);
         emailRequests.PrepareRequest(EmailRequest.ForTwoFactorDeactivation(account.Id, ipAddress, now));
@@ -154,9 +157,9 @@ public class TwoFactorSupportLinkService
 
     // Renvoie vrai si le mot de passe du compte n'a pas changé depuis au moins 7 jours, d'après les changements réussis du journal.
     // Un changement et une réinitialisation écrivent tous les deux un changement de mot de passe réussi.
-    private async Task<bool> IsPasswordOldEnoughAsync(Guid accountId, DateTime now)
+    private async Task<bool> IsPasswordOldEnoughAsync(Guid accountId, DateTime now, CancellationToken cancellationToken = default)
     {
-        var lastPasswordChange = await securityEvents.FindLastSuccessAsync(SecurityEventType.PasswordChange, accountId);
+        var lastPasswordChange = await securityEvents.FindLastSuccessAsync(SecurityEventType.PasswordChange, accountId, cancellationToken);
 
         return TwoFactorAuthenticationRules.IsPasswordOldEnoughForSupportLink(lastPasswordChange, now);
     }

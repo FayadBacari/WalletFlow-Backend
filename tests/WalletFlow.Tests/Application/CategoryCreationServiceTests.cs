@@ -108,7 +108,7 @@ public class CategoryCreationServiceTests
         var result = await CreateAsync("abonnements");
 
         Assert.IsType<CategoryCreationResult.NameAlreadyUsed>(result);
-        Assert.Single(services.ListSavedNames(), name => name.ToLowerInvariant() == "abonnements");
+        Assert.Single(services.ListSavedNames(), name => string.Equals(name, "abonnements", StringComparison.OrdinalIgnoreCase));
     }
 
     // Une autre requête crée la 100e catégorie juste avant l'enregistrement : le passage suivant recompte, et refuse.

@@ -17,20 +17,21 @@ public class TwoFactorAuthenticationRepository : ITwoFactorAuthenticationReposit
     }
 
     // Donne les codes de secours de ce compte qui n'ont pas encore servi. Ils ne servent qu'à être lus : EF Core ne les suit pas.
-    public async Task<List<BackupCode>> FindUnusedBackupCodesAsync(Guid accountId)
+    public async Task<List<BackupCode>> FindUnusedBackupCodesAsync(Guid accountId, CancellationToken cancellationToken = default)
     {
         return await databaseContext.BackupCodes.AsNoTracking()
             .Where(backupCode =>
                 backupCode.UserId == accountId
                 && backupCode.UsedAt == null)
-            .ToListAsync();
+            .ToListAsync(cancellationToken);
     }
 
     // Cherche un code de secours par son identifiant. EF Core le suit : la connexion peut ainsi le marquer comme utilisé.
-    public async Task<BackupCode?> FindBackupCodeAsync(Guid backupCodeId)
+    public async Task<BackupCode?> FindBackupCodeAsync(Guid backupCodeId, CancellationToken cancellationToken = default)
     {
         return await databaseContext.BackupCodes.SingleOrDefaultAsync(backupCode =>
-            backupCode.Id == backupCodeId);
+            backupCode.Id == backupCodeId,
+            cancellationToken);
     }
 
     // Prépare l'enregistrement des codes de secours d'une activation.
@@ -41,11 +42,11 @@ public class TwoFactorAuthenticationRepository : ITwoFactorAuthenticationReposit
 
     // Prépare l'effacement de tous les codes de secours du compte, utilisés ou non. EF Core suit ces codes :
     // si une autre requête vient de se servir de l'un d'eux, l'enregistrement échoue.
-    public async Task PrepareBackupCodesRemovalAsync(Guid accountId)
+    public async Task PrepareBackupCodesRemovalAsync(Guid accountId, CancellationToken cancellationToken = default)
     {
         var backupCodes = await databaseContext.BackupCodes
             .Where(backupCode => backupCode.UserId == accountId)
-            .ToListAsync();
+            .ToListAsync(cancellationToken);
 
         databaseContext.BackupCodes.RemoveRange(backupCodes);
     }

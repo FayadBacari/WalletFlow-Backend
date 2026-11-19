@@ -63,8 +63,8 @@ public class ConcurrentSupportLinkRequestsTests
             await using (var setupContext = LocalTestDatabase.CreateDatabaseContext())
             {
                 setupContext.UserSessions.AddRange(
-                    new UserSession { Id = "course-" + Guid.NewGuid().ToString("N"), LastActivityAt = DateTime.UtcNow, UserId = account.Id },
-                    new UserSession { Id = "course-" + Guid.NewGuid().ToString("N"), LastActivityAt = DateTime.UtcNow, UserId = account.Id });
+                    new UserSession { CreatedAt = DateTime.UtcNow, Id = "course-" + Guid.NewGuid().ToString("N"), LastActivityAt = DateTime.UtcNow, UserId = account.Id },
+                    new UserSession { CreatedAt = DateTime.UtcNow, Id = "course-" + Guid.NewGuid().ToString("N"), LastActivityAt = DateTime.UtcNow, UserId = account.Id });
                 await setupContext.SaveChangesAsync();
             }
 

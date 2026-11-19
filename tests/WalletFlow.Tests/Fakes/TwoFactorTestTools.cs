@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Security.Cryptography;
 using OtpNet;
 
@@ -7,6 +8,10 @@ namespace WalletFlow.Tests.Fakes;
 public static class TwoFactorTestTools
 {
     public const int PeriodInSeconds = 30;
+
+    // Le pas de temps du premier code d'un compte activé dans un test : un pas de 1970. Le compte a donc activé sa double
+    // authentification il y a longtemps, et aucun code d'aujourd'hui n'a encore servi.
+    public const long OldStep = 1;
 
     // Tire une clé de chiffrement pour un test : aucune clé n'entre donc dans Git.
     public static string CreateEncryptionKey()
@@ -33,11 +38,11 @@ public static class TwoFactorTestTools
         }
 
         var candidate = 0;
-        while (acceptedCodes.Contains(candidate.ToString("D6")))
+        while (acceptedCodes.Contains(candidate.ToString("D6", CultureInfo.InvariantCulture)))
         {
             candidate = candidate + 1;
         }
 
-        return candidate.ToString("D6");
+        return candidate.ToString("D6", CultureInfo.InvariantCulture);
     }
 }

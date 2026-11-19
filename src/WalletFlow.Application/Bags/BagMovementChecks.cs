@@ -25,10 +25,11 @@ public class BagMovementChecks
         Guid? sourceBagId,
         Guid? destinationBagId,
         int amountInCents,
-        DateTime now)
+        DateTime now,
+        CancellationToken cancellationToken = default)
     {
         // SS §4 : les deux sacs doivent être à l'utilisateur. Les soldes lus ne contiennent que ses sacs.
-        var balances = await bagRepository.SumBalancesAsync(userId);
+        var balances = await bagRepository.SumBalancesAsync(userId, cancellationToken);
 
         if (sourceBagId is Guid sourceId && !balances.ContainsKey(sourceId))
         {
@@ -40,7 +41,7 @@ public class BagMovementChecks
             return new BagMovementResult.NotFound();
         }
 
-        if (await bagRepository.CountMovementsSinceAsync(userId, now - BagRules.MovementDay) >= BagRules.MaximumMovementsPerDay)
+        if (await bagRepository.CountMovementsSinceAsync(userId, now - BagRules.MovementDay, cancellationToken) >= BagRules.MaximumMovementsPerDay)
         {
             return new BagMovementResult.TooManyMovements();
         }
@@ -54,7 +55,7 @@ public class BagMovementChecks
         // Un déplacement entre deux sacs, ou vers l'argent disponible, reste permis même quand les sacs dépassent déjà ce solde.
         if (sourceBagId == null)
         {
-            var total = await balanceTotalService.ReadAsync(userId);
+            var total = await balanceTotalService.ReadAsync(userId, cancellationToken);
             var bagsTotalInCents = balances.Values.Sum();
 
             if (bagsTotalInCents + amountInCents > total.TotalInCents)

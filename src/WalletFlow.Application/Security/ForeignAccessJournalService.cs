@@ -22,14 +22,14 @@ public class ForeignAccessJournalService
     // Note un accès refusé si cette ressource existe et appartient à un autre utilisateur. Une ressource inconnue, ou qui est
     // à l'utilisateur lui-même, ne laisse rien : elle vient d'être supprimée, ou c'est une faute de frappe.
     // Un identifiant absent ne vise rien. Écriture immédiate : l'appelant n'a plus rien à enregistrer.
-    public async Task RecordIfForeignAsync(Guid userId, IPAddress? ipAddress, OwnedResource resource, Guid? resourceId)
+    public async Task RecordIfForeignAsync(Guid userId, IPAddress? ipAddress, OwnedResource resource, Guid? resourceId, CancellationToken cancellationToken = default)
     {
         if (resourceId is not Guid id)
         {
             return;
         }
 
-        var ownerId = await ownershipRepository.FindOwnerAsync(resource, id);
+        var ownerId = await ownershipRepository.FindOwnerAsync(resource, id, cancellationToken);
 
         if (ownerId == null || ownerId == userId)
         {

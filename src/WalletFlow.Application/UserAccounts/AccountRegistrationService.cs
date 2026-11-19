@@ -13,6 +13,7 @@ public class AccountRegistrationService
     private readonly IUserAccountRepository accountRepository;
     private readonly IDatabaseUnitOfWork unitOfWork;
     private readonly IPasswordHasher passwordHasher;
+    private readonly IBreachedPasswordChecker breachedPasswordChecker;
     private readonly ISecureTokenGenerator tokenGenerator;
     private readonly IEmailSender emailSender;
     private readonly IAccountRegistrationEmails registrationEmails;
@@ -25,6 +26,7 @@ public class AccountRegistrationService
         IUserAccountRepository accountRepository,
         IDatabaseUnitOfWork unitOfWork,
         IPasswordHasher passwordHasher,
+        IBreachedPasswordChecker breachedPasswordChecker,
         ISecureTokenGenerator tokenGenerator,
         IEmailSender emailSender,
         IAccountRegistrationEmails registrationEmails,
@@ -35,6 +37,7 @@ public class AccountRegistrationService
         this.accountRepository = accountRepository;
         this.unitOfWork = unitOfWork;
         this.passwordHasher = passwordHasher;
+        this.breachedPasswordChecker = breachedPasswordChecker;
         this.tokenGenerator = tokenGenerator;
         this.emailSender = emailSender;
         this.registrationEmails = registrationEmails;
@@ -47,7 +50,8 @@ public class AccountRegistrationService
     // pour ne pas révéler quels comptes existent : seul l'e-mail envoyé change (SS §2).
     public async Task<AccountRegistrationResult> RegisterAsync(
         string typedEmail,
-        string password)
+        string password,
+        CancellationToken cancellationToken = default)
     {
         var email = EmailAddressRules.Normalize(typedEmail);
         var normalizedPassword = PasswordRules.Normalize(password);
@@ -58,6 +62,12 @@ public class AccountRegistrationService
             return refusal;
         }
 
+        // Le refus ne dépend que du mot de passe, avant toute lecture de l'adresse : il ne révèle aucun compte (SS §2).
+        if (await breachedPasswordChecker.IsBreachedAsync(normalizedPassword, cancellationToken))
+        {
+            return new AccountRegistrationResult.PasswordBreached();
+        }
+
         // La limite compte les demandes, qu'un compte existe ou non : elle ne révèle donc rien (SS §6).
         if (!requestLimiter.TryCountRequest(email))
         {
@@ -66,33 +76,34 @@ public class AccountRegistrationService
 
         // Le mot de passe est haché dans tous les cas : sinon, une réponse plus rapide
         // révélerait que l'adresse est déjà utilisée.
-        var passwordHash = await passwordHasher.HashAsync(normalizedPassword);
+        var passwordHash = await passwordHasher.HashAsync(normalizedPassword, cancellationToken);
 
-        return await SaveAccountThenSendEmailAsync(email, passwordHash);
+        return await SaveAccountThenSendEmailAsync(email, passwordHash, cancellationToken);
     }
 
     // Enregistre le compte selon l'état de l'adresse, puis envoie le bon e-mail.
     private async Task<AccountRegistrationResult> SaveAccountThenSendEmailAsync(
         string email,
-        string passwordHash)
+        string passwordHash,
+        CancellationToken cancellationToken = default)
     {
-        var existingAccount = await accountRepository.FindByEmailAsync(email);
+        var existingAccount = await accountRepository.FindByEmailAsync(email, cancellationToken);
 
         if (existingAccount == null)
         {
-            var result = await TrySaveNewAccountThenSendLinkAsync(email, passwordHash);
+            var result = await TrySaveNewAccountThenSendLinkAsync(email, passwordHash, cancellationToken);
             if (result != null)
             {
                 return result;
             }
 
             // Une autre inscription vient de prendre la même adresse.
-            existingAccount = await accountRepository.FindByEmailAsync(email);
+            existingAccount = await accountRepository.FindByEmailAsync(email, cancellationToken);
         }
 
         if (existingAccount != null && !existingAccount.IsEmailConfirmed)
         {
-            var result = await TryReplacePasswordThenSendLinkAsync(existingAccount, passwordHash);
+            var result = await TryReplacePasswordThenSendLinkAsync(existingAccount, passwordHash, cancellationToken);
             if (result != null)
             {
                 return result;
@@ -101,13 +112,14 @@ public class AccountRegistrationService
 
         // L'adresse est confirmée, ou vient de l'être pendant cette inscription : son mot de passe ne change pas.
         var warningEmail = registrationEmails.CreateAddressAlreadyUsedEmail(email);
-        return await SendEmailAsync(warningEmail, existingAccount?.Id);
+        return await SendEmailAsync(warningEmail, existingAccount?.Id, cancellationToken);
     }
 
     // Enregistre un nouveau compte et envoie son lien. Renvoie null si une autre inscription vient de prendre l'adresse.
     private async Task<AccountRegistrationResult?> TrySaveNewAccountThenSendLinkAsync(
         string email,
-        string passwordHash)
+        string passwordHash,
+        CancellationToken cancellationToken = default)
     {
         var confirmationToken = tokenGenerator.GenerateToken();
         var newAccount = new User { Email = email, PasswordHash = passwordHash };
@@ -115,37 +127,40 @@ public class AccountRegistrationService
         var saved = await accountRepository.TryAddAccountAsync(
             newAccount,
             DefaultCategories.CreateForUser(newAccount.Id),
-            CreateConfirmationToken(confirmationToken, newAccount.Id));
+            CreateConfirmationToken(confirmationToken, newAccount.Id),
+            cancellationToken);
 
         if (!saved)
         {
             return null;
         }
 
-        return await SendConfirmationEmailAsync(email, confirmationToken, newAccount.Id);
+        return await SendConfirmationEmailAsync(email, confirmationToken, newAccount.Id, cancellationToken);
     }
 
     // Remplace le mot de passe d'un compte non confirmé et envoie un nouveau lien (GR Auth).
     // Renvoie null si le compte vient d'être confirmé ou effacé : rien n'a alors changé.
     private async Task<AccountRegistrationResult?> TryReplacePasswordThenSendLinkAsync(
         User account,
-        string passwordHash)
+        string passwordHash,
+        CancellationToken cancellationToken = default)
     {
         var confirmationToken = tokenGenerator.GenerateToken();
 
         account.ReplacePasswordHash(passwordHash);
         await accountRepository.PrepareConfirmationTokenReplacementAsync(
-            CreateConfirmationToken(confirmationToken, account.Id));
+            CreateConfirmationToken(confirmationToken, account.Id),
+            cancellationToken);
 
         // L'enregistrement contrôle que le compte n'est toujours pas confirmé : le mot de passe d'un compte déjà actif n'est jamais remplacé.
-        var saved = await unitOfWork.TrySaveChangesAsync();
+        var saved = await unitOfWork.TrySaveChangesAsync(cancellationToken);
 
         if (!saved)
         {
             return null;
         }
 
-        return await SendConfirmationEmailAsync(account.Email, confirmationToken, account.Id);
+        return await SendConfirmationEmailAsync(account.Email, confirmationToken, account.Id, cancellationToken);
     }
 
     // Vérifie le format de l'adresse et les règles du mot de passe, côté serveur (SS §5).
@@ -185,22 +200,23 @@ public class AccountRegistrationService
     private async Task<AccountRegistrationResult> SendConfirmationEmailAsync(
         string email,
         GeneratedSecureToken confirmationToken,
-        Guid accountId)
+        Guid accountId,
+        CancellationToken cancellationToken = default)
     {
         var confirmationEmail = registrationEmails.CreateConfirmationEmail(
             email,
             websiteSettings.BuildLink("/confirm-email", confirmationToken.Token));
 
-        return await SendEmailAsync(confirmationEmail, accountId);
+        return await SendEmailAsync(confirmationEmail, accountId, cancellationToken);
     }
 
     // Envoie un e-mail. S'il ne peut pas partir, le visiteur est invité à réessayer :
     // le compte reste non confirmé, et une nouvelle inscription enverra un nouveau lien (GR Auth).
-    private async Task<AccountRegistrationResult> SendEmailAsync(EmailMessage message, Guid? accountId)
+    private async Task<AccountRegistrationResult> SendEmailAsync(EmailMessage message, Guid? accountId, CancellationToken cancellationToken = default)
     {
         try
         {
-            await emailSender.SendAsync(message);
+            await emailSender.SendAsync(message, cancellationToken);
             return new AccountRegistrationResult.Accepted();
         }
         catch (EmailCouldNotBeSentException)

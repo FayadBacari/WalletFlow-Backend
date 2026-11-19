@@ -29,19 +29,19 @@ public class EmailRequestRepository : IEmailRequestRepository
     }
 
     // Donne la demande dont l'heure d'essai est passée depuis le plus longtemps (index ix_demande_email_essai).
-    public async Task<Guid?> FindNextDueIdAsync(DateTime now)
+    public async Task<Guid?> FindNextDueIdAsync(DateTime now, CancellationToken cancellationToken = default)
     {
         return await databaseContext.EmailRequests
             .Where(request => request.NextTryAt <= now)
             .OrderBy(request => request.NextTryAt)
             .Select(request => (Guid?)request.Id)
-            .FirstOrDefaultAsync();
+            .FirstOrDefaultAsync(cancellationToken);
     }
 
     // Cherche une demande par son identifiant. La demande lue est suivie.
-    public async Task<EmailRequest?> FindAsync(Guid requestId)
+    public async Task<EmailRequest?> FindAsync(Guid requestId, CancellationToken cancellationToken = default)
     {
-        return await databaseContext.EmailRequests.SingleOrDefaultAsync(request => request.Id == requestId);
+        return await databaseContext.EmailRequests.SingleOrDefaultAsync(request => request.Id == requestId, cancellationToken);
     }
 
     // Prépare la sortie d'une demande de la file.

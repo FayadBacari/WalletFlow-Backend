@@ -18,6 +18,7 @@ public class UserSessionTableConfiguration : IEntityTypeConfiguration<UserSessio
 
         builder.Property(nameof(UserSession.LastActivityAt)).HasColumnName("date_derniere_activite");
         builder.Property(nameof(UserSession.UserId)).HasColumnName("id_utilisateur");
+        builder.Property(nameof(UserSession.CreatedAt)).HasColumnName("date_creation_session");
 
         // Une session appartient à un utilisateur et disparaît avec lui (ON DELETE CASCADE).
         builder.HasOne<User>().WithMany()

@@ -17,7 +17,7 @@ public class CategoryRenameService
     }
 
     // Donne le nom tapé à la catégorie, s'il respecte les règles et si aucune autre catégorie de l'utilisateur ne le porte.
-    public async Task<CategoryRenameResult> RenameAsync(Guid userId, Guid categoryId, string? typedName)
+    public async Task<CategoryRenameResult> RenameAsync(Guid userId, Guid categoryId, string? typedName, CancellationToken cancellationToken = default)
     {
         var name = CategoryRules.NormalizeName(typedName);
 
@@ -27,14 +27,15 @@ public class CategoryRenameService
         }
 
         return await savingService.SaveWithRetriesAsync(
-            () => PrepareNewNameAsync(userId, categoryId, name),
-            new CategoryRenameResult.NotSaved());
+            () => PrepareNewNameAsync(userId, categoryId, name, cancellationToken),
+            new CategoryRenameResult.NotSaved(),
+            cancellationToken);
     }
 
     // Un passage : lit la catégorie parmi celles de l'utilisateur, vérifie le nom, puis prépare le changement.
-    private async Task<PreparedChanges<CategoryRenameResult>> PrepareNewNameAsync(Guid userId, Guid categoryId, string name)
+    private async Task<PreparedChanges<CategoryRenameResult>> PrepareNewNameAsync(Guid userId, Guid categoryId, string name, CancellationToken cancellationToken = default)
     {
-        var category = await categoryRepository.FindAsync(userId, categoryId);
+        var category = await categoryRepository.FindAsync(userId, categoryId, cancellationToken);
 
         if (category == null)
         {
@@ -46,7 +47,7 @@ public class CategoryRenameService
             return PreparedChanges<CategoryRenameResult>.NothingToSave(new CategoryRenameResult.OtherCategoryIsFixed());
         }
 
-        if (await categoryRepository.IsNameUsedAsync(userId, name, categoryId))
+        if (await categoryRepository.IsNameUsedAsync(userId, name, categoryId, cancellationToken))
         {
             return PreparedChanges<CategoryRenameResult>.NothingToSave(new CategoryRenameResult.NameAlreadyUsed());
         }

@@ -16,6 +16,7 @@ public class AccountRegistrationServiceTests
 
     private readonly FakeUserAccountRepository accountRepository = new FakeUserAccountRepository();
     private readonly FakePasswordHasher passwordHasher = new FakePasswordHasher();
+    private readonly FakeBreachedPasswordChecker breachedPasswordChecker = new FakeBreachedPasswordChecker();
     private readonly FakeEmailSender emailSender = new FakeEmailSender();
     private readonly FakeEmailAddressRequestLimiter requestLimiter = new FakeEmailAddressRequestLimiter();
     private readonly FakeTimeProvider clock = new FakeTimeProvider();
@@ -27,6 +28,7 @@ public class AccountRegistrationServiceTests
             accountRepository,
             new FakeDatabaseUnitOfWork(accountRepository),
             passwordHasher,
+            breachedPasswordChecker,
             new FakeSecureTokenGenerator(),
             emailSender,
             new FrenchAccountRegistrationEmails(),
@@ -384,5 +386,37 @@ public class AccountRegistrationServiceTests
         var refusal = Assert.IsType<AccountRegistrationResult.RefusedByRules>(result);
         Assert.True(refusal.IsEmailInvalid);
         Assert.True(refusal.IsPasswordInvalid);
+    }
+
+    // SS §2 : un mot de passe des fuites connues est refusé avant tout : rien n'est écrit, aucun e-mail ne part, et la demande
+    // ne compte pas dans la limite de l'adresse. Le refus est le même que l'adresse soit libre ou déjà utilisée.
+    [Fact]
+    public async Task BreachedPasswordIsRefusedBeforeAnythingHappens()
+    {
+        var usedAccount = new User { Email = Email, PasswordHash = OldHash, IsEmailConfirmed = true };
+        accountRepository.SavedUsers.Add(usedAccount);
+        breachedPasswordChecker.AddBreachedPassword(ValidPassword);
+        var service = CreateRegistrationService();
+
+        var usedAddress = await service.RegisterAsync(TypedEmail, ValidPassword);
+        var freeAddress = await service.RegisterAsync("libre@exemple.test", ValidPassword);
+
+        Assert.IsType<AccountRegistrationResult.PasswordBreached>(usedAddress);
+        Assert.IsType<AccountRegistrationResult.PasswordBreached>(freeAddress);
+        Assert.Equal(usedAccount, Assert.Single(accountRepository.SavedUsers));
+        Assert.Equal(OldHash, usedAccount.PasswordHash);
+        Assert.Empty(emailSender.SentEmails);
+        Assert.Empty(requestLimiter.CountedAddresses);
+        Assert.Equal(0, passwordHasher.HashedPasswordCount);
+    }
+
+    // Un mot de passe refusé par les règles n'est même pas cherché dans les fuites.
+    [Fact]
+    public async Task PasswordBreakingTheRulesIsNeverSentToTheBreachSearch()
+    {
+        var result = await CreateRegistrationService().RegisterAsync(TypedEmail, "trop-court");
+
+        Assert.IsType<AccountRegistrationResult.RefusedByRules>(result);
+        Assert.Equal(0, breachedPasswordChecker.CheckCount);
     }
 }

@@ -1,3 +1,4 @@
+using System.Globalization;
 using WalletFlow.Domain.BagsAndSuggestions;
 
 namespace WalletFlow.Tests.Domain;
@@ -70,7 +71,7 @@ public class BagTests
     public void GoalThatBreaksTheRulesIsRefusedAndTheOldOneStays(int? targetAmountInCents, string? targetDate)
     {
         var bag = CreateBagWithGoal();
-        DateOnly? date = targetDate == null ? null : DateOnly.Parse(targetDate);
+        DateOnly? date = targetDate == null ? null : DateOnly.Parse(targetDate, CultureInfo.InvariantCulture);
 
         Assert.Throws<ArgumentException>(() => bag.ReplaceGoal(targetAmountInCents, date, Today));
         Assert.Equal(100_000, bag.TargetAmountInCents);

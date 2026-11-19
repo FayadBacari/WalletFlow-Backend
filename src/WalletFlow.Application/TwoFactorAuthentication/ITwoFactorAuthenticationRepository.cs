@@ -7,16 +7,16 @@ namespace WalletFlow.Application.TwoFactorAuthentication;
 public interface ITwoFactorAuthenticationRepository
 {
     // Donne les codes de secours de ce compte qui n'ont pas encore servi. Ils ne servent qu'à être comparés : ils ne sont pas suivis.
-    Task<List<BackupCode>> FindUnusedBackupCodesAsync(Guid accountId);
+    Task<List<BackupCode>> FindUnusedBackupCodesAsync(Guid accountId, CancellationToken cancellationToken = default);
 
     // Cherche un code de secours par son identifiant. Renvoie null s'il n'existe plus.
     // Ce code est suivi : la connexion peut ainsi le marquer comme utilisé.
-    Task<BackupCode?> FindBackupCodeAsync(Guid backupCodeId);
+    Task<BackupCode?> FindBackupCodeAsync(Guid backupCodeId, CancellationToken cancellationToken = default);
 
     // Prépare l'enregistrement des codes de secours d'une activation.
     void PrepareBackupCodes(List<BackupCode> backupCodes);
 
     // Prépare l'effacement de tous les codes de secours du compte, utilisés ou non :
     // une nouvelle activation en donnera 10 autres (GR Auth).
-    Task PrepareBackupCodesRemovalAsync(Guid accountId);
+    Task PrepareBackupCodesRemovalAsync(Guid accountId, CancellationToken cancellationToken = default);
 }

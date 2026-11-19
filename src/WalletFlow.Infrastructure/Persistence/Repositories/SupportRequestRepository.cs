@@ -18,9 +18,9 @@ public class SupportRequestRepository : ISupportRequestRepository
     }
 
     // Lit la ligne de l'utilisateur. Elle est suivie : son contrôle à l'enregistrement en vérifie la version.
-    public async Task<User?> FindUserAsync(Guid userId)
+    public async Task<User?> FindUserAsync(Guid userId, CancellationToken cancellationToken = default)
     {
-        return await databaseContext.Users.SingleOrDefaultAsync(user => user.Id == userId);
+        return await databaseContext.Users.SingleOrDefaultAsync(user => user.Id == userId, cancellationToken);
     }
 
     // La ligne de l'utilisateur sera écrite même si rien n'y a changé : cette écriture contrôle en base sa version,
@@ -32,11 +32,12 @@ public class SupportRequestRepository : ISupportRequestRepository
     }
 
     // Compte les demandes de l'utilisateur envoyées depuis ce moment, ce moment compris.
-    public async Task<int> CountSentSinceAsync(Guid userId, DateTime since)
+    public async Task<int> CountSentSinceAsync(Guid userId, DateTime since, CancellationToken cancellationToken = default)
     {
         return await databaseContext.SupportRequests.CountAsync(request =>
             request.UserId == userId
-            && request.SentAt >= since);
+            && request.SentAt >= since,
+            cancellationToken);
     }
 
     // Garde de côté la nouvelle demande : elle ne sera écrite qu'avec les autres changements.
@@ -46,7 +47,7 @@ public class SupportRequestRepository : ISupportRequestRepository
     }
 
     // Lit les demandes de l'utilisateur, la plus récente d'abord. Deux demandes du même instant gardent toujours le même ordre.
-    public async Task<List<SupportRequestSummary>> FindUserRequestsAsync(Guid userId)
+    public async Task<List<SupportRequestSummary>> FindUserRequestsAsync(Guid userId, CancellationToken cancellationToken = default)
     {
         return await databaseContext.SupportRequests.AsNoTracking()
             .Where(request => request.UserId == userId)
@@ -57,15 +58,15 @@ public class SupportRequestRepository : ISupportRequestRepository
                 request.SentAt,
                 request.Status,
                 databaseContext.SupportResponses.Count(response => response.SupportRequestId == request.Id)))
-            .ToListAsync();
+            .ToListAsync(cancellationToken);
     }
 
     // Lit la demande par son identifiant et par son utilisateur : celle d'un autre, ou d'un visiteur, n'est jamais trouvée.
     // Ses réponses viennent de la plus ancienne à la plus récente.
-    public async Task<SupportRequestDetails?> FindUserRequestAsync(Guid userId, Guid requestId)
+    public async Task<SupportRequestDetails?> FindUserRequestAsync(Guid userId, Guid requestId, CancellationToken cancellationToken = default)
     {
         var request = await databaseContext.SupportRequests.AsNoTracking()
-            .SingleOrDefaultAsync(candidate => candidate.Id == requestId && candidate.UserId == userId);
+            .SingleOrDefaultAsync(candidate => candidate.Id == requestId && candidate.UserId == userId, cancellationToken);
 
         if (request == null)
         {
@@ -77,14 +78,14 @@ public class SupportRequestRepository : ISupportRequestRepository
             .OrderBy(response => response.SentAt)
             .ThenBy(response => response.Id)
             .Select(response => new SupportResponseView(response.Content, response.SentAt))
-            .ToListAsync();
+            .ToListAsync(cancellationToken);
 
         return new SupportRequestDetails(request.Id, request.SentAt, request.Status, request.Message, responses);
     }
 
     // Lit la réponse, sa demande, et l'adresse du compte de la demande s'il y en a un : un changement d'adresse fait entre la
     // réponse et l'envoi est suivi. Une demande de compte répond au compte, même si elle avait une adresse de contact.
-    public async Task<SupportResponseEmailContent?> ReadResponseEmailAsync(Guid responseId)
+    public async Task<SupportResponseEmailContent?> ReadResponseEmailAsync(Guid responseId, CancellationToken cancellationToken = default)
     {
         return await (
                 from response in databaseContext.SupportResponses.AsNoTracking()
@@ -97,15 +98,15 @@ public class SupportRequestRepository : ISupportRequestRepository
                     request.SentAt,
                     response.Content,
                     request.UserId))
-            .SingleOrDefaultAsync();
+            .SingleOrDefaultAsync(cancellationToken);
     }
 
     // Efface tout de suite les demandes envoyées avant ce moment. La base efface avec elles leurs réponses, puis les e-mails
     // de ces réponses encore en attente (ON DELETE CASCADE).
-    public async Task<int> DeleteSentBeforeAsync(DateTime limit)
+    public async Task<int> DeleteSentBeforeAsync(DateTime limit, CancellationToken cancellationToken = default)
     {
         return await databaseContext.SupportRequests
             .Where(request => request.SentAt < limit)
-            .ExecuteDeleteAsync();
+            .ExecuteDeleteAsync(cancellationToken);
     }
 }

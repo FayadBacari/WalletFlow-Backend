@@ -1,3 +1,5 @@
+using System.Net;
+using System.Net.Sockets;
 using System.Security.Cryptography;
 using System.Text;
 using System.Threading.RateLimiting;
@@ -5,7 +7,8 @@ using Microsoft.AspNetCore.RateLimiting;
 
 namespace WalletFlow.Api.Configuration;
 
-// Limites de débit de l'API (SS §6). Au-delà de la limite, le serveur répond 429 « trop de requêtes ».
+// Limites de débit de l'API (SS §6). Au-delà de la limite, le serveur répond 429 « trop de requêtes ». Toute requête compte
+// d'abord dans la limite globale de son adresse IP, puis dans la limite de sa route s'il y en a une.
 public static class RateLimitingConfiguration
 {
     public const string SignupPolicy = "inscription-par-adresse-ip";
@@ -23,6 +26,31 @@ public static class RateLimitingConfiguration
     public const string VisitorSupportPolicy = "support-visiteur-par-adresse-ip";
     public const string TwoFactorSupportLinkPolicy = "lien-de-desactivation-de-la-double-auth-par-adresse-ip";
     public const string AccountDeletionPolicy = "suppression-du-compte-par-adresse-ip";
+    public const string BankPolicy = "banque-par-session";
+
+    // Toutes les requêtes : 600 par minute et par adresse IP. Une limite large, bien au-dessus d'un usage normal : elle arrête
+    // un robot qui frappe partout, y compris les routes ouvertes à tous et les cookies de session inventés, que la base doit
+    // chercher avant de les refuser.
+    public static FixedWindowRateLimiterOptions CreateGlobalLimit()
+    {
+        return new FixedWindowRateLimiterOptions
+        {
+            PermitLimit = 600,
+            Window = TimeSpan.FromMinutes(1)
+        };
+    }
+
+    // Routes de la banque qui appellent le prestataire : la liste des banques, la connexion, son renouvellement, sa fin et la
+    // déconnexion, 20 par heure et par session, toutes ensemble. Le prestataire limite les appels de toute l'application : un
+    // seul compte ne doit pas pouvoir épuiser cette limite pour tous les autres.
+    public static FixedWindowRateLimiterOptions CreateBankLimit()
+    {
+        return new FixedWindowRateLimiterOptions
+        {
+            PermitLimit = 20,
+            Window = TimeSpan.FromHours(1)
+        };
+    }
 
     // Connexion : 10 essais par minute et par adresse IP, en plus des 5 tentatives par compte.
     public static FixedWindowRateLimiterOptions CreateLoginLimit()
@@ -144,6 +172,23 @@ public static class RateLimitingConfiguration
         {
             options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
 
+            // Le refus dit quand réessayer : à la fin de la fenêtre de la limite atteinte. Le corps de la réponse est écrit
+            // ensuite, au format de toutes les erreurs.
+            options.OnRejected = (context, cancellationToken) =>
+            {
+                if (context.Lease.TryGetMetadata(MetadataName.RetryAfter, out var delay))
+                {
+                    context.HttpContext.Response.Headers.RetryAfter = RetryDelays.InSeconds(delay);
+                }
+
+                return ValueTask.CompletedTask;
+            };
+
+            options.GlobalLimiter = PartitionedRateLimiter.Create<HttpContext, string>(httpContext =>
+                RateLimitPartition.GetFixedWindowLimiter(
+                    ReadIpAddress(httpContext),
+                    ipAddress => CreateGlobalLimit()));
+
             AddLimitPerIp(options, SignupPolicy, CreateSignupLimit());
             AddLimitPerIp(options, ConfirmationPolicy, CreateConfirmationLimit());
             AddLimitPerIp(options, LoginPolicy, CreateLoginLimit());
@@ -159,6 +204,7 @@ public static class RateLimitingConfiguration
             AddLimitPerIp(options, VisitorSupportPolicy, CreateVisitorSupportLimit());
             AddLimitPerIp(options, TwoFactorSupportLinkPolicy, CreateAccountRecoveryLimit());
             AddLimitPerIp(options, AccountDeletionPolicy, CreatePasswordChangeLimit());
+            AddLimitPerSession(options, BankPolicy, CreateBankLimit());
         });
 
         return services;
@@ -200,6 +246,32 @@ public static class RateLimitingConfiguration
     // Donne l'adresse IP qui sert de compteur à une requête.
     private static string ReadIpAddress(HttpContext httpContext)
     {
-        return httpContext.Connection.RemoteIpAddress?.ToString() ?? "adresse-inconnue";
+        return FindCounterKey(httpContext.Connection.RemoteIpAddress);
+    }
+
+    // Donne le compteur d'une adresse IP. Une adresse IPv4 vue en IPv6 (::ffff:203.0.113.7) redevient une adresse IPv4 :
+    // sinon, toutes les adresses IPv4 tomberaient dans le même bloc. Une adresse IPv6 compte pour tout son bloc /64 : un
+    // abonné en reçoit un entier, et pourrait changer d'adresse à chaque requête pour échapper aux limites.
+    public static string FindCounterKey(IPAddress? address)
+    {
+        if (address == null)
+        {
+            return "adresse-inconnue";
+        }
+
+        if (address.IsIPv4MappedToIPv6)
+        {
+            address = address.MapToIPv4();
+        }
+
+        if (address.AddressFamily != AddressFamily.InterNetworkV6)
+        {
+            return address.ToString();
+        }
+
+        var bytes = address.GetAddressBytes();
+        Array.Clear(bytes, 8, 8);
+
+        return new IPAddress(bytes) + "/64";
     }
 }

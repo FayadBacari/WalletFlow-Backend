@@ -31,7 +31,7 @@ public class FakeDataExportRepository : IDataExportRepository
         return data;
     }
 
-    public Task<AccountData?> ReadAsync(Guid userId)
+    public Task<AccountData?> ReadAsync(Guid userId, CancellationToken cancellationToken = default)
     {
         ReadUserIds.Add(userId);
 

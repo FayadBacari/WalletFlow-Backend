@@ -35,11 +35,11 @@ public class BankDisconnectionService
 
     // Révoque l'autorisation de la connexion, puis la supprime. La suppression ne se fait que si la session révoquée
     // est toujours celle de la connexion : aucune session renouvelée entre-temps ne reste ouverte chez le prestataire.
-    public async Task<BankDisconnectionResult> DisconnectAsync(Guid userId, Guid connectionId, IPAddress? ipAddress)
+    public async Task<BankDisconnectionResult> DisconnectAsync(Guid userId, Guid connectionId, IPAddress? ipAddress, CancellationToken cancellationToken = default)
     {
         for (var tryNumber = 1; tryNumber <= MaximumTries; tryNumber++)
         {
-            var externalConnectionId = await connectionRepository.ReadExternalIdAsync(userId, connectionId);
+            var externalConnectionId = await connectionRepository.ReadExternalIdAsync(userId, connectionId, cancellationToken);
 
             if (externalConnectionId == null)
             {
@@ -48,17 +48,18 @@ public class BankDisconnectionService
 
             try
             {
-                await bankProvider.RevokeSessionAsync(externalConnectionId);
+                await bankProvider.RevokeSessionAsync(externalConnectionId, cancellationToken);
             }
             catch (BankProviderException)
             {
                 return new BankDisconnectionResult.ProviderUnavailable();
             }
 
-            if (await connectionRepository.DeleteAsync(userId, connectionId, externalConnectionId))
+            // La banque a révoqué l'autorisation : la suppression ne s'annule plus, sinon WalletFlow garderait une connexion morte.
+            if (await connectionRepository.DeleteAsync(userId, connectionId, externalConnectionId, CancellationToken.None))
             {
                 await securityJournal.SaveEventNowAsync(SecurityEventType.BankDisconnection, SecurityEventResult.Success, userId, ipAddress);
-                await budgetAlerts.CheckAsync(userId);
+                await budgetAlerts.CheckAsync(userId, cancellationToken);
                 return new BankDisconnectionResult.Disconnected();
             }
         }

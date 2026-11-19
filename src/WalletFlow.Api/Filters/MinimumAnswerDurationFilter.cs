@@ -55,7 +55,7 @@ public class MinimumAnswerDurationFilter : IAsyncActionFilter
 
         if (elapsed < minimumDuration)
         {
-            await Task.Delay(minimumDuration - elapsed, clock);
+            await Task.Delay(minimumDuration - elapsed, clock, context.HttpContext.RequestAborted);
         }
     }
 }

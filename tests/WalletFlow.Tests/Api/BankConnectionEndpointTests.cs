@@ -197,7 +197,7 @@ public class BankConnectionEndpointTests
         var response = await SendAsync(user.Client, HttpMethod.Post, ConnectionsEndpoint, new { bankName = "Banque inventée" }, user.CsrfToken);
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
-        Assert.Equal(ErrorMessages.BankNotOffered, await ReadFieldErrorAsync(response, "BankName"));
+        Assert.Equal(ErrorMessages.BankNotOffered, await ReadFieldErrorAsync(response, "bankName"));
     }
 
     // --- Retour de la banque et liste
@@ -243,7 +243,7 @@ public class BankConnectionEndpointTests
         var response = await SendAsync(user.Client, HttpMethod.Post, FinishEndpoint, new { code = "code-1", state = "state-invente" }, user.CsrfToken);
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
-        Assert.Equal(ErrorMessages.BankLinkNoLongerValid, await ReadFieldErrorAsync(response, "State"));
+        Assert.Equal(ErrorMessages.BankLinkNoLongerValid, await ReadFieldErrorAsync(response, "state"));
         Assert.Equal(0, api.BankProvider.UsedCodeCount);
     }
 
@@ -257,7 +257,7 @@ public class BankConnectionEndpointTests
         var response = await SendAsync(user.Client, HttpMethod.Post, FinishEndpoint, new { code = "code-faux", state = state }, user.CsrfToken);
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
-        Assert.Equal(ErrorMessages.BankRefusedAuthorization, await ReadFieldErrorAsync(response, "Code"));
+        Assert.Equal(ErrorMessages.BankRefusedAuthorization, await ReadFieldErrorAsync(response, "code"));
     }
 
     [Fact]
@@ -312,7 +312,7 @@ public class BankConnectionEndpointTests
         var presence = Assert.Single(api.BankProvider.BalanceReadPresences);
         Assert.Equal(HttpStatusCode.OK, first.StatusCode);
         Assert.Equal(99_900, account.GetProperty("balanceInCents").GetInt32());
-        Assert.Equal(HttpStatusCode.TooManyRequests, second.StatusCode);
+        await TooManyRequestsAssertions.AssertTooManyRequestsAsync(second, 60);
         Assert.Equal(IPAddress.Parse(VisitorAddress), presence!.IpAddress);
         Assert.Equal("NavigateurDeTest/1.0", presence.UserAgent);
     }
@@ -452,5 +452,59 @@ public class BankConnectionEndpointTests
 
             builder.UseSetting("EnableBanking:PrivateKeyPath", Path.Combine(Path.GetTempPath(), "cle-qui-n-existe-pas-" + Guid.NewGuid() + ".pem"));
         }
+    }
+
+    // Une déconnexion que d'autres requêtes arrêtent à chaque essai répond 409 : la connexion reste, l'utilisateur peut réessayer.
+    [Fact]
+    public async Task DisconnectionThatNeverPassesAsksToRetry()
+    {
+        using var api = new ApiFactoryWithFakes();
+        var user = await LogInAsync(api);
+        var connectionId = await ConnectAsync(api, user);
+        api.BankRepository.StoppedDeletions = BankDisconnectionService.MaximumTries;
+
+        var response = await SendAsync(user.Client, HttpMethod.Delete, ConnectionsEndpoint + "/" + connectionId, null, user.CsrfToken);
+
+        await AssertProblemTitleAsync(response, HttpStatusCode.Conflict, ErrorMessages.BankConnectionsChangedMeanwhile);
+        Assert.Contains(api.BankRepository.SavedConnections, connection => connection.Id == connectionId);
+    }
+
+    // Un renouvellement dont la connexion a disparu pendant le passage à la banque répond 404 à son retour.
+    [Fact]
+    public async Task RenewalOfAConnectionDeletedMeanwhileIsNotFound()
+    {
+        using var api = new ApiFactoryWithFakes();
+        var user = await LogInAsync(api);
+        var connectionId = await ConnectAsync(api, user);
+        var renewal = await SendAsync(user.Client, HttpMethod.Post, ConnectionsEndpoint + "/" + connectionId + "/renew", null, user.CsrfToken);
+        Assert.Equal(HttpStatusCode.OK, renewal.StatusCode);
+        var state = api.BankProvider.AuthorizationRequests.Last().State;
+        api.BankProvider.AddSession("code-renouvellement", new TestBankAccount("stable-1", "Compte courant", "EUR", 100));
+        api.BankRepository.SavedConnections.Clear();
+        api.BankRepository.SavedAccounts.Clear();
+
+        var response = await SendAsync(user.Client, HttpMethod.Post, FinishEndpoint, new { code = "code-renouvellement", state = state }, user.CsrfToken);
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        Assert.Empty(api.BankRepository.SavedConnections);
+    }
+
+    // Le prestataire en panne au retour de la banque, ou au début d'un renouvellement : 503, rien n'est enregistré.
+    [Fact]
+    public async Task ProviderDownAtTheEndOrAtTheRenewalAsksToRetryLater()
+    {
+        using var api = new ApiFactoryWithFakes();
+        var user = await LogInAsync(api);
+        var connectionId = await ConnectAsync(api, user);
+        var state = await StartAsync(api, user);
+        api.BankProvider.AddSession("code-en-panne", new TestBankAccount("stable-3", "Livret", "EUR", 100));
+        api.BankProvider.IsDown = true;
+
+        var finish = await SendAsync(user.Client, HttpMethod.Post, FinishEndpoint, new { code = "code-en-panne", state = state }, user.CsrfToken);
+        var renewal = await SendAsync(user.Client, HttpMethod.Post, ConnectionsEndpoint + "/" + connectionId + "/renew", null, user.CsrfToken);
+
+        await AssertProblemTitleAsync(finish, HttpStatusCode.ServiceUnavailable, ErrorMessages.BankServiceUnavailable);
+        await AssertProblemTitleAsync(renewal, HttpStatusCode.ServiceUnavailable, ErrorMessages.BankServiceUnavailable);
+        Assert.Single(api.BankRepository.SavedConnections);
     }
 }

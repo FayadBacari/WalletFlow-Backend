@@ -26,6 +26,7 @@ public class SupportRequestsCleanupBackgroundServiceTests
         return new SupportRequestsCleanupBackgroundService(
             serviceProvider.GetRequiredService<IServiceScopeFactory>(),
             clock,
+            new BackgroundTaskHealth(),
             logger ?? NullLogger<SupportRequestsCleanupBackgroundService>.Instance);
     }
 
@@ -40,7 +41,7 @@ public class SupportRequestsCleanupBackgroundServiceTests
         var recent = SupportRequest.FromVisitor("visiteur@exemple.test", "Récente", now.AddMonths(-11));
         repository.SavedRequests.AddRange(new[] { tooOld, recent });
 
-        await CreateCleanupTask(repository, clock).RunCleanupAsync();
+        await CreateCleanupTask(repository, clock).RunPassAsync();
 
         Assert.Equal(recent, Assert.Single(repository.SavedRequests));
     }
@@ -56,12 +57,12 @@ public class SupportRequestsCleanupBackgroundServiceTests
         using var loggerFactory = new LoggerFactory(new ILoggerProvider[] { loggerProvider });
         var cleanupTask = CreateCleanupTask(repository, clock, new Logger<SupportRequestsCleanupBackgroundService>(loggerFactory));
 
-        await cleanupTask.RunCleanupAsync();
+        await cleanupTask.RunPassAsync();
 
-        Assert.Contains(loggerProvider.Messages, message => message.StartsWith("Error") && message.Contains("a échoué"));
+        Assert.Contains(loggerProvider.Messages, message => message.StartsWith("Error", StringComparison.Ordinal) && message.Contains("a échoué"));
 
         repository.IsDown = false;
-        await cleanupTask.RunCleanupAsync();
+        await cleanupTask.RunPassAsync();
 
         Assert.Empty(repository.SavedRequests);
     }

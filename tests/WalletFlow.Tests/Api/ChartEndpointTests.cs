@@ -140,11 +140,11 @@ public class ChartEndpointTests
         var noDates = await client.GetAsync(CategoriesEndpoint);
         var noEnd = await client.GetAsync(MonthsEndpoint + "?from=2026-11-01");
 
-        Assert.Equal(ErrorMessages.ChartPeriodRequired, await ReadFieldErrorAsync(noDates, "From"));
-        Assert.Equal(ErrorMessages.ChartPeriodRequired, await ReadFieldErrorAsync(await client.GetAsync(CategoriesEndpoint), "To"));
-        Assert.Equal(ErrorMessages.ChartPeriodRequired, await ReadFieldErrorAsync(noEnd, "To"));
+        Assert.Equal(ErrorMessages.ChartPeriodRequired, await ReadFieldErrorAsync(noDates, "from"));
+        Assert.Equal(ErrorMessages.ChartPeriodRequired, await ReadFieldErrorAsync(await client.GetAsync(CategoriesEndpoint), "to"));
+        Assert.Equal(ErrorMessages.ChartPeriodRequired, await ReadFieldErrorAsync(noEnd, "to"));
         var noEndErrors = JsonDocument.Parse(await (await client.GetAsync(MonthsEndpoint + "?from=2026-11-01")).Content.ReadAsStringAsync()).RootElement.GetProperty("errors");
-        Assert.False(noEndErrors.TryGetProperty("From", out _));
+        Assert.False(noEndErrors.TryGetProperty("from", out _));
     }
 
     // Une période à l'envers ou de plus de 10 ans est refusée sur le champ To ; une date illisible, en français, sans être recopiée.
@@ -154,12 +154,25 @@ public class ChartEndpointTests
         using var api = new ApiFactoryWithFakes();
         var client = await LogInWithOperationsAsync(api);
 
-        Assert.Equal(ErrorMessages.DatesReversed, await ReadFieldErrorAsync(await client.GetAsync(CategoriesEndpoint + "?from=2026-11-30&to=2026-11-01"), "To"));
-        Assert.Equal(ErrorMessages.ChartPeriodTooLong, await ReadFieldErrorAsync(await client.GetAsync(MonthsEndpoint + "?from=2016-12-31&to=2026-12-31"), "To"));
+        Assert.Equal(ErrorMessages.DatesReversed, await ReadFieldErrorAsync(await client.GetAsync(CategoriesEndpoint + "?from=2026-11-30&to=2026-11-01"), "to"));
+        Assert.Equal(ErrorMessages.ChartPeriodTooLong, await ReadFieldErrorAsync(await client.GetAsync(MonthsEndpoint + "?from=2016-12-31&to=2026-12-31"), "to"));
         var unreadable = await client.GetAsync(MonthsEndpoint + "?from=pas-une-date<b>&to=2026-11-30");
-        Assert.Equal(ApiErrorConfiguration.InvalidValueMessage, await ReadFieldErrorAsync(unreadable, "From"));
+        Assert.Equal(ApiErrorConfiguration.InvalidValueMessage, await ReadFieldErrorAsync(unreadable, "from"));
         Assert.DoesNotContain("<b>", await unreadable.Content.ReadAsStringAsync());
         Assert.Equal(HttpStatusCode.OK, (await client.GetAsync(MonthsEndpoint + "?from=2017-01-01&to=2026-12-31")).StatusCode);
+    }
+
+    // Un compte illisible dans le filtre de la comparaison est refusé sur son champ, en français, sans être recopié.
+    [Fact]
+    public async Task UnreadableAccountOfTheComparisonIsRefused()
+    {
+        using var api = new ApiFactoryWithFakes();
+        var client = await LogInWithOperationsAsync(api);
+
+        var response = await client.GetAsync(ComparisonEndpoint + "?accountId=pas-un-compte<b>");
+
+        Assert.Equal(ApiErrorConfiguration.InvalidValueMessage, await ReadFieldErrorAsync(response, "accountId"));
+        Assert.DoesNotContain("<b>", await response.Content.ReadAsStringAsync());
     }
 
     // SS §4 : le compte d'un autre utilisateur, donné en filtre, ne montre rien.

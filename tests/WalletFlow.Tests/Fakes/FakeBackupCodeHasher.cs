@@ -19,7 +19,7 @@ public class FakeBackupCodeHasher : IBackupCodeHasher
     }
 
     // Renvoie la fausse empreinte du code, et compte le calcul.
-    public Task<string> HashAsync(string cleanedCode, Guid accountId)
+    public Task<string> HashAsync(string cleanedCode, Guid accountId, CancellationToken cancellationToken = default)
     {
         HashedCodeCount = HashedCodeCount + 1;
         OnBackupCodeHashed?.Invoke();

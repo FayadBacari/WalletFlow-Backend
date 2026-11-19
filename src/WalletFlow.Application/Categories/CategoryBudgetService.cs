@@ -25,7 +25,7 @@ public class CategoryBudgetService
     }
 
     // Fixe le budget en centimes, ou l'enlève avec null.
-    public async Task<CategoryBudgetResult> ReplaceAsync(Guid userId, Guid categoryId, int? monthlyBudgetInCents)
+    public async Task<CategoryBudgetResult> ReplaceAsync(Guid userId, Guid categoryId, int? monthlyBudgetInCents, CancellationToken cancellationToken = default)
     {
         if (!CategoryRules.IsMonthlyBudgetValid(monthlyBudgetInCents))
         {
@@ -33,21 +33,22 @@ public class CategoryBudgetService
         }
 
         var result = await savingService.SaveWithRetriesAsync(
-            () => PrepareNewBudgetAsync(userId, categoryId, monthlyBudgetInCents),
-            new CategoryBudgetResult.NotSaved());
+            () => PrepareNewBudgetAsync(userId, categoryId, monthlyBudgetInCents, cancellationToken),
+            new CategoryBudgetResult.NotSaved(),
+            cancellationToken);
 
         if (result is CategoryBudgetResult.Changed)
         {
-            await budgetAlerts.CheckAsync(userId);
+            await budgetAlerts.CheckAsync(userId, cancellationToken);
         }
 
         return result;
     }
 
     // Un passage : lit la catégorie parmi celles de l'utilisateur, puis prépare le nouveau budget.
-    private async Task<PreparedChanges<CategoryBudgetResult>> PrepareNewBudgetAsync(Guid userId, Guid categoryId, int? monthlyBudgetInCents)
+    private async Task<PreparedChanges<CategoryBudgetResult>> PrepareNewBudgetAsync(Guid userId, Guid categoryId, int? monthlyBudgetInCents, CancellationToken cancellationToken = default)
     {
-        var category = await categoryRepository.FindAsync(userId, categoryId);
+        var category = await categoryRepository.FindAsync(userId, categoryId, cancellationToken);
 
         if (category == null)
         {

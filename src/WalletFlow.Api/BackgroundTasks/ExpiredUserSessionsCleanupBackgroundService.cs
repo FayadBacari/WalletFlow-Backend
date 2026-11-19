@@ -2,49 +2,41 @@ using WalletFlow.Application.UserSessions;
 
 namespace WalletFlow.Api.BackgroundTasks;
 
-// Tâche de fond : efface chaque jour les sessions expirées (MPD §3).
-public class ExpiredUserSessionsCleanupBackgroundService : BackgroundService
+// Tâche de fond : efface chaque jour les sessions expirées et les appareils oubliés (MPD §3, SS §3).
+public class ExpiredUserSessionsCleanupBackgroundService : RecurringBackgroundService
 {
     public static readonly TimeSpan CleanupInterval = TimeSpan.FromDays(1);
 
-    private readonly IServiceScopeFactory scopeFactory;
-    private readonly TimeProvider clock;
     private readonly ILogger<ExpiredUserSessionsCleanupBackgroundService> logger;
 
-    // Reçoit de quoi créer un accès à la base pour chaque passage, l'horloge et le journal technique.
+    // Reçoit de quoi créer un accès à la base pour chaque passage, l'horloge, le bilan de santé des tâches et le journal technique.
     public ExpiredUserSessionsCleanupBackgroundService(
         IServiceScopeFactory scopeFactory,
         TimeProvider clock,
+        BackgroundTaskHealth health,
         ILogger<ExpiredUserSessionsCleanupBackgroundService> logger)
+        : base(scopeFactory, clock, CleanupInterval, health)
     {
-        this.scopeFactory = scopeFactory;
-        this.clock = clock;
         this.logger = logger;
     }
 
-    // Tourne tant que l'API tourne (nom imposé par le framework).
-    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
-    {
-        while (!stoppingToken.IsCancellationRequested)
-        {
-            await RunCleanupAsync();
-            await Task.Delay(CleanupInterval, clock, stoppingToken);
-        }
-    }
-
     // Fait un passage. Une panne ne doit pas arrêter l'API : la tâche réessaiera au prochain passage.
-    public async Task RunCleanupAsync()
+    public override async Task RunPassAsync(CancellationToken cancellationToken = default)
     {
         try
         {
-            using var scope = scopeFactory.CreateScope();
-            var cleanupService = scope.ServiceProvider.GetRequiredService<ExpiredUserSessionsCleanupService>();
+            var (deletedCount, forgottenDeviceCount) = await RunInScopeAsync<ExpiredUserSessionsCleanupService, (int, int)>(
+                async cleanupService => (
+                    await cleanupService.DeleteExpiredSessionsAsync(cancellationToken),
+                    await cleanupService.DeleteForgottenDevicesAsync(cancellationToken)),
+                cancellationToken);
 
-            var deletedCount = await cleanupService.DeleteExpiredSessionsAsync();
-
-            logger.LogInformation("{NombreDeSessions} session(s) expirée(s) effacée(s).", deletedCount);
+            logger.LogInformation(
+                "{NombreDeSessions} session(s) expirée(s) effacée(s), {NombreDAppareils} appareil(s) oublié(s).",
+                deletedCount,
+                forgottenDeviceCount);
         }
-        catch (Exception exception)
+        catch (Exception exception) when (!ShutdownCancellation.IsShutdown(exception, cancellationToken))
         {
             logger.LogError(exception, "L'effacement des sessions expirées a échoué.");
         }

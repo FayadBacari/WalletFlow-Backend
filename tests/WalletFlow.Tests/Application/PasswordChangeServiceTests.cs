@@ -34,6 +34,7 @@ public class PasswordChangeServiceTests
     {
         var session = new UserSession
         {
+            CreatedAt = tools.Clock.GetUtcNow().UtcDateTime,
             Id = Convert.ToHexStringLower(Guid.NewGuid().ToByteArray()) + new string('0', 32),
             LastActivityAt = tools.Clock.GetUtcNow().UtcDateTime,
             UserId = account.Id
@@ -295,5 +296,50 @@ public class PasswordChangeServiceTests
         await ChangePasswordAsync(account.Id, TwoFactorServicesWithFakeTools.AccountPassword, newPassword: "court");
 
         Assert.Empty(tools.EmailRequests.SavedRequests);
+    }
+
+    // SS §2 : le code de l'application qui autorise le changement est noté avec lui : il ne resservira plus.
+    [Fact]
+    public async Task AuthenticatorCodeIsNotedWithTheChange()
+    {
+        var activatedAccount = tools.AddActivatedAccount();
+
+        var result = await ChangePasswordAsync(activatedAccount.UserAccount.Id, TwoFactorServicesWithFakeTools.AccountPassword, tools.CalculateCurrentCode(activatedAccount.Secret));
+
+        Assert.IsType<PasswordChangeResult.Changed>(result);
+        Assert.Equal(tools.CurrentStep(), activatedAccount.UserAccount.LastAuthenticatorStep);
+    }
+
+    // Une autre requête se sert du même code juste avant l'enregistrement : le changement relit le compte, voit le code utilisé
+    // et refuse. De deux requêtes avec le même code, une seule passe (SS §2).
+    [Fact]
+    public async Task CodeUsedByAnotherRequestMeanwhileRefusesTheChange()
+    {
+        var activatedAccount = tools.AddActivatedAccount();
+        var oldPasswordHash = activatedAccount.UserAccount.PasswordHash;
+        tools.AccountRepository.AuthenticatorStepUsedBeforeSave = tools.CurrentStep();
+
+        var result = await ChangePasswordAsync(activatedAccount.UserAccount.Id, TwoFactorServicesWithFakeTools.AccountPassword, tools.CalculateCurrentCode(activatedAccount.Secret));
+
+        Assert.IsType<PasswordChangeResult.WrongPasswordOrCode>(result);
+        Assert.Equal(oldPasswordHash, activatedAccount.UserAccount.PasswordHash);
+        Assert.Null(tools.AccountRepository.AuthenticatorStepUsedBeforeSave);
+    }
+
+    // SS §2 : un nouveau mot de passe des fuites connues est refusé : rien n'est vérifié ni changé.
+    [Fact]
+    public async Task BreachedNewPasswordIsRefusedAndNothingChanges()
+    {
+        var account = tools.AddAccountWithoutTwoFactor();
+        var session = AddOpenSession(account);
+        var oldPasswordHash = account.PasswordHash;
+        tools.BreachedPasswordChecker.AddBreachedPassword(NewPassword);
+
+        var result = await ChangePasswordAsync(account.Id, TwoFactorServicesWithFakeTools.AccountPassword);
+
+        Assert.IsType<PasswordChangeResult.NewPasswordBreached>(result);
+        Assert.Equal(oldPasswordHash, account.PasswordHash);
+        Assert.Equal(session, Assert.Single(FindSessionsOf(account)));
+        Assert.Equal(0, tools.PasswordHasher.VerifiedPasswordCount);
     }
 }

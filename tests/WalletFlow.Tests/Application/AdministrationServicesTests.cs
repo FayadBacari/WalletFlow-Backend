@@ -54,7 +54,7 @@ public class AdministrationServicesTests
 
         if (withTwoFactor)
         {
-            account.ActivateTwoFactor("secret-chiffre");
+            account.ActivateTwoFactor("secret-chiffre", TwoFactorTestTools.OldStep);
         }
 
         accounts.SavedUsers.Add(account);
@@ -365,7 +365,7 @@ public class AdministrationServicesTests
     // Un texte vide, ou qui contient un caractère invisible, est refusé ; rien n'est gardé ni noté.
     public static TheoryData<string?> ContentsThatBreakTheRules()
     {
-        return new TheoryData<string?> { null, "   ", "a" + (char)0x202E + "b", new string('a', 5001) };
+        return new TheoryData<string?> { (string?)null, "   ", "a" + (char)0x202E + "b", new string('a', 5001) };
     }
 
     [Theory]

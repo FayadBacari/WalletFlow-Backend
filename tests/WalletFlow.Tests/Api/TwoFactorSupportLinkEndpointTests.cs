@@ -79,14 +79,14 @@ public class TwoFactorSupportLinkEndpointTests
         {
             var wrong = await client.PostAsJsonAsync(LinkEndpoint, new { token = token, password = WrongPassword });
             Assert.Equal(HttpStatusCode.BadRequest, wrong.StatusCode);
-            Assert.Equal(ErrorMessages.WrongCurrentPassword, await ReadFieldErrorAsync(wrong, nameof(DisableTwoFactorRequest.Password)));
+            Assert.Equal(ErrorMessages.WrongCurrentPassword, await ReadFieldErrorAsync(wrong, "password"));
         }
 
         var fifth = await client.PostAsJsonAsync(LinkEndpoint, new { token = token, password = WrongPassword });
         var afterwards = await client.PostAsJsonAsync(LinkEndpoint, new { token = token, password = ValidPassword });
 
-        Assert.Equal(ErrorMessages.TwoFactorLinkCancelled, await ReadFieldErrorAsync(fifth, nameof(DisableTwoFactorRequest.Token)));
-        Assert.Equal(ErrorMessages.TwoFactorLinkNoLongerValid, await ReadFieldErrorAsync(afterwards, nameof(DisableTwoFactorRequest.Token)));
+        Assert.Equal(ErrorMessages.TwoFactorLinkCancelled, await ReadFieldErrorAsync(fifth, "token"));
+        Assert.Equal(ErrorMessages.TwoFactorLinkNoLongerValid, await ReadFieldErrorAsync(afterwards, "token"));
         Assert.True(account.IsTwoFactorEnabled);
     }
 
@@ -106,7 +106,7 @@ public class TwoFactorSupportLinkEndpointTests
 
         var response = await CreateVisitorClient(api, "192.0.2.52").PostAsJsonAsync(LinkEndpoint, new { token = token, password = ValidPassword });
 
-        Assert.Equal(ErrorMessages.TwoFactorLinkAfterPasswordChange, await ReadFieldErrorAsync(response, nameof(DisableTwoFactorRequest.Token)));
+        Assert.Equal(ErrorMessages.TwoFactorLinkAfterPasswordChange, await ReadFieldErrorAsync(response, "token"));
         Assert.True(account.IsTwoFactorEnabled);
     }
 
@@ -154,7 +154,7 @@ public class TwoFactorSupportLinkEndpointTests
             .PostAsync(LinkEndpoint, new StringContent("{}", Encoding.UTF8, "application/json"));
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
-        Assert.NotNull(await ReadFieldErrorAsync(response, nameof(DisableTwoFactorRequest.Token)));
-        Assert.NotNull(await ReadFieldErrorAsync(response, nameof(DisableTwoFactorRequest.Password)));
+        Assert.NotNull(await ReadFieldErrorAsync(response, "token"));
+        Assert.NotNull(await ReadFieldErrorAsync(response, "password"));
     }
 }

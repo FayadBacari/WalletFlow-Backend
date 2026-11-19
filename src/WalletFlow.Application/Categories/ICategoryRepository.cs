@@ -8,20 +8,20 @@ namespace WalletFlow.Application.Categories;
 public interface ICategoryRepository
 {
     // Donne toutes les catégories de l'utilisateur, dans aucun ordre particulier.
-    Task<List<Category>> FindAllAsync(Guid userId);
+    Task<List<Category>> FindAllAsync(Guid userId, CancellationToken cancellationToken = default);
 
     // Cherche cette catégorie parmi celles de l'utilisateur. Renvoie null si elle n'existe pas, ou si elle est à un autre.
-    Task<Category?> FindAsync(Guid userId, Guid categoryId);
+    Task<Category?> FindAsync(Guid userId, Guid categoryId, CancellationToken cancellationToken = default);
 
     // Cherche la catégorie « Autres » de l'utilisateur. Renvoie null si son compte n'existe plus.
-    Task<Category?> FindOtherCategoryAsync(Guid userId);
+    Task<Category?> FindOtherCategoryAsync(Guid userId, CancellationToken cancellationToken = default);
 
     // Compte les catégories de l'utilisateur.
-    Task<int> CountAsync(Guid userId);
+    Task<int> CountAsync(Guid userId, CancellationToken cancellationToken = default);
 
     // Renvoie vrai si une autre catégorie de l'utilisateur porte déjà ce nom, majuscules ignorées, comme le compare la base.
     // La catégorie donnée, celle qu'on renomme, n'est pas comptée.
-    Task<bool> IsNameUsedAsync(Guid userId, string name, Guid? renamedCategoryId);
+    Task<bool> IsNameUsedAsync(Guid userId, string name, Guid? renamedCategoryId, CancellationToken cancellationToken = default);
 
     // Garde de côté une nouvelle catégorie : elle ne sera enregistrée qu'avec les autres changements.
     void PrepareCategory(Category category);
@@ -33,5 +33,5 @@ public interface ICategoryRepository
     // Supprime la catégorie de l'utilisateur et déplace ses transactions dans sa catégorie « Autres », en une seule transaction SQL.
     // Cette écriture est immédiate. Renvoie faux, sans rien changer, si la catégorie n'existe plus, est à un autre, ou est « Autres »,
     // et aussi quand un interblocage avec une autre requête fait tout annuler : l'appelant relit alors la catégorie et recommence.
-    Task<bool> DeleteAsync(Guid userId, Guid categoryId);
+    Task<bool> DeleteAsync(Guid userId, Guid categoryId, CancellationToken cancellationToken = default);
 }

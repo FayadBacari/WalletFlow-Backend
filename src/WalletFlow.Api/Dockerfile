@@ -1,8 +1,9 @@
+# L'API tourne sans les droits de l'administrateur du conteneur, et ne sert que HTTP sur le port 8080 : le HTTPS est assuré par le
+# proxy inverse placé devant elle (SS §6 et §7).
 FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS base
 USER $APP_UID
 WORKDIR /app
 EXPOSE 8080
-EXPOSE 8081
 
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 ARG BUILD_CONFIGURATION=Release
@@ -23,7 +24,7 @@ ARG BUILD_CONFIGURATION=Release
 RUN dotnet publish "./WalletFlow.Api.csproj" -c $BUILD_CONFIGURATION -o /app/publish /p:UseAppHost=false --no-restore
 
 # L'API compte les jours à l'heure de Paris : l'image finale doit contenir les fuseaux horaires (tzdata), sinon elle refuse
-# de démarrer. À vérifier à l'étape de la mise en production, avec le reste de cette image.
+# de démarrer. La CI le vérifie à chaque envoi, puis démarre l'image et sonde ses points de santé (travail « Image Docker »).
 FROM base AS final
 WORKDIR /app
 COPY --from=publish /app/publish .

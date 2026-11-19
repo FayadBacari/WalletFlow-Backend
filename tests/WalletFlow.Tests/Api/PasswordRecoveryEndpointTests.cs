@@ -74,7 +74,7 @@ public class PasswordRecoveryEndpointTests
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         await WaitUntilAsync(() => productionApi.LoggerProvider.Messages.Any(message =>
-            message.StartsWith("Error") && message.Contains("a échoué")));
+            message.StartsWith("Error", StringComparison.Ordinal) && message.Contains("a échoué")));
     }
 
     [Fact]
@@ -89,7 +89,7 @@ public class PasswordRecoveryEndpointTests
 
         Assert.Equal(HttpStatusCode.OK, failureResponse.StatusCode);
         await WaitUntilAsync(() => api.LoggerProvider.Messages.Any(message =>
-            message.StartsWith("Warning") && message.Contains("n'a pas pu partir")));
+            message.StartsWith("Warning", StringComparison.Ordinal) && message.Contains("n'a pas pu partir")));
         var logText = string.Join("\n", api.LoggerProvider.Messages);
         Assert.Contains(account.Id.ToString(), logText);
         Assert.DoesNotContain(Email, logText);
@@ -223,7 +223,7 @@ public class PasswordRecoveryEndpointTests
         var response = await SendResetPasswordRequestAsync(browserClient, "jeton-invente");
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
-        Assert.Equal("Ce lien n'est plus valable. Demande un nouveau lien avec « Mot de passe oublié ».", await ReadFieldErrorAsync(response, "Token"));
+        Assert.Equal("Ce lien n'est plus valable. Demande un nouveau lien avec « Mot de passe oublié ».", await ReadFieldErrorAsync(response, "token"));
     }
 
     [Fact]
@@ -237,8 +237,25 @@ public class PasswordRecoveryEndpointTests
         var response = await SendResetPasswordRequestAsync(browserClient, linkToken, "trop-court");
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
-        Assert.Equal(ErrorMessages.PasswordBreaksRules, await ReadFieldErrorAsync(response, "NewPassword"));
+        Assert.Equal(ErrorMessages.PasswordBreaksRules, await ReadFieldErrorAsync(response, "newPassword"));
         Assert.Equal(HttpStatusCode.OK, (await SendResetPasswordRequestAsync(browserClient, linkToken)).StatusCode);
+    }
+
+    // SS §2 : un mot de passe des fuites connues est refusé sur son champ, et le lien reste valable.
+    [Fact]
+    public async Task BreachedPasswordIsRefusedOnItsFieldAndKeepsTheLinkUsable()
+    {
+        using var api = new ApiFactoryWithFakes();
+        await AddAccountAsync(api);
+        api.BreachedPasswordChecker.AddBreachedPassword(NewPassword);
+        var browserClient = CreateBrowserClient(api);
+        var linkToken = await RequestRecoveryThenReadTokenAsync(api, browserClient, Email);
+
+        var response = await SendResetPasswordRequestAsync(browserClient, linkToken);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal(ErrorMessages.BreachedPassword, await ReadFieldErrorAsync(response, "newPassword"));
+        Assert.Equal(HttpStatusCode.OK, (await SendResetPasswordRequestAsync(browserClient, linkToken, "Autre-Mot-De-Passe-3")).StatusCode);
     }
 
     [Fact]
@@ -326,6 +343,7 @@ public class PasswordRecoveryEndpointTests
         var response = await SendForgotPasswordRequestAsync(browserClient, " Inconnu@Exemple.TEST ");
 
         await AssertProblemTitleAsync(response, HttpStatusCode.TooManyRequests, "Trop de demandes. Réessaie plus tard.");
+        await TooManyRequestsAssertions.AssertTooManyRequestsAsync(response, 3600);
         Assert.Equal(HttpStatusCode.OK, (await SendForgotPasswordRequestAsync(browserClient, "autre@exemple.test")).StatusCode);
     }
 
@@ -424,7 +442,7 @@ public class PasswordRecoveryEndpointTests
         var response = await SendRawJsonAsync(browserClient, ForgotPasswordEndpoint, rawJson);
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
-        Assert.Equal(ErrorMessages.InvalidEmailAddress, await ReadFieldErrorAsync(response, "Email"));
+        Assert.Equal(ErrorMessages.InvalidEmailAddress, await ReadFieldErrorAsync(response, "email"));
     }
 
     // Aucune de ces valeurs ne doit provoquer d'erreur 500 ni apparaître dans la réponse.
@@ -464,12 +482,12 @@ public class PasswordRecoveryEndpointTests
 
         var response = await SendRawJsonAsync(browserClient, ForgotPasswordEndpoint, rawJson);
 
-        Assert.Equal(message, await ReadFieldErrorAsync(response, "Email"));
+        Assert.Equal(message, await ReadFieldErrorAsync(response, "email"));
     }
 
     [Theory]
-    [InlineData("""{"token":"jeton"}""", "NewPassword", "Le nouveau mot de passe est obligatoire.")]
-    [InlineData("""{"newPassword":"Nouveau-Mot-De-Passe-2"}""", "Token", "Le lien de récupération est obligatoire.")]
+    [InlineData("""{"token":"jeton"}""", "newPassword", "Le nouveau mot de passe est obligatoire.")]
+    [InlineData("""{"newPassword":"Nouveau-Mot-De-Passe-2"}""", "token", "Le lien de récupération est obligatoire.")]
     public async Task MissingResetFieldIsRefusedWithItsFrenchMessage(string rawJson, string fieldName, string message)
     {
         using var api = new ApiFactoryWithFakes();

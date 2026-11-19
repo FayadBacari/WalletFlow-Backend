@@ -50,6 +50,32 @@ public class ApiInProductionModeTests
             "max-age=31536000; includeSubDomains");
     }
 
+    // Sur le vrai serveur Kestrel, le seul qui écrit l'en-tête Server, aucune réponse ne nomme le serveur web, et aucune ne peut
+    // être gardée par un navigateur ou un intermédiaire : ni une réponse réussie, ni un refus faute de session, ni une adresse
+    // inconnue (SS §6).
+    [Fact]
+    public async Task AnswersOfTheRealServerNeverNameItAndAreNeverStored()
+    {
+        using var productionApi = new ApiFactoryInProduction();
+        productionApi.UseKestrel(0);
+        var client = productionApi.CreateClient();
+
+        var answers = new[]
+        {
+            await client.PostAsJsonAsync(RegistrationEndpoint, new { email = "visiteur@exemple.test", password = ValidPassword }),
+            await client.GetAsync("/api/account/profile"),
+            await client.GetAsync("/api/adresse-inconnue")
+        };
+
+        Assert.Equal(
+            new[] { HttpStatusCode.OK, HttpStatusCode.Unauthorized, HttpStatusCode.NotFound },
+            answers.Select(answer => answer.StatusCode));
+        foreach (var answer in answers)
+        {
+            SecurityHeadersAssertions.AssertExactSecurityHeaders(answer);
+        }
+    }
+
     // En production, l'API ne répond qu'aux noms du site : une requête sous un autre nom est refusée avant toute lecture.
     [Fact]
     public async Task RequestUnderAnotherHostNameIsRefused()
@@ -116,7 +142,6 @@ public class ApiInProductionModeTests
     // L'API refuse de démarrer si un réglage obligatoire manque, au lieu de tourner à moitié configurée.
     [Theory]
     [InlineData("ConnectionStrings:WalletFlowDatabase", "WalletFlowDatabase")]
-    [InlineData("LocalEmailsFolder", "LocalEmailsFolder")]
     [InlineData("PublicWebsiteAddress", "PublicWebsiteAddress")]
     [InlineData("EnableBanking:ApplicationId", "EnableBanking:ApplicationId")]
     [InlineData("EnableBanking:PrivateKeyPath", "EnableBanking:PrivateKeyPath")]

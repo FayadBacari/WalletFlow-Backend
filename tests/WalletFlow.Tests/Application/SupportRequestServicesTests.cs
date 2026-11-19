@@ -72,7 +72,7 @@ public class SupportRequestServicesTests
     // Un message vide, fait seulement d'espaces, ou qui contient un caractère invisible, est refusé.
     public static TheoryData<string?> UserMessagesThatBreakTheRules()
     {
-        return new TheoryData<string?> { null, "   \r\n  ", "a" + (char)0x202E + "b" };
+        return new TheoryData<string?> { (string?)null, "   \r\n  ", "a" + (char)0x202E + "b" };
     }
 
     [Theory]

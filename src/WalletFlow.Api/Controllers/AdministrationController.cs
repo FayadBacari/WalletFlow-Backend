@@ -45,10 +45,10 @@ public class AdministrationController : ControllerBase
     // toute écriture, une recherche notée au journal demande le jeton anti-CSRF, qu'un lien piégé n'a pas (SS §6).
     [HttpPost("accounts/search")]
     [RequestSizeLimit(RequestSizeConfiguration.MaximumAccountRequestBytes)]
-    [ResponseCache(NoStore = true, Location = ResponseCacheLocation.None)]
-    public async Task<IActionResult> SearchAccount(AdminAccountSearchRequest request)
+    [ProducesResponseType<AdminAccountSearchResponse>(StatusCodes.Status200OK)]
+    public async Task<IActionResult> SearchAccount(AdminAccountSearchRequest request, CancellationToken cancellationToken = default)
     {
-        var result = await searchService.SearchAsync(SessionClaims.ReadUserId(User), request.Email, HttpContext.Connection.RemoteIpAddress);
+        var result = await searchService.SearchAsync(SessionClaims.ReadUserId(User), request.Email, HttpContext.Connection.RemoteIpAddress, cancellationToken);
 
         if (result is AdminAccountSearchResult.Found found)
         {
@@ -66,9 +66,12 @@ public class AdministrationController : ControllerBase
     // POST api/admin/accounts/{accountId}/unlock : débloque le compte, comme le lien de déblocage.
     [HttpPost("accounts/{accountId:guid}/unlock")]
     [RequestSizeLimit(RequestSizeConfiguration.MaximumAdministrationRequestBytes)]
-    public async Task<IActionResult> UnlockAccount(Guid accountId)
+    [ProducesResponseType<AdminAccountResponse>(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    public async Task<IActionResult> UnlockAccount(Guid accountId, CancellationToken cancellationToken = default)
     {
-        var result = await unlockService.UnlockAsync(SessionClaims.ReadUserId(User), accountId, HttpContext.Connection.RemoteIpAddress);
+        var result = await unlockService.UnlockAsync(SessionClaims.ReadUserId(User), accountId, HttpContext.Connection.RemoteIpAddress, cancellationToken);
 
         return result switch
         {
@@ -83,9 +86,12 @@ public class AdministrationController : ControllerBase
     // authentification. L'administrateur ne voit ni ce lien ni le mot de passe.
     [HttpPost("accounts/{accountId:guid}/two-factor-link")]
     [RequestSizeLimit(RequestSizeConfiguration.MaximumAdministrationRequestBytes)]
-    public async Task<IActionResult> SendTwoFactorLink(Guid accountId)
+    [ProducesResponseType<MessageResponse>(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    public async Task<IActionResult> SendTwoFactorLink(Guid accountId, CancellationToken cancellationToken = default)
     {
-        var result = await twoFactorLinkService.SendAsync(SessionClaims.ReadUserId(User), accountId, HttpContext.Connection.RemoteIpAddress);
+        var result = await twoFactorLinkService.SendAsync(SessionClaims.ReadUserId(User), accountId, HttpContext.Connection.RemoteIpAddress, cancellationToken);
 
         return result switch
         {
@@ -100,15 +106,15 @@ public class AdministrationController : ControllerBase
     // GET api/admin/support-requests?status=sent : les demandes dans cet état (« sent », « inProgress » ou « resolved »),
     // la plus ancienne d'abord.
     [HttpGet("support-requests")]
-    [ResponseCache(NoStore = true, Location = ResponseCacheLocation.None)]
-    public async Task<IActionResult> ListSupportRequests([FromQuery] string? status)
+    [ProducesResponseType<AdminSupportRequestListResponse>(StatusCodes.Status200OK)]
+    public async Task<IActionResult> ListSupportRequests([FromQuery] string? status, CancellationToken cancellationToken = default)
     {
         if (!WebsiteNames.TryReadSupportRequestStatus(status, out var supportRequestStatus))
         {
             return AnswerFieldRefused("status", ErrorMessages.SupportRequestStatusUnknown);
         }
 
-        var requests = await supportService.ListAsync(supportRequestStatus);
+        var requests = await supportService.ListAsync(supportRequestStatus, cancellationToken);
         var items = requests
             .Select(request => new AdminSupportRequestItemResponse(
                 request.Id,
@@ -124,10 +130,11 @@ public class AdministrationController : ControllerBase
 
     // GET api/admin/support-requests/{requestId} : une demande avec son message et ses réponses.
     [HttpGet("support-requests/{requestId:guid}")]
-    [ResponseCache(NoStore = true, Location = ResponseCacheLocation.None)]
-    public async Task<IActionResult> ReadSupportRequest(Guid requestId)
+    [ProducesResponseType<AdminSupportRequestDetailsResponse>(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> ReadSupportRequest(Guid requestId, CancellationToken cancellationToken = default)
     {
-        var request = await supportService.ReadAsync(requestId);
+        var request = await supportService.ReadAsync(requestId, cancellationToken);
 
         if (request == null)
         {
@@ -141,13 +148,17 @@ public class AdministrationController : ControllerBase
     // demande passe « en cours », même si elle était résolue.
     [HttpPost("support-requests/{requestId:guid}/responses")]
     [RequestSizeLimit(RequestSizeConfiguration.MaximumSupportRequestBytes)]
-    public async Task<IActionResult> AnswerSupportRequest(Guid requestId, AdminAnswerRequest request)
+    [ProducesResponseType<AdminSupportRequestDetailsResponse>(StatusCodes.Status201Created)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    public async Task<IActionResult> AnswerSupportRequest(Guid requestId, AdminAnswerRequest request, CancellationToken cancellationToken = default)
     {
         var result = await supportService.AnswerAsync(
             SessionClaims.ReadUserId(User),
             requestId,
             request.Content,
-            HttpContext.Connection.RemoteIpAddress);
+            HttpContext.Connection.RemoteIpAddress,
+            cancellationToken);
 
         return result switch
         {
@@ -161,9 +172,12 @@ public class AdministrationController : ControllerBase
     // POST api/admin/support-requests/{requestId}/resolve : marque la demande « résolue », avec ou sans réponse.
     [HttpPost("support-requests/{requestId:guid}/resolve")]
     [RequestSizeLimit(RequestSizeConfiguration.MaximumAdministrationRequestBytes)]
-    public async Task<IActionResult> ResolveSupportRequest(Guid requestId)
+    [ProducesResponseType<AdminSupportRequestDetailsResponse>(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    public async Task<IActionResult> ResolveSupportRequest(Guid requestId, CancellationToken cancellationToken = default)
     {
-        var result = await supportService.ResolveAsync(SessionClaims.ReadUserId(User), requestId, HttpContext.Connection.RemoteIpAddress);
+        var result = await supportService.ResolveAsync(SessionClaims.ReadUserId(User), requestId, HttpContext.Connection.RemoteIpAddress, cancellationToken);
 
         return result switch
         {
@@ -176,10 +190,10 @@ public class AdministrationController : ControllerBase
 
     // GET api/admin/statistics : les comptes par état, les connexions bancaires actives et les demandes par état.
     [HttpGet("statistics")]
-    [ResponseCache(NoStore = true, Location = ResponseCacheLocation.None)]
-    public async Task<IActionResult> ReadStatistics()
+    [ProducesResponseType<AdminStatisticsResponse>(StatusCodes.Status200OK)]
+    public async Task<IActionResult> ReadStatistics(CancellationToken cancellationToken = default)
     {
-        var statistics = await statisticsService.ReadAsync();
+        var statistics = await statisticsService.ReadAsync(cancellationToken);
 
         return Ok(new AdminStatisticsResponse(
             new AccountsByStateResponse(

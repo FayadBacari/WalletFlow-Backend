@@ -114,7 +114,7 @@ public class ConcurrentAlertRequestsTests
             var subjects = api.EmailSender.SentEmails.Where(sent => sent.RecipientAddress == email).Select(sent => sent.Subject).ToList();
             Assert.Equal(1, subjects.Count(subject => subject == "Alerte de budget : budget atteint"));
             Assert.InRange(subjects.Count(subject => subject == "Alerte de budget : 80 % atteints"), 0, 1);
-            Assert.Equal(subjects.Count, subjects.Count(subject => subject.StartsWith("Alerte de budget")));
+            Assert.Equal(subjects.Count, subjects.Count(subject => subject.StartsWith("Alerte de budget", StringComparison.Ordinal)));
         }
         finally
         {

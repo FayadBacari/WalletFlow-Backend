@@ -46,6 +46,7 @@ public class AccountSettingsRepositoryTests
     {
         return new UserSession
         {
+            CreatedAt = Now,
             Id = Convert.ToHexStringLower(Guid.NewGuid().ToByteArray()) + new string('0', 32),
             LastActivityAt = Now,
             UserId = account.Id
@@ -165,6 +166,7 @@ public class AccountSettingsRepositoryTests
         var account = await SaveConfirmedAccountAsync(databaseContext, "test-autre-erreur@exemple.test");
         var sessionWithTooLongIdentifier = new UserSession
         {
+            CreatedAt = Now,
             Id = new string('a', 65),
             LastActivityAt = Now,
             UserId = account.Id

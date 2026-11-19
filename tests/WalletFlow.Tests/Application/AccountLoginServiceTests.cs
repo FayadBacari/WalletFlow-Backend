@@ -142,6 +142,7 @@ public class AccountLoginServiceTests
         Assert.IsType<AccountLoginResult.LoggedIn>(result);
         var session = Assert.Single(sessionRepository.SavedSessions);
         Assert.Equal(account.Id, session.UserId);
+        Assert.Equal(clock.GetUtcNow().UtcDateTime, session.CreatedAt);
         Assert.Equal(clock.GetUtcNow().UtcDateTime, session.LastActivityAt);
         Assert.NotEqual(Assert.IsType<AccountLoginResult.LoggedIn>(result).SessionToken, session.Id);
         Assert.Equal(tokenGenerator.HashToken(Assert.IsType<AccountLoginResult.LoggedIn>(result).SessionToken), session.Id);
@@ -432,18 +433,20 @@ public class AccountLoginServiceTests
         Assert.Equal(2, CountSecurityEvents(SecurityEventType.Lockout, SecurityEventResult.Success));
     }
 
-    // C'est ce qui limite vraiment les requêtes simultanées : l'essai doit déjà être enregistré quand le mot de passe est comparé.
+    // L'essai compte une fois le mot de passe comparé : un essai que le serveur saturé n'a pas pu vérifier ne bloque pas un vrai
+    // utilisateur. Les requêtes simultanées restent limitées : seuls les 5 premiers essais comptés peuvent réussir, les autres
+    // reçoivent le refus générique, même avec le bon mot de passe (ConcurrentRequestsTests le vérifie sur la vraie base).
     [Fact]
-    public async Task AttemptIsAlreadySavedWhenThePasswordIsCompared()
+    public async Task AttemptIsSavedOnceThePasswordIsCompared()
     {
-        AddAccount();
+        var account = AddAccount();
         var savedCountAtComparison = -1;
         passwordHasher.OnPasswordVerified = () =>
             savedCountAtComparison = accountRepository.LoginCounterSaveCount;
 
         await LogInAsync(AccountEmail, WrongPassword);
 
-        Assert.Equal(1, savedCountAtComparison);
+        Assert.Equal((0, 1, 1), (savedCountAtComparison, accountRepository.LoginCounterSaveCount, (int)account.FailedLoginAttemptCount));
     }
 
     // --- Requêtes simultanées et pannes
@@ -703,13 +706,63 @@ public class AccountLoginServiceTests
         sessionRepository.SavedDevices.Add(new Device
         {
             DeviceToken = tokenGenerator.HashToken(otherDeviceToken),
-            UserId = Guid.NewGuid()
+            UserId = Guid.NewGuid(),
+            LastUsedAt = clock.GetUtcNow().UtcDateTime
         });
 
         var result = await LogInWithCookiesAsync(otherDeviceToken, null);
 
         Assert.NotEqual(otherDeviceToken, Assert.IsType<AccountLoginResult.LoggedIn>(result).DeviceToken);
         Assert.Equal(2, sessionRepository.SavedDevices.Count);
+    }
+
+    // Une connexion depuis un appareil connu note sa date : l'appareil n'est pas oublié tant qu'on s'en sert (SS §3).
+    [Fact]
+    public async Task LoginFromAKnownDeviceNotesItsDate()
+    {
+        AddAccount();
+        var firstResult = await LogInWithCookiesAsync(null, null);
+        clock.Advance(TimeSpan.FromDays(200));
+
+        await LogInWithCookiesAsync(Assert.IsType<AccountLoginResult.LoggedIn>(firstResult).DeviceToken, null);
+
+        Assert.Equal(clock.GetUtcNow().UtcDateTime, Assert.Single(sessionRepository.SavedDevices).LastUsedAt);
+    }
+
+    // SS §3 : un compte garde 10 sessions au plus. La onzième connexion ferme la session la moins récemment active.
+    [Fact]
+    public async Task EleventhSessionClosesTheLeastRecentlyActiveOne()
+    {
+        AddAccount();
+        var sessionTokens = new List<string>();
+
+        for (var login = 1; login <= 11; login++)
+        {
+            clock.Advance(TimeSpan.FromMinutes(1));
+            sessionTokens.Add(Assert.IsType<AccountLoginResult.LoggedIn>(await LogInWithCookiesAsync(null, null)).SessionToken);
+        }
+
+        Assert.Equal(10, sessionRepository.SavedSessions.Count);
+        Assert.DoesNotContain(sessionRepository.SavedSessions, session => session.Id == tokenGenerator.HashToken(sessionTokens[0]));
+        Assert.Contains(sessionRepository.SavedSessions, session => session.Id == tokenGenerator.HashToken(sessionTokens[10]));
+    }
+
+    // SS §3 : un compte garde 20 appareils au plus. Le vingt et unième fait oublier le moins récemment utilisé.
+    [Fact]
+    public async Task TwentyFirstDeviceForgetsTheLeastRecentlyUsedOne()
+    {
+        AddAccount();
+        var deviceTokens = new List<string>();
+
+        for (var login = 1; login <= 21; login++)
+        {
+            clock.Advance(TimeSpan.FromMinutes(1));
+            deviceTokens.Add(Assert.IsType<AccountLoginResult.LoggedIn>(await LogInWithCookiesAsync(null, null)).DeviceToken);
+        }
+
+        Assert.Equal(20, sessionRepository.SavedDevices.Count);
+        Assert.DoesNotContain(sessionRepository.SavedDevices, device => device.DeviceToken == tokenGenerator.HashToken(deviceTokens[0]));
+        Assert.Contains(sessionRepository.SavedDevices, device => device.DeviceToken == tokenGenerator.HashToken(deviceTokens[20]));
     }
 
     // --- Alerte « nouvel appareil » (GR Notif)
@@ -762,7 +815,7 @@ public class AccountLoginServiceTests
         var account = AddAccount();
         await LogInWithCookiesAsync(null, null);
         var otherDeviceToken = "jeton-d-appareil-d-un-autre-compte";
-        sessionRepository.SavedDevices.Add(new Device { DeviceToken = tokenGenerator.HashToken(otherDeviceToken), UserId = Guid.NewGuid() });
+        sessionRepository.SavedDevices.Add(new Device { DeviceToken = tokenGenerator.HashToken(otherDeviceToken), UserId = Guid.NewGuid(), LastUsedAt = clock.GetUtcNow().UtcDateTime });
 
         await LogInWithCookiesAsync(otherDeviceToken, null);
 

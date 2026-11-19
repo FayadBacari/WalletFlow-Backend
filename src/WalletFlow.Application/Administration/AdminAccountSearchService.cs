@@ -24,7 +24,7 @@ public class AdminAccountSearchService
 
     // Cherche le compte qui utilise exactement cette adresse, une fois mise en minuscules et sans espaces autour.
     // Une adresse mal formée n'est pas cherchée, et ne laisse rien au journal.
-    public async Task<AdminAccountSearchResult> SearchAsync(Guid administratorId, string? typedEmail, IPAddress? ipAddress)
+    public async Task<AdminAccountSearchResult> SearchAsync(Guid administratorId, string? typedEmail, IPAddress? ipAddress, CancellationToken cancellationToken = default)
     {
         var email = EmailAddressRules.Normalize(typedEmail ?? string.Empty);
 
@@ -33,7 +33,7 @@ public class AdminAccountSearchService
             return new AdminAccountSearchResult.EmailBreaksRules();
         }
 
-        var account = await accountRepository.FindByEmailAsync(email);
+        var account = await accountRepository.FindByEmailAsync(email, cancellationToken);
 
         await securityJournal.SaveAdminActionNowAsync(administratorId, account?.Id, ipAddress);
 

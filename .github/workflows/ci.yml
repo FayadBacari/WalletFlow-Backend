@@ -1,9 +1,18 @@
 # Intégration continue de l'API WalletFlow (SS §10). À chaque envoi sur GitHub, et à la demande depuis l'onglet Actions :
 # - la base est créée dans un PostgreSQL 18 neuf avec le script du MPD, puis vérifiée par ses tests SQL ;
 # - un paquet qui a une faille connue arrête la vérification ;
-# - le projet est compilé avec les versions verrouillées des paquets, sans aucun avertissement, puis tous les tests sont lancés ;
+# - le projet est compilé avec les versions verrouillées des paquets, sans aucun avertissement des règles d'analyse
+#   recommandées, puis sa mise en forme est vérifiée et tous les tests sont lancés ;
 # - gitleaks cherche un secret écrit par erreur : dans les nouveaux commits à chaque envoi ou pull request,
 #   dans tout l'historique à la demande.
+# - CodeQL cherche les failles du code C# (injections, données non vérifiées, cryptographie fragile…), et range ses alertes
+#   dans l'onglet Security de GitHub.
+# - l'image Docker est construite comme en production, vérifiée (fuseau de Paris, utilisateur sans droits), scannée par Trivy,
+#   démarrée avec des secrets jetables, sondée sur ses points de santé, puis attaquée en marche par OWASP ZAP.
+# - la sauvegarde chiffrée de la base fait l'aller-retour complet : sauvegarde, restauration dans une base neuve, comparaison
+#   avec la source et tests SQL, puis chaque refus de la restauration (SS §7).
+# - l'outil de migration du schéma prouve qu'une base migrée a exactement le schéma d'une base neuve créée par le MPD, et passe
+#   ses tests SQL : un changement du MPD sans sa migration arrête la vérification.
 name: Intégration continue
 
 # La relance à la demande sert quand un passage n'a pas pu démarrer, car GitHub ne permet pas de le relancer,
@@ -13,7 +22,8 @@ on:
   pull_request:
   workflow_dispatch:
 
-# Le jeton de GitHub ne sert qu'à lire le code : ces vérifications n'écrivent rien dans le dépôt.
+# Le jeton de GitHub ne sert qu'à lire le code : ces vérifications n'écrivent rien dans le dépôt. Seul le travail CodeQL reçoit
+# en plus le droit d'envoyer ses alertes dans l'onglet Security.
 # Chaque action est désignée par l'empreinte de sa version, pas par une étiquette qu'on peut déplacer (SS §10).
 # Dependabot propose leurs mises à jour chaque semaine.
 permissions:
@@ -78,6 +88,11 @@ jobs:
       - name: Compiler sans aucun avertissement
         run: dotnet build --no-restore -warnaserror
 
+      # La mise en forme du code (espaces, retours à la ligne) suit .editorconfig : un écart arrête la vérification, et
+      # « dotnet format » le corrige sur la machine.
+      - name: Vérifier la mise en forme du code
+        run: dotnet format --verify-no-changes --no-restore
+
       - name: Lancer tous les tests
         run: dotnet test --no-build
 
@@ -100,3 +115,236 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITLEAKS_VERSION: 8.30.1
+
+  codeql:
+    name: Analyse du code par CodeQL
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      security-events: write
+
+    steps:
+      - name: Récupérer le code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Installer .NET 10
+        uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
+        with:
+          dotnet-version: 10.0.x
+
+      # Les requêtes « security-extended » ajoutent aux requêtes de base celles qui trouvent plus de failles possibles,
+      # au prix de quelques fausses alertes de plus.
+      - name: Préparer CodeQL pour le C#
+        uses: github/codeql-action/init@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
+        with:
+          languages: csharp
+          build-mode: manual
+          queries: security-extended
+
+      # CodeQL analyse ce qu'il voit compiler : seule l'API est compilée, avec les couches qu'elle utilise et les versions
+      # verrouillées des paquets. Les tests ne le sont pas : leurs mots de passe d'exemple ne donneraient que de fausses alertes.
+      - name: Compiler l'API sous l'œil de CodeQL
+        run: |
+          dotnet restore src/WalletFlow.Api/WalletFlow.Api.csproj --locked-mode
+          dotnet build src/WalletFlow.Api/WalletFlow.Api.csproj --no-restore
+
+      - name: Analyser le code et envoyer les alertes
+        uses: github/codeql-action/analyze@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
+        with:
+          category: /language:csharp
+
+  docker:
+    name: Image Docker
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_DB: walletflow
+          # Base jetable, joignable seulement depuis la machine de la vérification : aucun mot de passe n'est nécessaire.
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - name: Récupérer le code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Créer la base avec le script du MPD
+        run: psql -h localhost -U postgres -d walletflow -v ON_ERROR_STOP=1 -f database/001_create_walletflow_schema.sql
+
+      # L'image se construit comme en production, avec les versions verrouillées des paquets.
+      - name: Construire l'image
+        run: docker build --file src/WalletFlow.Api/Dockerfile --tag walletflow-backend:ci .
+
+      # L'API compte les jours à l'heure de Paris : sans ce fuseau dans l'image, elle refuserait de démarrer.
+      - name: Vérifier le fuseau horaire de Paris dans l'image
+        run: docker run --rm --entrypoint ls walletflow-backend:ci /usr/share/zoneinfo/Europe/Paris
+
+      # Trivy cherche dans l'image les failles connues des paquets du système et des bibliothèques .NET, et les secrets oubliés.
+      # Une faille haute ou critique qui a déjà un correctif arrête la vérification. Trivy lit une copie de l'image, sans aucun
+      # accès au démon Docker. Son image est désignée par son empreinte, la même sur Docker Hub et sur GHCR : les versions 0.69.4
+      # à 0.69.6, piégées en mars 2026, volaient les secrets des machines de vérification.
+      - name: Chercher les failles connues de l'image (Trivy 0.76.2)
+        run: |
+          docker save walletflow-backend:ci --output "$RUNNER_TEMP/image.tar"
+          docker run --rm --volume "$RUNNER_TEMP/image.tar:/scan/image.tar:ro" \
+            ghcr.io/aquasecurity/trivy@sha256:8f6bb947dbc528902e11f2f5be52f7b519f6a39d5d148f41166f2040499768fb \
+            image --input /scan/image.tar --scanners vuln,secret --severity HIGH,CRITICAL --ignore-unfixed \
+            --exit-code 1 --no-progress
+
+      # ZAP attaque l'API route par route : il en lit la liste dans la description OpenAPI, que l'API ne publie qu'en
+      # développement. La même image démarre donc un instant en développement pour la donner, puis s'arrête avant le démarrage
+      # en production : la garde de l'instance unique refuserait deux instances sur la même base.
+      - name: Lire la description OpenAPI de l'image
+        run: |
+          docker run --detach --name walletflow-dev --network host \
+            --env ASPNETCORE_ENVIRONMENT=Development \
+            --env ASPNETCORE_HTTP_PORTS=8081 \
+            --env ConnectionStrings__WalletFlowDatabase="Host=localhost;Port=5432;Database=walletflow;Username=walletflow_app" \
+            --env TwoFactorSecretEncryptionKey="$(openssl rand -base64 32)" \
+            --env LocalEmailsFolder=/tmp/courriels \
+            walletflow-backend:ci
+          mkdir -p "$RUNNER_TEMP/zap"
+          chmod 777 "$RUNNER_TEMP/zap"
+          for attempt in $(seq 1 30); do
+            if curl --silent --fail --output "$RUNNER_TEMP/zap/openapi.json" http://localhost:8081/openapi/v1.json; then
+              break
+            fi
+            sleep 2
+          done
+          if [ ! -s "$RUNNER_TEMP/zap/openapi.json" ]; then
+            docker logs walletflow-dev
+            exit 1
+          fi
+          docker stop walletflow-dev
+          docker rm walletflow-dev
+          python3 - "$RUNNER_TEMP/zap/openapi.json" <<'PY'
+          import json, sys
+          path = sys.argv[1]
+          document = json.load(open(path, encoding="utf-8"))
+          document["servers"] = [{"url": "http://localhost:8080"}]
+          json.dump(document, open(path, "w", encoding="utf-8"))
+          PY
+          cp .zap/rules.tsv "$RUNNER_TEMP/zap/rules.tsv"
+
+      # L'image démarre en production, avec des secrets jetables créés pour ce passage : aucun n'est écrit dans le dépôt. Les
+      # clés du jeton anti-CSRF vont dans un dossier en mémoire, chiffrées avec un certificat jetable, et la clé de la banque et
+      # celle du certificat sont lues en lecture seule.
+      - name: Démarrer l'image en production
+        run: |
+          mkdir -p "$RUNNER_TEMP/banque" "$RUNNER_TEMP/certificat"
+          openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out "$RUNNER_TEMP/banque/cle.pem" 2> /dev/null
+          openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj "/CN=WalletFlow CI" \
+            -keyout "$RUNNER_TEMP/certificat/cle.pem" -out "$RUNNER_TEMP/certificat/certificat.pem" 2> /dev/null
+          chmod 644 "$RUNNER_TEMP/banque/cle.pem" "$RUNNER_TEMP/certificat/cle.pem"
+          docker run --detach --name walletflow --network host \
+            --mount type=tmpfs,destination=/cles,tmpfs-mode=1777 \
+            --volume "$RUNNER_TEMP/banque:/banque:ro" \
+            --volume "$RUNNER_TEMP/certificat:/certificat:ro" \
+            --env ASPNETCORE_HTTP_PORTS=8080 \
+            --env ConnectionStrings__WalletFlowDatabase="Host=localhost;Port=5432;Database=walletflow;Username=walletflow_app" \
+            --env TwoFactorSecretEncryptionKey="$(openssl rand -base64 32)" \
+            --env PublicWebsiteAddress=https://walletflow.test \
+            --env "AllowedHosts=walletflow.test;localhost" \
+            --env EnableBanking__ApplicationId=application-de-la-ci \
+            --env EnableBanking__PrivateKeyPath=/banque/cle.pem \
+            --env Smtp__Host=smtp.walletflow.test \
+            --env Smtp__Username=compte-de-la-ci \
+            --env Smtp__Password="$(openssl rand -hex 16)" \
+            --env Smtp__SenderAddress=noreply@walletflow.test \
+            --env DataProtection__KeysFolder=/cles \
+            --env DataProtection__CertificatePath=/certificat/certificat.pem \
+            --env DataProtection__CertificateKeyPath=/certificat/cle.pem \
+            walletflow-backend:ci
+
+      # L'API doit se dire vivante, puis prête : la base répond. Elle ne tourne pas avec les droits de l'administrateur du
+      # conteneur, ne nomme pas son serveur web, et refuse un autre nom que celui du site.
+      - name: Sonder les points de santé
+        run: |
+          for attempt in $(seq 1 30); do
+            if curl --silent --fail --header "Host: walletflow.test" http://localhost:8080/health/live > /dev/null; then
+              break
+            fi
+            sleep 2
+          done
+          curl --silent --show-error --fail --header "Host: walletflow.test" http://localhost:8080/health/live
+          echo
+          curl --silent --show-error --fail --header "Host: walletflow.test" http://localhost:8080/health/ready
+          echo
+          curl --silent --show-error --fail --header "Host: walletflow.test" http://localhost:8080/health/tasks
+          echo
+          test "$(docker exec walletflow id -u)" != "0"
+          # Sous « set -e », une ligne qui commence par « ! » ne fait jamais échouer l'étape : d'où ce « if ».
+          if curl --silent --head --header "Host: walletflow.test" http://localhost:8080/health/live | grep --quiet --ignore-case "^server:"; then
+            echo "La réponse nomme le serveur web."
+            exit 1
+          fi
+          test "$(curl --silent --output /dev/null --write-out '%{http_code}' --header 'Host: site-piege.example' http://localhost:8080/health/live)" = "400"
+
+      # OWASP ZAP attaque l'API en marche, en production, sur chaque route de la description : injections, en-têtes, réponses qui
+      # en disent trop… Sans session, il atteint surtout les routes publiques ; les autres répondent 401. Toute alerte arrête la
+      # vérification, sauf celles que .zap/rules.tsv écarte, chacune avec sa raison. Le nom « localhost » est accepté par l'API
+      # pour ce passage seulement, et ZAP est désigné par l'empreinte de son image, la même sur Docker Hub et sur GHCR.
+      - name: Attaquer l'API en marche (OWASP ZAP 2.17.0)
+        run: |
+          docker run --rm --network host --volume "$RUNNER_TEMP/zap:/zap/wrk:rw" \
+            ghcr.io/zaproxy/zaproxy@sha256:9624669db72f54d86c4b46a7064518bd9bf79d8c61a4c31befa9923489f328af \
+            zap-api-scan.py -t openapi.json -f openapi -c rules.tsv -l WARN \
+            -z "-config scanner.maxScanDurationInMins=10"
+
+      - name: Afficher le journal de l'API en cas d'échec
+        if: failure()
+        run: docker logs walletflow
+
+  backup:
+    name: Sauvegarde, restauration et migrations
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_DB: walletflow
+          # Base jetable, joignable seulement depuis la machine de la vérification : aucun mot de passe n'est nécessaire.
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      PGHOST: localhost
+      PGUSER: postgres
+
+    steps:
+      - name: Récupérer le code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # pg_dump doit avoir la version du serveur, ou une plus récente : les outils de PostgreSQL 18 viennent du dépôt officiel
+      # de PostgreSQL, que la machine de la vérification sait ajouter.
+      - name: Installer les outils de PostgreSQL 18
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql-common
+          sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
+          sudo apt-get install -y postgresql-client-18
+          pg_dump --version
+
+      - name: Prouver la sauvegarde et la restauration
+        run: database/backup/test-backup-round-trip.sh
+
+      - name: Prouver les migrations du schéma
+        run: database/tests/test-migrations.sh

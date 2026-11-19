@@ -27,7 +27,9 @@ public class PasswordChangeController : ControllerBase
     [HttpPost("password")]
     [EnableRateLimiting(RateLimitingConfiguration.PasswordChangePolicy)]
     [RequestSizeLimit(RequestSizeConfiguration.MaximumAccountRequestBytes)]
-    public async Task<IActionResult> ChangePassword(ChangePasswordRequest request)
+    [ProducesResponseType<MessageResponse>(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status503ServiceUnavailable, Description = OpenApiConfiguration.ServerBusyDescription)]
+    public async Task<IActionResult> ChangePassword(ChangePasswordRequest request, CancellationToken cancellationToken = default)
     {
         var result = await passwordChangeService.ChangeAsync(new PasswordChangeAttempt
         {
@@ -36,7 +38,8 @@ public class PasswordChangeController : ControllerBase
             NewPassword = request.NewPassword,
             Code = request.Code,
             IpAddress = HttpContext.Connection.RemoteIpAddress
-        });
+        },
+        cancellationToken);
 
         if (result is PasswordChangeResult.Changed changed)
         {
@@ -48,6 +51,12 @@ public class PasswordChangeController : ControllerBase
         if (result is PasswordChangeResult.NewPasswordBreaksRules)
         {
             ModelState.AddModelError(nameof(ChangePasswordRequest.NewPassword), ErrorMessages.PasswordBreaksRules);
+            return ValidationProblem();
+        }
+
+        if (result is PasswordChangeResult.NewPasswordBreached)
+        {
+            ModelState.AddModelError(nameof(ChangePasswordRequest.NewPassword), ErrorMessages.BreachedPassword);
             return ValidationProblem();
         }
 

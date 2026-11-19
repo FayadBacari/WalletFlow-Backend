@@ -39,18 +39,19 @@ public class AdminTwoFactorLinkService
     }
 
     // Met le lien dans la file d'e-mails, si le compte a la double authentification et un mot de passe d'au moins 7 jours.
-    public async Task<AdminTwoFactorLinkResult> SendAsync(Guid administratorId, Guid accountId, IPAddress? ipAddress)
+    public async Task<AdminTwoFactorLinkResult> SendAsync(Guid administratorId, Guid accountId, IPAddress? ipAddress, CancellationToken cancellationToken = default)
     {
         return await savingService.SaveWithRetriesAsync(
-            () => PrepareLinkAsync(administratorId, accountId, ipAddress),
-            new AdminTwoFactorLinkResult.NotSaved());
+            () => PrepareLinkAsync(administratorId, accountId, ipAddress, cancellationToken),
+            new AdminTwoFactorLinkResult.NotSaved(),
+            cancellationToken);
     }
 
     // Un passage : lit le compte et la date de son dernier changement de mot de passe, puis prépare l'e-mail du lien et l'action
     // de l'administrateur. Le compte est contrôlé à l'enregistrement : un changement entre-temps fait tout recommencer.
-    private async Task<PreparedChanges<AdminTwoFactorLinkResult>> PrepareLinkAsync(Guid administratorId, Guid accountId, IPAddress? ipAddress)
+    private async Task<PreparedChanges<AdminTwoFactorLinkResult>> PrepareLinkAsync(Guid administratorId, Guid accountId, IPAddress? ipAddress, CancellationToken cancellationToken = default)
     {
-        var account = await accountRepository.FindByIdAsync(accountId);
+        var account = await accountRepository.FindByIdAsync(accountId, cancellationToken);
 
         if (account == null)
         {
@@ -63,7 +64,7 @@ public class AdminTwoFactorLinkService
         }
 
         var now = clock.GetUtcNow().UtcDateTime;
-        var lastPasswordChange = await securityEvents.FindLastSuccessAsync(SecurityEventType.PasswordChange, account.Id);
+        var lastPasswordChange = await securityEvents.FindLastSuccessAsync(SecurityEventType.PasswordChange, account.Id, cancellationToken);
 
         if (!TwoFactorAuthenticationRules.IsPasswordOldEnoughForSupportLink(lastPasswordChange, now))
         {

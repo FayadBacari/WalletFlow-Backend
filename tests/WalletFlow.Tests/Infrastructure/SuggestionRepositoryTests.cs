@@ -213,8 +213,12 @@ public class SuggestionRepositoryTests
             CreateSavingService(databaseContext), clock);
         var dismissal = new SuggestionDismissalService(bagRepository, suggestionRepository, CreateSavingService(databaseContext), clock);
 
+        var beforeCalculation = await list.ListAsync(user.Id);
+        await calculation.CalculateAsync(user.Id, October);
         var first = await list.ListAsync(user.Id);
         var second = await list.ListAsync(user.Id);
+
+        Assert.Empty(beforeCalculation.Suggestions);
 
         Assert.Equal(3, first.Suggestions.Count);
         Assert.Equal(first.Suggestions, second.Suggestions);

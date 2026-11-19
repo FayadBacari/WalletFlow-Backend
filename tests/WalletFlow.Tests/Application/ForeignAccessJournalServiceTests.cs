@@ -18,7 +18,7 @@ public class ForeignAccessJournalServiceTests
         public List<OwnedResource> SearchedResources { get; } = new List<OwnedResource>();
 
         // Donne le propriétaire gardé pour cette ressource, et note la sorte de ressource cherchée.
-        public Task<Guid?> FindOwnerAsync(OwnedResource resource, Guid resourceId)
+        public Task<Guid?> FindOwnerAsync(OwnedResource resource, Guid resourceId, CancellationToken cancellationToken = default)
         {
             SearchedResources.Add(resource);
 

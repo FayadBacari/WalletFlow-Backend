@@ -18,6 +18,7 @@
 | date_fin_blocage         |        |
 | date_demande_suppression |        |
 | dernier_mois_suggestions |        |
+| dernier_pas_totp         |        |
 
 | CODE_SECOURS                  | Clé              |
 |-------------------------------|------------------|
@@ -37,17 +38,19 @@
 | nb_essais_jeton        |                  |
 | #id_utilisateur        | FK → UTILISATEUR |
 
-| APPAREIL        | Clé              |
-|-----------------|------------------|
-| **id_appareil** | PK               |
-| jeton_appareil  | Unique           |
-| jeton_push      |                  |
-| #id_utilisateur | FK → UTILISATEUR |
+| APPAREIL                         | Clé              |
+|----------------------------------|------------------|
+| **id_appareil**                  | PK               |
+| jeton_appareil                   | Unique           |
+| jeton_push                       |                  |
+| date_derniere_connexion_appareil |                  |
+| #id_utilisateur                  | FK → UTILISATEUR |
 
 | SESSION                | Clé              |
 |------------------------|------------------|
 | **id_session**         | PK               |
 | date_derniere_activite |                  |
+| date_creation_session  |                  |
 | #id_utilisateur        | FK → UTILISATEUR |
 
 | EVENEMENT_SECURITE   | Clé                           |

@@ -1,4 +1,5 @@
 using System.Net;
+using WalletFlow.Application.Persistence;
 using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
@@ -241,7 +242,7 @@ public class AlertSettingsEndpointTests
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
         var body = await ReadJsonAsync(response);
-        Assert.Equal(ErrorMessages.AlertChannelUnknown, body.GetProperty("errors").GetProperty("Channel")[0].GetString());
+        Assert.Equal(ErrorMessages.AlertChannelUnknown, body.GetProperty("errors").GetProperty("channel")[0].GetString());
         Assert.Equal(NotificationChannel.Email, user.Account.NotificationChannel);
     }
 
@@ -262,5 +263,20 @@ public class AlertSettingsEndpointTests
         Assert.True(IsEnabledIn(otherSettings, "newSuggestion"));
         Assert.Equal("email", otherSettings.GetProperty("channel").GetString());
         Assert.Equal(NotificationChannel.Email, otherAccount.NotificationChannel);
+    }
+
+    // Un canal que d'autres requêtes changent à chaque essai répond 409 : l'ancien canal reste, l'utilisateur peut réessayer.
+    [Fact]
+    public async Task ChannelThatNeverSavesAsksToRetry()
+    {
+        using var api = new ApiFactoryWithFakes();
+        var user = await LogInAsync(api);
+        var channelBefore = user.Account.NotificationChannel;
+        api.AccountRepository.ChannelChangeConflicts = DatabaseChangesSavingService.MaximumTries;
+
+        var response = await PutAsync(user.Client, ChannelEndpoint, new { channel = "phone" }, user.CsrfToken);
+
+        await AssertProblemTitleAsync(response, HttpStatusCode.Conflict, ErrorMessages.AccountChangedMeanwhile);
+        Assert.Equal(channelBefore, user.Account.NotificationChannel);
     }
 }

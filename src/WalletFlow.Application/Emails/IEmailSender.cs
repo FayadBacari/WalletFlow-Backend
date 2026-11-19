@@ -4,5 +4,5 @@ namespace WalletFlow.Application.Emails;
 public interface IEmailSender
 {
     // Envoie un e-mail à son destinataire. Lève EmailCouldNotBeSentException s'il ne peut pas partir.
-    Task SendAsync(EmailMessage message);
+    Task SendAsync(EmailMessage message, CancellationToken cancellationToken = default);
 }

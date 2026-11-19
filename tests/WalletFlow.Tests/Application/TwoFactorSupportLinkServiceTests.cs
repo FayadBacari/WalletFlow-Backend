@@ -56,9 +56,9 @@ public class TwoFactorSupportLinkServiceTests
     public async Task RightPasswordDeactivatesClosesEverySessionAndSendsTheAlert()
     {
         var otherAccount = services.AddAccountWithoutTwoFactor("autre@exemple.test");
-        services.SessionRepository.SavedSessions.Add(new UserSession { Id = "session-1", LastActivityAt = Now, UserId = Account.Id });
-        services.SessionRepository.SavedSessions.Add(new UserSession { Id = "session-2", LastActivityAt = Now, UserId = Account.Id });
-        services.SessionRepository.SavedSessions.Add(new UserSession { Id = "session-autre", LastActivityAt = Now, UserId = otherAccount.Id });
+        services.SessionRepository.SavedSessions.Add(new UserSession { CreatedAt = Now, Id = "session-1", LastActivityAt = Now, UserId = Account.Id });
+        services.SessionRepository.SavedSessions.Add(new UserSession { CreatedAt = Now, Id = "session-2", LastActivityAt = Now, UserId = Account.Id });
+        services.SessionRepository.SavedSessions.Add(new UserSession { CreatedAt = Now, Id = "session-autre", LastActivityAt = Now, UserId = otherAccount.Id });
 
         var result = await DeactivateAsync(AccountPassword);
 

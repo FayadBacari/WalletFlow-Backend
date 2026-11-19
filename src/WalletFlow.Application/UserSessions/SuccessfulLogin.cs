@@ -10,6 +10,7 @@ public class SuccessfulLogin
     public required string PasswordHash { get; init; }
     public string? EncryptedTotpSecret { get; init; }
     public Guid? BackupCodeId { get; init; }
+    public long? AuthenticatorStep { get; init; }
     public IPAddress? IpAddress { get; init; }
     public string? DeviceToken { get; init; }
     public string? SessionToken { get; init; }

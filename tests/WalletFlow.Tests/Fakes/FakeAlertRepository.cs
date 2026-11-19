@@ -62,7 +62,7 @@ public class FakeAlertRepository : IAlertRepository, ITransactionalFakeRepositor
     public int Conflicts { get; set; } = 0;
 
     // Donne les 10 types d'alerte.
-    public Task<List<AlertType>> FindTypesAsync()
+    public Task<List<AlertType>> FindTypesAsync(CancellationToken cancellationToken = default)
     {
         ThrowIfDown();
 
@@ -73,7 +73,7 @@ public class FakeAlertRepository : IAlertRepository, ITransactionalFakeRepositor
     }
 
     // Donne des copies des choix gardés de l'utilisateur : rien n'est suivi.
-    public Task<List<AlertPreference>> FindPreferencesAsync(Guid userId)
+    public Task<List<AlertPreference>> FindPreferencesAsync(Guid userId, CancellationToken cancellationToken = default)
     {
         ThrowIfDown();
 
@@ -89,7 +89,7 @@ public class FakeAlertRepository : IAlertRepository, ITransactionalFakeRepositor
     }
 
     // Cherche le choix gardé de l'utilisateur pour ce type, et garde une copie de ses valeurs.
-    public Task<AlertPreference?> FindPreferenceAsync(Guid userId, AlertKind kind)
+    public Task<AlertPreference?> FindPreferenceAsync(Guid userId, AlertKind kind, CancellationToken cancellationToken = default)
     {
         ThrowIfDown();
 
@@ -107,7 +107,7 @@ public class FakeAlertRepository : IAlertRepository, ITransactionalFakeRepositor
     }
 
     // Un type est activé tant qu'aucun choix gardé ne le désactive.
-    public Task<bool> IsEnabledAsync(Guid userId, AlertKind kind)
+    public Task<bool> IsEnabledAsync(Guid userId, AlertKind kind, CancellationToken cancellationToken = default)
     {
         ThrowIfDown();
 
@@ -121,7 +121,7 @@ public class FakeAlertRepository : IAlertRepository, ITransactionalFakeRepositor
     }
 
     // Donne des copies des alertes de budget gardées pour ce mois : rien n'est suivi.
-    public Task<List<Alert>> FindBudgetAlertsAsync(Guid userId, DateOnly month)
+    public Task<List<Alert>> FindBudgetAlertsAsync(Guid userId, DateOnly month, CancellationToken cancellationToken = default)
     {
         ThrowIfDown();
 
@@ -137,7 +137,7 @@ public class FakeAlertRepository : IAlertRepository, ITransactionalFakeRepositor
     }
 
     // Cherche l'alerte d'objectif gardée pour ce sac.
-    public Task<Alert?> FindBagAlertAsync(Guid bagId)
+    public Task<Alert?> FindBagAlertAsync(Guid bagId, CancellationToken cancellationToken = default)
     {
         ThrowIfDown();
 
@@ -148,7 +148,7 @@ public class FakeAlertRepository : IAlertRepository, ITransactionalFakeRepositor
     }
 
     // Cherche l'alerte d'autorisation gardée pour cette connexion.
-    public Task<Alert?> FindConnectionAlertAsync(Guid connectionId)
+    public Task<Alert?> FindConnectionAlertAsync(Guid connectionId, CancellationToken cancellationToken = default)
     {
         ThrowIfDown();
 
@@ -160,7 +160,7 @@ public class FakeAlertRepository : IAlertRepository, ITransactionalFakeRepositor
     }
 
     // Cherche, dans le faux dépôt des connexions, celles à prévenir, comme la vraie requête.
-    public Task<List<Guid>> FindConnectionsToWarnAsync(DateTime authorizationEndLimit)
+    public Task<List<Guid>> FindConnectionsToWarnAsync(DateTime authorizationEndLimit, CancellationToken cancellationToken = default)
     {
         ThrowIfDown();
 
@@ -182,7 +182,7 @@ public class FakeAlertRepository : IAlertRepository, ITransactionalFakeRepositor
     }
 
     // Lit l'alerte gardée, puis le nom de ce qu'elle vise dans les faux dépôts reliés.
-    public Task<AlertEmailContent?> ReadEmailContentAsync(Guid alertId)
+    public Task<AlertEmailContent?> ReadEmailContentAsync(Guid alertId, CancellationToken cancellationToken = default)
     {
         ThrowIfDown();
 
@@ -227,7 +227,7 @@ public class FakeAlertRepository : IAlertRepository, ITransactionalFakeRepositor
     }
 
     // Efface tout de suite les alertes de budget et de suggestion des mois d'avant celui-ci.
-    public Task<int> DeleteMonthAlertsBeforeAsync(DateOnly firstKeptMonth)
+    public Task<int> DeleteMonthAlertsBeforeAsync(DateOnly firstKeptMonth, CancellationToken cancellationToken = default)
     {
         ThrowIfDown();
 

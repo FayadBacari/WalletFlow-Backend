@@ -34,19 +34,19 @@ public class AdminSupportService
     }
 
     // Donne les demandes dans cet état, la plus ancienne d'abord : l'administrateur y répond dans l'ordre.
-    public async Task<List<AdminSupportRequestItem>> ListAsync(SupportRequestStatus status)
+    public async Task<List<AdminSupportRequestItem>> ListAsync(SupportRequestStatus status, CancellationToken cancellationToken = default)
     {
-        return await administrationRepository.FindRequestsAsync(status);
+        return await administrationRepository.FindRequestsAsync(status, cancellationToken);
     }
 
     // Donne une demande avec ses réponses, ou null si elle n'existe pas.
-    public async Task<AdminSupportRequestDetails?> ReadAsync(Guid requestId)
+    public async Task<AdminSupportRequestDetails?> ReadAsync(Guid requestId, CancellationToken cancellationToken = default)
     {
-        return await administrationRepository.FindRequestDetailsAsync(requestId);
+        return await administrationRepository.FindRequestDetailsAsync(requestId, cancellationToken);
     }
 
     // Répond à la demande avec ce texte, sous sa forme enregistrée, s'il respecte la règle du texte.
-    public async Task<AdminSupportAnswerResult> AnswerAsync(Guid administratorId, Guid requestId, string? typedContent, IPAddress? ipAddress)
+    public async Task<AdminSupportAnswerResult> AnswerAsync(Guid administratorId, Guid requestId, string? typedContent, IPAddress? ipAddress, CancellationToken cancellationToken = default)
     {
         var content = SupportRules.NormalizeText(typedContent);
 
@@ -56,8 +56,9 @@ public class AdminSupportService
         }
 
         var saved = await savingService.SaveWithRetriesAsync<bool?>(
-            () => PrepareAnswerAsync(administratorId, requestId, content, ipAddress),
-            null);
+            () => PrepareAnswerAsync(administratorId, requestId, content, ipAddress, cancellationToken),
+            null,
+            cancellationToken);
 
         if (saved != true)
         {
@@ -67,15 +68,17 @@ public class AdminSupportService
         return await ReadAfterChangeAsync<AdminSupportAnswerResult>(
             requestId,
             details => new AdminSupportAnswerResult.Answered { Request = details },
-            new AdminSupportAnswerResult.NotFound());
+            new AdminSupportAnswerResult.NotFound(),
+            cancellationToken);
     }
 
     // Marque la demande « résolue », avec ou sans réponse.
-    public async Task<AdminSupportResolutionResult> ResolveAsync(Guid administratorId, Guid requestId, IPAddress? ipAddress)
+    public async Task<AdminSupportResolutionResult> ResolveAsync(Guid administratorId, Guid requestId, IPAddress? ipAddress, CancellationToken cancellationToken = default)
     {
         var outcome = await savingService.SaveWithRetriesAsync<AdminSupportResolutionResult?>(
-            () => PrepareResolutionAsync(administratorId, requestId, ipAddress),
-            new AdminSupportResolutionResult.NotSaved());
+            () => PrepareResolutionAsync(administratorId, requestId, ipAddress, cancellationToken),
+            new AdminSupportResolutionResult.NotSaved(),
+            cancellationToken);
 
         if (outcome != null)
         {
@@ -85,15 +88,16 @@ public class AdminSupportService
         return await ReadAfterChangeAsync<AdminSupportResolutionResult>(
             requestId,
             details => new AdminSupportResolutionResult.Resolved { Request = details },
-            new AdminSupportResolutionResult.NotFound());
+            new AdminSupportResolutionResult.NotFound(),
+            cancellationToken);
     }
 
     // Un passage : lit la demande, puis prépare la réponse, son e-mail, la demande « en cours » et l'action de l'administrateur.
     // La ligne de la demande est réécrite même si elle était déjà « en cours » : une réponse et une demande résolue au même
     // instant passent ainsi l'une après l'autre. Donne vrai si tout est préparé, faux si la demande n'existe pas.
-    private async Task<PreparedChanges<bool?>> PrepareAnswerAsync(Guid administratorId, Guid requestId, string content, IPAddress? ipAddress)
+    private async Task<PreparedChanges<bool?>> PrepareAnswerAsync(Guid administratorId, Guid requestId, string content, IPAddress? ipAddress, CancellationToken cancellationToken = default)
     {
-        var request = await administrationRepository.FindRequestAsync(requestId);
+        var request = await administrationRepository.FindRequestAsync(requestId, cancellationToken);
 
         if (request == null)
         {
@@ -112,9 +116,9 @@ public class AdminSupportService
 
     // Un passage : lit la demande, puis prépare son nouvel état et l'action de l'administrateur. Donne null si tout est préparé,
     // ou la raison du refus.
-    private async Task<PreparedChanges<AdminSupportResolutionResult?>> PrepareResolutionAsync(Guid administratorId, Guid requestId, IPAddress? ipAddress)
+    private async Task<PreparedChanges<AdminSupportResolutionResult?>> PrepareResolutionAsync(Guid administratorId, Guid requestId, IPAddress? ipAddress, CancellationToken cancellationToken = default)
     {
-        var request = await administrationRepository.FindRequestAsync(requestId);
+        var request = await administrationRepository.FindRequestAsync(requestId, cancellationToken);
 
         if (request == null)
         {
@@ -134,9 +138,9 @@ public class AdminSupportService
 
     // Relit la demande après son changement, pour la montrer telle qu'elle est enregistrée. Une demande effacée juste après
     // n'existe plus.
-    private async Task<TResult> ReadAfterChangeAsync<TResult>(Guid requestId, Func<AdminSupportRequestDetails, TResult> found, TResult notFound)
+    private async Task<TResult> ReadAfterChangeAsync<TResult>(Guid requestId, Func<AdminSupportRequestDetails, TResult> found, TResult notFound, CancellationToken cancellationToken = default)
     {
-        var details = await administrationRepository.FindRequestDetailsAsync(requestId);
+        var details = await administrationRepository.FindRequestDetailsAsync(requestId, cancellationToken);
 
         return details == null ? notFound : found(details);
     }

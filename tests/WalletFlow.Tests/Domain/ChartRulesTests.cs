@@ -1,3 +1,4 @@
+using System.Globalization;
 using WalletFlow.Domain.AccountsAndCategories;
 
 namespace WalletFlow.Tests.Domain;
@@ -21,8 +22,8 @@ public class ChartRulesTests
     [InlineData("2016-12-31", "2026-12-31", 121)]
     public void PeriodCountsEveryMonthItTouches(string from, string to, int expectedMonths)
     {
-        Assert.Equal(expectedMonths, ChartRules.CountMonths(DateOnly.Parse(from), DateOnly.Parse(to)));
-        Assert.Equal(expectedMonths > 120, ChartRules.IsPeriodTooLong(DateOnly.Parse(from), DateOnly.Parse(to)));
+        Assert.Equal(expectedMonths, ChartRules.CountMonths(DateOnly.Parse(from, CultureInfo.InvariantCulture), DateOnly.Parse(to, CultureInfo.InvariantCulture)));
+        Assert.Equal(expectedMonths > 120, ChartRules.IsPeriodTooLong(DateOnly.Parse(from, CultureInfo.InvariantCulture), DateOnly.Parse(to, CultureInfo.InvariantCulture)));
     }
 
     // Un total net négatif est une dépense de ce montant, un total positif un revenu : jamais les deux à la fois.

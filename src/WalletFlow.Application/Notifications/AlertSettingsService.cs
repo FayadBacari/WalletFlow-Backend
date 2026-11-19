@@ -25,17 +25,17 @@ public class AlertSettingsService
     }
 
     // Donne les réglages de l'utilisateur, ou null si son compte n'existe plus.
-    public async Task<AlertSettings?> ReadAsync(Guid userId)
+    public async Task<AlertSettings?> ReadAsync(Guid userId, CancellationToken cancellationToken = default)
     {
-        var account = await accountRepository.FindByIdAsync(userId);
+        var account = await accountRepository.FindByIdAsync(userId, cancellationToken);
 
         if (account == null)
         {
             return null;
         }
 
-        var types = await alertRepository.FindTypesAsync();
-        var preferences = await alertRepository.FindPreferencesAsync(userId);
+        var types = await alertRepository.FindTypesAsync(cancellationToken);
+        var preferences = await alertRepository.FindPreferencesAsync(userId, cancellationToken);
         var settings = types
             .OrderBy(type => type.Kind)
             .Select(type => new AlertSetting(
@@ -49,29 +49,31 @@ public class AlertSettingsService
     }
 
     // Garde le canal choisi. Tant que l'application mobile n'existe pas, les alertes partent quand même par e-mail.
-    public async Task<AlertSettingsResult> ChangeChannelAsync(Guid userId, NotificationChannel channel)
+    public async Task<AlertSettingsResult> ChangeChannelAsync(Guid userId, NotificationChannel channel, CancellationToken cancellationToken = default)
     {
         var refusal = await savingService.SaveWithRetriesAsync(
-            () => PrepareChannelAsync(userId, channel),
-            (AlertSettingsResult?)new AlertSettingsResult.NotSaved());
+            () => PrepareChannelAsync(userId, channel, cancellationToken),
+            (AlertSettingsResult?)new AlertSettingsResult.NotSaved(),
+            cancellationToken);
 
-        return await AnswerAsync(userId, refusal);
+        return await AnswerAsync(userId, refusal, cancellationToken);
     }
 
     // Active ou désactive ce type d'alerte.
-    public async Task<AlertSettingsResult> SwitchAsync(Guid userId, AlertKind kind, bool enabled)
+    public async Task<AlertSettingsResult> SwitchAsync(Guid userId, AlertKind kind, bool enabled, CancellationToken cancellationToken = default)
     {
         var refusal = await savingService.SaveWithRetriesAsync(
-            () => PrepareSwitchAsync(userId, kind, enabled),
-            (AlertSettingsResult?)new AlertSettingsResult.NotSaved());
+            () => PrepareSwitchAsync(userId, kind, enabled, cancellationToken),
+            (AlertSettingsResult?)new AlertSettingsResult.NotSaved(),
+            cancellationToken);
 
-        return await AnswerAsync(userId, refusal);
+        return await AnswerAsync(userId, refusal, cancellationToken);
     }
 
     // Un passage : lit le compte, puis prépare le nouveau canal. Renvoie le refus, ou null quand le changement est prêt.
-    private async Task<PreparedChanges<AlertSettingsResult?>> PrepareChannelAsync(Guid userId, NotificationChannel channel)
+    private async Task<PreparedChanges<AlertSettingsResult?>> PrepareChannelAsync(Guid userId, NotificationChannel channel, CancellationToken cancellationToken = default)
     {
-        var account = await accountRepository.FindByIdAsync(userId);
+        var account = await accountRepository.FindByIdAsync(userId, cancellationToken);
 
         if (account == null)
         {
@@ -86,23 +88,23 @@ public class AlertSettingsService
     // Un passage : lit le compte et le type d'alerte, puis crée ou change le choix. Renvoie le refus, ou null quand le
     // changement est prêt. De deux premiers choix simultanés pour le même type, le second bute sur la clé de la table,
     // relit, et change le premier.
-    private async Task<PreparedChanges<AlertSettingsResult?>> PrepareSwitchAsync(Guid userId, AlertKind kind, bool enabled)
+    private async Task<PreparedChanges<AlertSettingsResult?>> PrepareSwitchAsync(Guid userId, AlertKind kind, bool enabled, CancellationToken cancellationToken = default)
     {
-        var account = await accountRepository.FindByIdAsync(userId);
+        var account = await accountRepository.FindByIdAsync(userId, cancellationToken);
 
         if (account == null)
         {
             return PreparedChanges<AlertSettingsResult?>.NothingToSave(new AlertSettingsResult.AccountGone());
         }
 
-        var type = (await alertRepository.FindTypesAsync()).Single(alertType => alertType.Kind == kind);
+        var type = (await alertRepository.FindTypesAsync(cancellationToken)).Single(alertType => alertType.Kind == kind);
 
         if (!enabled && !type.CanBeDisabled)
         {
             return PreparedChanges<AlertSettingsResult?>.NothingToSave(new AlertSettingsResult.CannotBeDisabled());
         }
 
-        var preference = await alertRepository.FindPreferenceAsync(userId, kind);
+        var preference = await alertRepository.FindPreferenceAsync(userId, kind, cancellationToken);
 
         if (preference == null)
         {
@@ -117,14 +119,14 @@ public class AlertSettingsService
     }
 
     // Donne le refus, ou les réglages tels qu'ils sont maintenant enregistrés.
-    private async Task<AlertSettingsResult> AnswerAsync(Guid userId, AlertSettingsResult? refusal)
+    private async Task<AlertSettingsResult> AnswerAsync(Guid userId, AlertSettingsResult? refusal, CancellationToken cancellationToken = default)
     {
         if (refusal != null)
         {
             return refusal;
         }
 
-        var settings = await ReadAsync(userId);
+        var settings = await ReadAsync(userId, cancellationToken);
 
         if (settings == null)
         {

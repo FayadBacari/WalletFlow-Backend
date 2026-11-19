@@ -68,7 +68,7 @@ public class InMemoryEmailAddressRequestLimiter : IEmailAddressRequestLimiter
     }
 
     // Compteur d'une adresse e-mail pendant sa période de comptage.
-    private class RequestCounter
+    private sealed class RequestCounter
     {
         public DateTimeOffset FirstRequestAt { get; init; }
         public int RequestCount { get; set; }

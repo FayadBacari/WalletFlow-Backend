@@ -209,7 +209,7 @@ public class CategoryRepositoryTests
 
         Assert.False(await TrySaveChangesAsync(databaseContext));
         Assert.Equal(1, await databaseContext.Categories.CountAsync(row =>
-            row.UserId == account.Id && row.Name.ToLower() == "abonnements"));
+            row.UserId == account.Id && EF.Functions.ILike(row.Name, "abonnements")));
     }
 
     // GR Dépenses et GR Sacs : la catégorie disparaît, ses transactions vont dans « Autres », ses règles disparaissent,
@@ -283,11 +283,18 @@ public class CategoryRepositoryTests
         var october = new DateOnly(2026, 10, 1);
         var proposalOfOther = new SavingsSuggestion
         {
-            Rule = SuggestionRule.CategoryOverrun, Month = october, MonthlySavingsInCents = 400, UserId = otherAccount.Id
+            Rule = SuggestionRule.CategoryOverrun,
+            Month = october,
+            MonthlySavingsInCents = 400,
+            UserId = otherAccount.Id
         };
         var acceptedOfUser = new SavingsSuggestion
         {
-            Rule = SuggestionRule.CategoryOverrun, Month = october, MonthlySavingsInCents = 300, Status = SuggestionStatus.Accepted, UserId = account.Id
+            Rule = SuggestionRule.CategoryOverrun,
+            Month = october,
+            MonthlySavingsInCents = 300,
+            Status = SuggestionStatus.Accepted,
+            UserId = account.Id
         };
         databaseContext.SavingsSuggestions.AddRange(proposalOfOther, acceptedOfUser);
         await databaseContext.SaveChangesAsync();

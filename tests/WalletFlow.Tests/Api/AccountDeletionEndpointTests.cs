@@ -143,7 +143,7 @@ public class AccountDeletionEndpointTests
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
         Assert.Equal(
             ErrorMessages.WrongCurrentPassword,
-            (await ReadJsonAsync(response)).GetProperty("errors").GetProperty(nameof(AccountDeletionRequest.Password))[0].GetString());
+            (await ReadJsonAsync(response)).GetProperty("errors").GetProperty("password")[0].GetString());
         Assert.Null(account.DeletionRequestedAt);
         Assert.Contains(api.SessionRepository.SavedSessions, session => session.UserId == account.Id);
     }

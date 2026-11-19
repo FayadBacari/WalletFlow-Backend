@@ -5,24 +5,24 @@ namespace WalletFlow.Application.BankConnections;
 public interface IBankDataProvider
 {
     // Donne les banques françaises que le prestataire sait lire.
-    Task<List<ProvidedBank>> ListBanksAsync();
+    Task<List<ProvidedBank>> ListBanksAsync(CancellationToken cancellationToken = default);
 
     // Commence une autorisation auprès de cette banque, et renvoie l'adresse de sa page, où l'utilisateur s'identifie (GR Comptes).
-    Task<string> StartAuthorizationAsync(BankAuthorizationRequest request);
+    Task<string> StartAuthorizationAsync(BankAuthorizationRequest request, CancellationToken cancellationToken = default);
 
     // Termine l'autorisation avec le code renvoyé par la banque, et donne la nouvelle session et ses comptes.
-    Task<ProvidedSession> CreateSessionAsync(string code);
+    Task<ProvidedSession> CreateSessionAsync(string code, CancellationToken cancellationToken = default);
 
     // Donne les comptes d'une session encore autorisée. Une session finie lève une erreur SessionEnded.
-    Task<List<SessionAccount>> ReadSessionAccountsAsync(string sessionId);
+    Task<List<SessionAccount>> ReadSessionAccountsAsync(string sessionId, CancellationToken cancellationToken = default);
 
     // Donne les soldes d'un compte. Quand l'utilisateur est là, la lecture ne compte pas dans les 4 lectures par jour de la banque.
-    Task<List<ProvidedBalance>> ReadBalancesAsync(string accountUid, UserPresence? presence);
+    Task<List<ProvidedBalance>> ReadBalancesAsync(string accountUid, UserPresence? presence, CancellationToken cancellationToken = default);
 
     // Donne les opérations d'un compte depuis ce jour, compris, aussi loin que la banque le permet. Toutes les pages sont lues.
     // Quand l'utilisateur est là, la lecture ne compte pas dans les 4 lectures par jour de la banque.
-    Task<List<ProvidedTransaction>> ReadTransactionsAsync(string accountUid, DateOnly startDate, UserPresence? presence);
+    Task<List<ProvidedTransaction>> ReadTransactionsAsync(string accountUid, DateOnly startDate, UserPresence? presence, CancellationToken cancellationToken = default);
 
     // Révoque la session chez le prestataire. Une session déjà finie, ou inconnue, compte comme révoquée.
-    Task RevokeSessionAsync(string sessionId);
+    Task RevokeSessionAsync(string sessionId, CancellationToken cancellationToken = default);
 }

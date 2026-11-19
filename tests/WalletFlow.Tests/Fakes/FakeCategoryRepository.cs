@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using WalletFlow.Application.Categories;
 using WalletFlow.Domain.AccountsAndCategories;
 
@@ -51,7 +52,7 @@ public class FakeCategoryRepository : ICategoryRepository, ITransactionalFakeRep
     }
 
     // Donne les catégories gardées pour cet utilisateur.
-    public Task<List<Category>> FindAllAsync(Guid userId)
+    public Task<List<Category>> FindAllAsync(Guid userId, CancellationToken cancellationToken = default)
     {
         lock (pendingChangesLock)
         {
@@ -68,7 +69,7 @@ public class FakeCategoryRepository : ICategoryRepository, ITransactionalFakeRep
     }
 
     // Cherche la catégorie parmi celles de l'utilisateur.
-    public Task<Category?> FindAsync(Guid userId, Guid categoryId)
+    public Task<Category?> FindAsync(Guid userId, Guid categoryId, CancellationToken cancellationToken = default)
     {
         lock (pendingChangesLock)
         {
@@ -85,7 +86,7 @@ public class FakeCategoryRepository : ICategoryRepository, ITransactionalFakeRep
     }
 
     // Cherche la catégorie « Autres » de l'utilisateur.
-    public Task<Category?> FindOtherCategoryAsync(Guid userId)
+    public Task<Category?> FindOtherCategoryAsync(Guid userId, CancellationToken cancellationToken = default)
     {
         lock (pendingChangesLock)
         {
@@ -102,7 +103,7 @@ public class FakeCategoryRepository : ICategoryRepository, ITransactionalFakeRep
     }
 
     // Compte les catégories gardées pour cet utilisateur.
-    public Task<int> CountAsync(Guid userId)
+    public Task<int> CountAsync(Guid userId, CancellationToken cancellationToken = default)
     {
         lock (pendingChangesLock)
         {
@@ -111,7 +112,8 @@ public class FakeCategoryRepository : ICategoryRepository, ITransactionalFakeRep
     }
 
     // Compare les noms sans les majuscules, comme la vraie base, sans compter la catégorie renommée.
-    public Task<bool> IsNameUsedAsync(Guid userId, string name, Guid? renamedCategoryId)
+    [SuppressMessage("Performance", "CA1862", Justification = "Même comparaison que lower() de PostgreSQL, comme CategoryChoice.")]
+    public Task<bool> IsNameUsedAsync(Guid userId, string name, Guid? renamedCategoryId, CancellationToken cancellationToken = default)
     {
         lock (pendingChangesLock)
         {
@@ -143,7 +145,7 @@ public class FakeCategoryRepository : ICategoryRepository, ITransactionalFakeRep
     }
 
     // Supprime la catégorie, range ses transactions dans « Autres » et efface ses règles, comme la vraie base.
-    public Task<bool> DeleteAsync(Guid userId, Guid categoryId)
+    public Task<bool> DeleteAsync(Guid userId, Guid categoryId, CancellationToken cancellationToken = default)
     {
         lock (pendingChangesLock)
         {

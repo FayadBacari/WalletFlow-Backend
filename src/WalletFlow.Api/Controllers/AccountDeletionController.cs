@@ -31,7 +31,9 @@ public class AccountDeletionController : ControllerBase
     [HttpPost("delete")]
     [EnableRateLimiting(RateLimitingConfiguration.AccountDeletionPolicy)]
     [RequestSizeLimit(RequestSizeConfiguration.MaximumAccountRequestBytes)]
-    public async Task<IActionResult> RequestDeletion(AccountDeletionRequest request)
+    [ProducesResponseType<AccountDeletionResponse>(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status503ServiceUnavailable, Description = OpenApiConfiguration.ServerBusyDescription)]
+    public async Task<IActionResult> RequestDeletion(AccountDeletionRequest request, CancellationToken cancellationToken = default)
     {
         var result = await deletionService.RequestAsync(new AccountDeletionAttempt
         {
@@ -39,7 +41,8 @@ public class AccountDeletionController : ControllerBase
             Password = request.Password,
             Code = request.Code,
             IpAddress = HttpContext.Connection.RemoteIpAddress
-        });
+        },
+        cancellationToken);
 
         if (result is AccountDeletionResult.Requested requested)
         {

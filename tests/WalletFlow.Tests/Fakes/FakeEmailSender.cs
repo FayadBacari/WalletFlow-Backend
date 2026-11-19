@@ -9,14 +9,20 @@ public class FakeEmailSender : IEmailSender
 
     public List<EmailMessage> SentEmails { get; } = new List<EmailMessage>();
 
+    private int failedSendCount = 0;
+
     // Simule une panne de l'envoi des e-mails.
     public bool AlwaysFails { get; set; } = false;
 
+    // Le nombre d'envois ratés pendant la panne simulée.
+    public int FailedSendCount => Volatile.Read(ref failedSendCount);
+
     // Garde l'e-mail en mémoire, pour que le test puisse le relire. Une tâche de fond peut envoyer pendant que le test lit.
-    public Task SendAsync(EmailMessage message)
+    public Task SendAsync(EmailMessage message, CancellationToken cancellationToken = default)
     {
         if (AlwaysFails)
         {
+            Interlocked.Increment(ref failedSendCount);
             throw new EmailCouldNotBeSentException(new IOException("panne simulée de l'envoi"));
         }
 

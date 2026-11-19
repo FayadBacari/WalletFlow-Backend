@@ -21,6 +21,7 @@ public class PasswordChangeService
     private readonly SecurityJournalService securityJournal;
     private readonly AccountIdentityCheckingService identityChecking;
     private readonly IPasswordHasher passwordHasher;
+    private readonly IBreachedPasswordChecker breachedPasswordChecker;
     private readonly ISecureTokenGenerator tokenGenerator;
     private readonly TimeProvider clock;
 
@@ -33,6 +34,7 @@ public class PasswordChangeService
         SecurityJournalService securityJournal,
         AccountIdentityCheckingService identityChecking,
         IPasswordHasher passwordHasher,
+        IBreachedPasswordChecker breachedPasswordChecker,
         ISecureTokenGenerator tokenGenerator,
         TimeProvider clock)
     {
@@ -43,13 +45,14 @@ public class PasswordChangeService
         this.securityJournal = securityJournal;
         this.identityChecking = identityChecking;
         this.passwordHasher = passwordHasher;
+        this.breachedPasswordChecker = breachedPasswordChecker;
         this.tokenGenerator = tokenGenerator;
         this.clock = clock;
     }
 
     // Change le mot de passe. Les règles du nouveau mot de passe passent d'abord : ce contrôle ne dit rien du compte,
     // et un mot de passe refusé ne demande aucun hachage. Le même mot de passe que l'actuel est accepté.
-    public async Task<PasswordChangeResult> ChangeAsync(PasswordChangeAttempt attempt)
+    public async Task<PasswordChangeResult> ChangeAsync(PasswordChangeAttempt attempt, CancellationToken cancellationToken = default)
     {
         var normalizedNewPassword = PasswordRules.Normalize(attempt.NewPassword);
         if (!PasswordRules.IsValid(normalizedNewPassword))
@@ -57,7 +60,12 @@ public class PasswordChangeService
             return new PasswordChangeResult.NewPasswordBreaksRules();
         }
 
-        var account = await accountRepository.FindByIdAsync(attempt.UserId);
+        if (await breachedPasswordChecker.IsBreachedAsync(normalizedNewPassword, cancellationToken))
+        {
+            return new PasswordChangeResult.NewPasswordBreached();
+        }
+
+        var account = await accountRepository.FindByIdAsync(attempt.UserId, cancellationToken);
         if (account == null)
         {
             return new PasswordChangeResult.WrongPassword();
@@ -67,10 +75,10 @@ public class PasswordChangeService
         var checkedPasswordHash = account.PasswordHash;
         var checkedTotpSecret = account.EncryptedTotpSecret;
 
-        var identityCheck = await identityChecking.CheckAsync(account, attempt.CurrentPassword, attempt.Code);
+        var identityCheck = await identityChecking.CheckAsync(account, attempt.CurrentPassword, attempt.Code, cancellationToken);
         if (!identityCheck.IsConfirmed)
         {
-            return await RefuseAsync(account, attempt.IpAddress);
+            return await RefuseAsync(account, attempt.IpAddress, cancellationToken);
         }
 
         var newSessionToken = tokenGenerator.GenerateToken();
@@ -80,27 +88,28 @@ public class PasswordChangeService
             CheckedPasswordHash = checkedPasswordHash,
             CheckedTotpSecret = checkedTotpSecret,
             BackupCodeId = identityCheck.BackupCodeId,
-            NewPasswordHash = await passwordHasher.HashAsync(normalizedNewPassword),
+            AuthenticatorStep = identityCheck.AuthenticatorStep,
+            NewPasswordHash = await passwordHasher.HashAsync(normalizedNewPassword, cancellationToken),
             NewSessionTokenHash = newSessionToken.Hash,
             IpAddress = attempt.IpAddress
         };
 
-        var saved = await savingService.SaveWithRetriesAsync(() => PrepareNewPasswordAsync(change), false);
+        var saved = await savingService.SaveWithRetriesAsync(() => PrepareNewPasswordAsync(change, cancellationToken), false, cancellationToken);
         if (!saved)
         {
-            return await RefuseAsync(account, attempt.IpAddress);
+            return await RefuseAsync(account, attempt.IpAddress, cancellationToken);
         }
 
         return new PasswordChangeResult.Changed { SessionToken = newSessionToken.Token };
     }
 
     // Un passage : lit le compte, vérifie que ce qui vient d'être contrôlé est toujours valable, puis prépare en une fois
-    // le nouveau mot de passe, le code de secours utilisé s'il y en a un, la fermeture de toutes les sessions,
+    // le nouveau mot de passe, le code utilisé s'il y en a un, la fermeture de toutes les sessions,
     // la nouvelle session en cours, l'événement du journal et l'alerte du changement (GR Notif).
     // Donne faux si une récupération ou un autre changement est passé.
-    private async Task<PreparedChanges<bool>> PrepareNewPasswordAsync(NewPasswordToSave change)
+    private async Task<PreparedChanges<bool>> PrepareNewPasswordAsync(NewPasswordToSave change, CancellationToken cancellationToken = default)
     {
-        var account = await accountRepository.FindByIdAsync(change.UserId);
+        var account = await accountRepository.FindByIdAsync(change.UserId, cancellationToken);
         if (account == null
             || account.PasswordHash != change.CheckedPasswordHash
             || account.EncryptedTotpSecret != change.CheckedTotpSecret)
@@ -108,7 +117,7 @@ public class PasswordChangeService
             return PreparedChanges<bool>.NothingToSave(false);
         }
 
-        if (!await identityChecking.TryPrepareBackupCodeUseAsync(change.BackupCodeId, change.IpAddress))
+        if (!await identityChecking.TryPrepareCodeUseAsync(account, change.BackupCodeId, change.AuthenticatorStep, change.IpAddress, cancellationToken))
         {
             return PreparedChanges<bool>.NothingToSave(false);
         }
@@ -116,10 +125,12 @@ public class PasswordChangeService
         var now = clock.GetUtcNow().UtcDateTime;
 
         account.ReplacePasswordHash(change.NewPasswordHash);
-        await sessionRepository.PrepareAllSessionsRemovalAsync(change.UserId);
+        await sessionRepository.PrepareAllSessionsRemovalAsync(change.UserId, cancellationToken);
+        // La nouvelle session repart pour 12 heures : le mot de passe vient d'être redemandé.
         sessionRepository.PrepareSession(new UserSession
         {
             Id = change.NewSessionTokenHash,
+            CreatedAt = now,
             LastActivityAt = now,
             UserId = change.UserId
         });
@@ -131,7 +142,7 @@ public class PasswordChangeService
 
     // Note le refus dans le journal. Avec la double authentification, un mauvais mot de passe et un mauvais code reçoivent
     // le même refus : une session volée ne peut pas servir à tester des mots de passe un par un.
-    private async Task<PasswordChangeResult> RefuseAsync(User account, IPAddress? ipAddress)
+    private async Task<PasswordChangeResult> RefuseAsync(User account, IPAddress? ipAddress, CancellationToken cancellationToken = default)
     {
         await securityJournal.SaveEventNowAsync(SecurityEventType.PasswordChange, SecurityEventResult.Failure, account.Id, ipAddress);
 
@@ -144,12 +155,13 @@ public class PasswordChangeService
     }
 
     // Ce qu'un passage doit enregistrer, et ce qui a été vérifié avant.
-    private class NewPasswordToSave
+    private sealed class NewPasswordToSave
     {
         public required Guid UserId { get; init; }
         public required string CheckedPasswordHash { get; init; }
         public required string? CheckedTotpSecret { get; init; }
         public required Guid? BackupCodeId { get; init; }
+        public required long? AuthenticatorStep { get; init; }
         public required string NewPasswordHash { get; init; }
         public required string NewSessionTokenHash { get; init; }
         public required IPAddress? IpAddress { get; init; }

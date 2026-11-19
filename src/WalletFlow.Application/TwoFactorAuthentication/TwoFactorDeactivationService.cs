@@ -49,9 +49,10 @@ public class TwoFactorDeactivationService
         Guid userId,
         string password,
         string code,
-        IPAddress? ipAddress)
+        IPAddress? ipAddress,
+        CancellationToken cancellationToken = default)
     {
-        var account = await accountRepository.FindByIdAsync(userId);
+        var account = await accountRepository.FindByIdAsync(userId, cancellationToken);
 
         if (account == null || !account.IsTwoFactorEnabled)
         {
@@ -62,19 +63,19 @@ public class TwoFactorDeactivationService
         var encryptedTotpSecret = account.EncryptedTotpSecret;
         var normalizedPassword = PasswordRules.Normalize(password);
 
-        if (!await passwordHasher.VerifyAsync(normalizedPassword, passwordHash))
+        if (!await passwordHasher.VerifyAsync(normalizedPassword, passwordHash, cancellationToken))
         {
-            return await RefuseAsync(userId, ipAddress);
+            return await RefuseAsync(userId, ipAddress, cancellationToken);
         }
 
-        var codeCheck = await codeCheckingService.CheckAsync(account, code);
+        var codeCheck = await codeCheckingService.CheckAsync(account, code, cancellationToken);
 
         if (!codeCheck.IsCodeValid)
         {
-            return await RefuseAsync(userId, ipAddress);
+            return await RefuseAsync(userId, ipAddress, cancellationToken);
         }
 
-        return await SaveDeactivationAsync(userId, passwordHash, encryptedTotpSecret, ipAddress);
+        return await SaveDeactivationAsync(userId, passwordHash, encryptedTotpSecret, codeCheck.AuthenticatorStep, ipAddress, cancellationToken);
     }
 
     // Enregistre la désactivation. Si une autre requête a changé le compte, le compte est relu et tout recommence.
@@ -83,30 +84,36 @@ public class TwoFactorDeactivationService
         Guid userId,
         string passwordHash,
         string? encryptedTotpSecret,
-        IPAddress? ipAddress)
+        long? authenticatorStep,
+        IPAddress? ipAddress,
+        CancellationToken cancellationToken = default)
     {
         var result = await savingService.SaveWithRetriesAsync<TwoFactorDeactivationResult?>(
-            () => PrepareDeactivationAsync(userId, passwordHash, encryptedTotpSecret, ipAddress),
-            null);
+            () => PrepareDeactivationAsync(userId, passwordHash, encryptedTotpSecret, authenticatorStep, ipAddress, cancellationToken),
+            null,
+            cancellationToken);
 
         if (result == null)
         {
-            return await RefuseAsync(userId, ipAddress);
+            return await RefuseAsync(userId, ipAddress, cancellationToken);
         }
 
         return result;
     }
 
     // Un passage : lit le compte et vérifie que le mot de passe et le secret qui viennent d'être contrôlés sont encore les bons,
-    // car une récupération a pu passer entre-temps. Puis prépare le secret oublié, les codes de secours effacés, l'événement
-    // du journal et l'alerte : l'alerte n'entre dans la file qu'avec la désactivation.
+    // car une récupération a pu passer entre-temps, et que le code de l'application n'a pas servi entre-temps à une autre
+    // requête (SS §2). Puis prépare le secret oublié, les codes de secours effacés, l'événement du journal et l'alerte :
+    // l'alerte n'entre dans la file qu'avec la désactivation.
     private async Task<PreparedChanges<TwoFactorDeactivationResult?>> PrepareDeactivationAsync(
         Guid userId,
         string passwordHash,
         string? encryptedTotpSecret,
-        IPAddress? ipAddress)
+        long? authenticatorStep,
+        IPAddress? ipAddress,
+        CancellationToken cancellationToken = default)
     {
-        var account = await accountRepository.FindByIdAsync(userId);
+        var account = await accountRepository.FindByIdAsync(userId, cancellationToken);
 
         if (account == null || !account.IsTwoFactorEnabled)
         {
@@ -114,13 +121,14 @@ public class TwoFactorDeactivationService
         }
 
         if (account.PasswordHash != passwordHash
-            || account.EncryptedTotpSecret != encryptedTotpSecret)
+            || account.EncryptedTotpSecret != encryptedTotpSecret
+            || (authenticatorStep is long step && !account.CanUseAuthenticatorStep(step)))
         {
-            return PreparedChanges<TwoFactorDeactivationResult?>.NothingToSave(await RefuseAsync(userId, ipAddress));
+            return PreparedChanges<TwoFactorDeactivationResult?>.NothingToSave(await RefuseAsync(userId, ipAddress, cancellationToken));
         }
 
         account.DeactivateTwoFactor();
-        await twoFactorRepository.PrepareBackupCodesRemovalAsync(userId);
+        await twoFactorRepository.PrepareBackupCodesRemovalAsync(userId, cancellationToken);
         securityJournal.PrepareEvent(SecurityEventType.TwoFactorDeactivation, SecurityEventResult.Success, userId, ipAddress);
         emailRequests.PrepareRequest(EmailRequest.ForTwoFactorDeactivation(userId, ipAddress, clock.GetUtcNow().UtcDateTime));
 
@@ -128,7 +136,7 @@ public class TwoFactorDeactivationService
     }
 
     // Note le refus dans le journal, et donne le même refus pour un mauvais mot de passe et pour un mauvais code.
-    private async Task<TwoFactorDeactivationResult> RefuseAsync(Guid userId, IPAddress? ipAddress)
+    private async Task<TwoFactorDeactivationResult> RefuseAsync(Guid userId, IPAddress? ipAddress, CancellationToken cancellationToken = default)
     {
         await securityJournal.SaveEventNowAsync(SecurityEventType.TwoFactorDeactivation, SecurityEventResult.Failure, userId, ipAddress);
 

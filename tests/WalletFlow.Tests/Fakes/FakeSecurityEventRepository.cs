@@ -38,7 +38,7 @@ public class FakeSecurityEventRepository : ISecurityEventRepository, ITransactio
 
     // Note l'effacement demandé, ou lance la panne simulée.
     // Donne la date du dernier événement réussi de ce type pour ce compte, comme la vraie requête.
-    public Task<DateTime?> FindLastSuccessAsync(SecurityEventType type, Guid accountId)
+    public Task<DateTime?> FindLastSuccessAsync(SecurityEventType type, Guid accountId, CancellationToken cancellationToken = default)
     {
         if (IsDown)
         {
@@ -56,7 +56,7 @@ public class FakeSecurityEventRepository : ISecurityEventRepository, ITransactio
         }
     }
 
-    public Task<int> DeleteExpiredEventsAsync()
+    public Task<int> DeleteExpiredEventsAsync(CancellationToken cancellationToken = default)
     {
         if (IsDown)
         {

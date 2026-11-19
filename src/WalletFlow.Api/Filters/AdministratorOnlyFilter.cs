@@ -41,7 +41,7 @@ public class AdministratorOnlyFilter : IAsyncAuthorizationFilter
     public async Task OnAuthorizationAsync(AuthorizationFilterContext context)
     {
         var userId = SessionClaims.ReadUserId(context.HttpContext.User);
-        var access = await accessService.CheckAsync(userId);
+        var access = await accessService.CheckAsync(userId, context.HttpContext.RequestAborted);
 
         if (access == AdministratorAccess.Granted)
         {

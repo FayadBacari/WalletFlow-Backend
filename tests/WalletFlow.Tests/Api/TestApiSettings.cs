@@ -1,16 +1,23 @@
 using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using WalletFlow.Api.BackgroundTasks;
+using WalletFlow.Api.Configuration;
 using WalletFlow.Api.Filters;
+using WalletFlow.Application.Emails;
+using WalletFlow.Application.Security;
+using WalletFlow.Tests.Fakes;
 
 namespace WalletFlow.Tests.Api;
 
 // Réglages communs à toute API lancée par les tests, pour qu'elle se comporte de la même façon sur toutes les machines.
 // L'environnement « Testing » ne lit ni les user-secrets ni appsettings.Development.json, et les clés Data Protection,
-// qui signent le jeton anti-CSRF, restent en mémoire au lieu d'être lues et écrites dans le dossier personnel.
+// qui signent le jeton anti-CSRF, sont gardées par le vrai code de production dans un dossier temporaire de ce lancement des
+// tests, jamais dans le dossier personnel.
 public static class TestApiSettings
 {
     public const string EnvironmentName = "Testing";
@@ -24,6 +31,16 @@ public static class TestApiSettings
     // Une clé RSA jetable pour la configuration d'Enable Banking : écrite une fois par lancement des tests, effacée à la fin.
     // Les tests remplacent le prestataire : aucune requête n'est jamais signée avec elle.
     private static readonly Lazy<string> ThrowawayBankKeyPath = new Lazy<string>(WriteThrowawayBankKey);
+
+    // Le dossier des clés Data Protection de ce lancement des tests, commun à toutes ses API, effacé à la fin.
+    private static readonly Lazy<string> TestKeysFolder = new Lazy<string>(CreateTestKeysFolder);
+
+    // Le certificat jetable qui chiffre ces clés, et sa clé privée : écrits une fois par lancement des tests, effacés à la fin.
+    private static readonly Lazy<(string CertificatePath, string KeyPath)> ThrowawayKeysCertificate =
+        new Lazy<(string CertificatePath, string KeyPath)>(() => WriteThrowawayCertificate("cles"));
+
+    // Le dossier des clés Data Protection que reçoivent les API des tests.
+    public static string KeysFolder => TestKeysFolder.Value;
 
     // Donne à l'API tous ses réglages obligatoires. La base indiquée ici n'est jamais contactée : une fabrique la remplace si besoin.
     public static void Apply(IWebHostBuilder builder, string totpEncryptionKey)
@@ -43,24 +60,52 @@ public static class TestApiSettings
         builder.UseSetting("EnableBanking:ApplicationId", BankApplicationId);
         builder.UseSetting("EnableBanking:PrivateKeyPath", ThrowawayBankKeyPath.Value);
 
-        // Le dossier n'est jamais utilisé : les tests remplacent l'envoi des e-mails.
+        // Le dossier sert seulement à démarrer en mode développement : les tests remplacent l'envoi des e-mails.
         builder.UseSetting("LocalEmailsFolder", "dossier-jamais-utilise");
 
         // Les tests n'attendent pas la durée minimale de réponse : elle a ses propres tests.
         builder.UseSetting(MinimumAnswerDurationFilter.SettingName, "0");
+        builder.UseSetting(DataProtectionConfiguration.KeysFolderSetting, KeysFolder);
+        builder.UseSetting(DataProtectionConfiguration.CertificatePathSetting, ThrowawayKeysCertificate.Value.CertificatePath);
+        builder.UseSetting(DataProtectionConfiguration.CertificateKeyPathSetting, ThrowawayKeysCertificate.Value.KeyPath);
 
         builder.ConfigureTestServices(services =>
         {
-            services.AddDataProtection().UseEphemeralDataProtectionProvider();
+            // Aucun test n'interroge le vrai Pwned Passwords, ni n'envoie de vrai e-mail : sans réseau, un test ne dépend jamais
+            // d'un service extérieur.
+            services.AddSingleton<IBreachedPasswordChecker>(new FakeBreachedPasswordChecker());
+            services.AddSingleton<IEmailSender>(new FakeEmailSender());
 
-            // La mise à jour des soldes, le calcul des suggestions, les alertes et la suppression des comptes en arrière-plan
-            // ne tournent pas pendant les tests : sur la base de test, ils toucheraient les comptes de la base locale, et sur
-            // les fausses bases, ils écriraient au milieu d'un test. Leurs tests les créent eux-mêmes.
+            // La mise à jour des soldes, le calcul des suggestions, les alertes, la suppression des comptes et le rechiffrement
+            // des secrets en arrière-plan ne tournent pas pendant les tests : sur la base de test, ils toucheraient les comptes
+            // de la base locale, et sur les fausses bases, ils écriraient au milieu d'un test. Leurs tests les créent eux-mêmes.
             RemoveBackgroundTask(services, typeof(BankBalancesBackgroundService));
             RemoveBackgroundTask(services, typeof(SuggestionsBackgroundService));
             RemoveBackgroundTask(services, typeof(AlertsBackgroundService));
             RemoveBackgroundTask(services, typeof(AccountDeletionBackgroundService));
+            RemoveBackgroundTask(services, typeof(TotpSecretReEncryptionBackgroundService));
+
+            // La garde de l'instance unique ne tourne pas non plus : les tests lancent plusieurs API à la fois sur la même base,
+            // et ses propres tests la créent avec leur verrou.
+            RemoveSingleInstanceGuard(services);
         });
+    }
+
+    // Retire la garde de l'instance unique, après avoir vérifié qu'elle est branchée avant toutes les tâches de fond : branchée
+    // après, une deuxième instance lancerait ses tâches avant d'être refusée.
+    private static void RemoveSingleInstanceGuard(IServiceCollection services)
+    {
+        var hostedServices = services.Where(service => service.ServiceType == typeof(IHostedService)).ToList();
+        var guard = hostedServices.FirstOrDefault(service => service.ImplementationType == typeof(SingleInstanceGuard))
+            ?? throw new InvalidOperationException("Program.cs ne branche plus la garde de l'instance unique.");
+        var firstTaskIndex = hostedServices.FindIndex(service => service.ImplementationType?.IsSubclassOf(typeof(RecurringBackgroundService)) == true);
+
+        if (firstTaskIndex >= 0 && hostedServices.IndexOf(guard) > firstTaskIndex)
+        {
+            throw new InvalidOperationException("Program.cs doit brancher la garde de l'instance unique avant les tâches de fond.");
+        }
+
+        services.Remove(guard);
     }
 
     // Retire cette tâche de fond des services de l'API. Elle doit y être : une tâche que Program.cs ne branche plus ne tournerait
@@ -71,6 +116,37 @@ public static class TestApiSettings
             ?? throw new InvalidOperationException("Program.cs ne branche plus la tâche de fond " + backgroundTaskType.Name + ".");
 
         services.Remove(backgroundTask);
+    }
+
+    // Crée le dossier des clés dans le dossier temporaire, et le fait effacer quand les tests se terminent.
+    private static string CreateTestKeysFolder()
+    {
+        var path = Path.Combine(Path.GetTempPath(), "walletflow-tests-cles-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(path);
+        AppDomain.CurrentDomain.ProcessExit += (sender, arguments) => Directory.Delete(path, true);
+
+        return path;
+    }
+
+    // Écrit un certificat RSA jetable et sa clé privée au format PEM, dans le dossier temporaire, effacés à la fin des tests.
+    // Les tests des clés en créent d'autres, pour changer de certificat.
+    public static (string CertificatePath, string KeyPath) WriteThrowawayCertificate(string name)
+    {
+        using var key = RSA.Create(2048);
+        var request = new CertificateRequest("CN=WalletFlow tests " + name, key, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
+        using var certificate = request.CreateSelfSigned(DateTimeOffset.UtcNow.AddDays(-1), DateTimeOffset.UtcNow.AddDays(1));
+        var prefix = Path.Combine(Path.GetTempPath(), "walletflow-tests-certificat-" + name + "-" + Guid.NewGuid().ToString("N"));
+        var certificatePath = prefix + ".pem";
+        var keyPath = prefix + "-cle.pem";
+        File.WriteAllText(certificatePath, certificate.ExportCertificatePem());
+        File.WriteAllText(keyPath, key.ExportPkcs8PrivateKeyPem());
+        AppDomain.CurrentDomain.ProcessExit += (sender, arguments) =>
+        {
+            File.Delete(certificatePath);
+            File.Delete(keyPath);
+        };
+
+        return (certificatePath, keyPath);
     }
 
     // Écrit la clé jetable dans le dossier temporaire, et la fait effacer quand les tests se terminent.

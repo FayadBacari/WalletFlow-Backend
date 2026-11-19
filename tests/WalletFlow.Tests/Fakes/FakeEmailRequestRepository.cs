@@ -58,7 +58,7 @@ public class FakeEmailRequestRepository : IEmailRequestRepository, ITransactiona
     }
 
     // Cherche en mémoire la demande dont l'heure d'essai est passée depuis le plus longtemps.
-    public Task<Guid?> FindNextDueIdAsync(DateTime now)
+    public Task<Guid?> FindNextDueIdAsync(DateTime now, CancellationToken cancellationToken = default)
     {
         ThrowIfDown();
 
@@ -74,7 +74,7 @@ public class FakeEmailRequestRepository : IEmailRequestRepository, ITransactiona
     }
 
     // Cherche en mémoire une demande, et garde une copie de ses valeurs, comme le suivi des objets d'EF Core.
-    public Task<EmailRequest?> FindAsync(Guid requestId)
+    public Task<EmailRequest?> FindAsync(Guid requestId, CancellationToken cancellationToken = default)
     {
         ThrowIfDown();
 

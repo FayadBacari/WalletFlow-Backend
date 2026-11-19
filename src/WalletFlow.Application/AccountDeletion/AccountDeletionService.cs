@@ -49,9 +49,9 @@ public class AccountDeletionService
 
     // Vérifie l'identité, enregistre la demande avec tout ce qu'elle ferme, puis révoque les banques. Une révocation que le
     // prestataire ne confirme pas ne bloque pas la demande : la tâche de fond la réessaiera.
-    public async Task<AccountDeletionResult> RequestAsync(AccountDeletionAttempt attempt)
+    public async Task<AccountDeletionResult> RequestAsync(AccountDeletionAttempt attempt, CancellationToken cancellationToken = default)
     {
-        var account = await accountRepository.FindByIdAsync(attempt.UserId);
+        var account = await accountRepository.FindByIdAsync(attempt.UserId, cancellationToken);
         if (account == null)
         {
             return new AccountDeletionResult.AccountGone();
@@ -61,10 +61,10 @@ public class AccountDeletionService
         var checkedPasswordHash = account.PasswordHash;
         var checkedTotpSecret = account.EncryptedTotpSecret;
 
-        var identityCheck = await identityChecking.CheckAsync(account, attempt.Password, attempt.Code);
+        var identityCheck = await identityChecking.CheckAsync(account, attempt.Password, attempt.Code, cancellationToken);
         if (!identityCheck.IsConfirmed)
         {
-            return await RefuseAsync(account, attempt.IpAddress);
+            return await RefuseAsync(account, attempt.IpAddress, cancellationToken);
         }
 
         var deletion = new DeletionToRecord
@@ -73,28 +73,29 @@ public class AccountDeletionService
             CheckedPasswordHash = checkedPasswordHash,
             CheckedTotpSecret = checkedTotpSecret,
             BackupCodeId = identityCheck.BackupCodeId,
+            AuthenticatorStep = identityCheck.AuthenticatorStep,
             IpAddress = attempt.IpAddress
         };
 
-        var erasesAt = await savingService.SaveWithRetriesAsync<DateTime?>(() => PrepareDeletionAsync(deletion), null);
+        var erasesAt = await savingService.SaveWithRetriesAsync<DateTime?>(() => PrepareDeletionAsync(deletion, cancellationToken), null, cancellationToken);
         if (erasesAt == null)
         {
-            return await RefuseAsync(account, attempt.IpAddress);
+            return await RefuseAsync(account, attempt.IpAddress, cancellationToken);
         }
 
-        await bankRevocation.RevokeAccountConnectionsAsync(account.Id, attempt.IpAddress);
+        await bankRevocation.RevokeAccountConnectionsAsync(account.Id, attempt.IpAddress, cancellationToken);
 
         return new AccountDeletionResult.Requested { ErasesAt = erasesAt.Value };
     }
 
     // Un passage : relit le compte et vérifie que le mot de passe et le secret vérifiés sont toujours les siens. Une demande déjà
     // enregistrée par une autre requête n'est pas refaite : sa date d'effacement est rendue telle quelle. Sinon, prépare la
-    // demande, l'effacement des sessions et des liens, le code de secours utilisé s'il y en a un avec son alerte, l'e-mail de
+    // demande, l'effacement des sessions et des liens, le code utilisé s'il y en a un, l'e-mail de
     // confirmation et l'événement du journal. Le compte est contrôlé à l'enregistrement : une connexion ou un changement de mot
     // de passe au même instant fait recommencer le passage. Donne null si la demande ne peut plus être faite.
-    private async Task<PreparedChanges<DateTime?>> PrepareDeletionAsync(DeletionToRecord deletion)
+    private async Task<PreparedChanges<DateTime?>> PrepareDeletionAsync(DeletionToRecord deletion, CancellationToken cancellationToken = default)
     {
-        var account = await accountRepository.FindByIdAsync(deletion.UserId);
+        var account = await accountRepository.FindByIdAsync(deletion.UserId, cancellationToken);
         if (account == null
             || account.PasswordHash != deletion.CheckedPasswordHash
             || account.EncryptedTotpSecret != deletion.CheckedTotpSecret)
@@ -107,7 +108,7 @@ public class AccountDeletionService
             return PreparedChanges<DateTime?>.NothingToSave(AccountDeletionRules.FindErasureMoment(alreadyRequestedAt));
         }
 
-        if (!await identityChecking.TryPrepareBackupCodeUseAsync(deletion.BackupCodeId, deletion.IpAddress))
+        if (!await identityChecking.TryPrepareCodeUseAsync(account, deletion.BackupCodeId, deletion.AuthenticatorStep, deletion.IpAddress, cancellationToken))
         {
             return PreparedChanges<DateTime?>.NothingToSave(null);
         }
@@ -115,8 +116,8 @@ public class AccountDeletionService
         var now = clock.GetUtcNow().UtcDateTime;
         account.RequestDeletion(now);
         accountRepository.PrepareUnchangedCheck(account);
-        await sessionRepository.PrepareAllSessionsRemovalAsync(account.Id);
-        await accountRepository.PrepareAllLinksRemovalAsync(account.Id);
+        await sessionRepository.PrepareAllSessionsRemovalAsync(account.Id, cancellationToken);
+        await accountRepository.PrepareAllLinksRemovalAsync(account.Id, cancellationToken);
         emailRequests.PrepareRequest(EmailRequest.ForDeletionRequest(account.Id, deletion.IpAddress, now));
         securityJournal.PrepareEvent(SecurityEventType.DeletionRequest, SecurityEventResult.Success, account.Id, deletion.IpAddress);
 
@@ -124,7 +125,7 @@ public class AccountDeletionService
     }
 
     // Note le refus dans le journal. Avec la double authentification, un mauvais mot de passe et un mauvais code reçoivent le même refus.
-    private async Task<AccountDeletionResult> RefuseAsync(User account, IPAddress? ipAddress)
+    private async Task<AccountDeletionResult> RefuseAsync(User account, IPAddress? ipAddress, CancellationToken cancellationToken = default)
     {
         await securityJournal.SaveEventNowAsync(SecurityEventType.DeletionRequest, SecurityEventResult.Failure, account.Id, ipAddress);
 
@@ -143,6 +144,7 @@ public class AccountDeletionService
         public required string CheckedPasswordHash { get; init; }
         public required string? CheckedTotpSecret { get; init; }
         public required Guid? BackupCodeId { get; init; }
+        public required long? AuthenticatorStep { get; init; }
         public required IPAddress? IpAddress { get; init; }
     }
 }

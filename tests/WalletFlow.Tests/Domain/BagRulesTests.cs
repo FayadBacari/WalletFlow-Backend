@@ -1,3 +1,4 @@
+using System.Globalization;
 using WalletFlow.Domain.BagsAndSuggestions;
 
 namespace WalletFlow.Tests.Domain;
@@ -73,7 +74,7 @@ public class BagRulesTests
     [InlineData(500, "2026-11-11", BagGoalProblem.DateTooEarly)]
     public void GoalProblemIsFound(int? targetAmountInCents, string? targetDate, BagGoalProblem expected)
     {
-        DateOnly? date = targetDate == null ? null : DateOnly.Parse(targetDate);
+        DateOnly? date = targetDate == null ? null : DateOnly.Parse(targetDate, CultureInfo.InvariantCulture);
 
         Assert.Equal(expected, BagRules.FindGoalProblem(targetAmountInCents, date, Today));
     }

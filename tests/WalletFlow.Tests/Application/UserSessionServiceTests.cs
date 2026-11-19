@@ -4,7 +4,8 @@ using WalletFlow.Tests.Fakes;
 
 namespace WalletFlow.Tests.Application;
 
-// Vérifie la reconnaissance et la fermeture des sessions (GR Auth, SS §3), avec de faux outils.
+// Vérifie la reconnaissance et la fermeture des sessions, et le nettoyage des sessions et des appareils (GR Auth, SS §3),
+// avec de faux outils.
 public class UserSessionServiceTests
 {
     private const string SessionToken = FakeSecureTokenGenerator.FixedToken;
@@ -25,6 +26,7 @@ public class UserSessionServiceTests
     {
         var session = new UserSession
         {
+            CreatedAt = clock.GetUtcNow().UtcDateTime,
             Id = FakeSecureTokenGenerator.FixedHash,
             LastActivityAt = clock.GetUtcNow().UtcDateTime,
             UserId = OwnerId
@@ -85,6 +87,24 @@ public class UserSessionServiceTests
         Assert.Equal(lastActivityAt, session.LastActivityAt);
     }
 
+    // Se servir de la session sans arrêt ne la prolonge pas au-delà de 12 heures après son ouverture (SS §3).
+    [Fact]
+    public async Task SessionUsedWithoutPauseClosesTwelveHoursAfterItsOpening()
+    {
+        AddSession();
+        var service = CreateSessionService();
+
+        for (var use = 1; use <= 35; use++)
+        {
+            clock.Advance(TimeSpan.FromMinutes(20));
+            Assert.Equal(OwnerId, await service.FindOwnerAndRecordActivityAsync(SessionToken));
+        }
+
+        clock.Advance(TimeSpan.FromMinutes(20));
+
+        Assert.Null(await service.FindOwnerAndRecordActivityAsync(SessionToken));
+    }
+
     [Fact]
     public async Task UnknownSessionTokenGivesNoOwner()
     {
@@ -127,13 +147,25 @@ public class UserSessionServiceTests
     }
 
     [Fact]
-    public async Task CleanupDeletesSessionsInactiveForThirtyMinutes()
+    public async Task CleanupDeletesSessionsInactiveForThirtyMinutesOrOpenForTwelveHours()
     {
         var service = new ExpiredUserSessionsCleanupService(sessionRepository, clock);
 
         await service.DeleteExpiredSessionsAsync();
 
-        var expectedDate = clock.GetUtcNow().UtcDateTime.AddMinutes(-30);
-        Assert.Equal(expectedDate, Assert.Single(sessionRepository.CleanupDates));
+        var now = clock.GetUtcNow().UtcDateTime;
+        Assert.Equal(now.AddMinutes(-30), Assert.Single(sessionRepository.CleanupDates));
+        Assert.Equal(now.AddHours(-12), Assert.Single(sessionRepository.CreationCleanupDates));
+    }
+
+    // Le cookie d'appareil dure un an : un appareil inutilisé depuis un an n'a plus de cookie, il est oublié (SS §3).
+    [Fact]
+    public async Task CleanupForgetsDevicesUnusedForOneYear()
+    {
+        var service = new ExpiredUserSessionsCleanupService(sessionRepository, clock);
+
+        await service.DeleteForgottenDevicesAsync();
+
+        Assert.Equal(clock.GetUtcNow().UtcDateTime.AddDays(-365), Assert.Single(sessionRepository.DeviceCleanupDates));
     }
 }

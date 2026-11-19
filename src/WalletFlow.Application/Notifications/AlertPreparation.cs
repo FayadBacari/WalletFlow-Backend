@@ -18,9 +18,9 @@ public class AlertPreparation
     }
 
     // Prépare l'alerte et son e-mail, sauf si l'utilisateur a désactivé ce type. Renvoie vrai si l'alerte est préparée.
-    public async Task<bool> TryPrepareAsync(Alert alert)
+    public async Task<bool> TryPrepareAsync(Alert alert, CancellationToken cancellationToken = default)
     {
-        if (!await alertRepository.IsEnabledAsync(alert.UserId, alert.Kind))
+        if (!await alertRepository.IsEnabledAsync(alert.UserId, alert.Kind, cancellationToken))
         {
             return false;
         }

@@ -19,6 +19,11 @@ public abstract class PasswordChangeResult
     {
     }
 
+    // Le nouveau mot de passe figure dans une fuite de données connue (SS §2) : rien n'est vérifié ni changé.
+    public sealed class NewPasswordBreached : PasswordChangeResult
+    {
+    }
+
     // Le mot de passe actuel n'est pas le bon, sur un compte sans double authentification.
     public sealed class WrongPassword : PasswordChangeResult
     {

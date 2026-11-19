@@ -17,5 +17,5 @@ public interface IDatabaseUnitOfWork
     // ou le sac auquel ils ajoutent un mouvement, de supprimer un sac relié à celui qu'ils suppriment,
     // ou si PostgreSQL arrête l'enregistrement pour débloquer un interblocage :
     // tout est alors oublié, et il faut relire les objets avant de recommencer.
-    Task<bool> TrySaveChangesAsync();
+    Task<bool> TrySaveChangesAsync(CancellationToken cancellationToken = default);
 }

@@ -43,7 +43,9 @@ public class ApiFactoryWithFakes : WebApplicationFactory<Program>
     public FakeDataExportRepository ExportRepository { get; } = new FakeDataExportRepository();
     public FakeBankDataProvider BankProvider { get; } = new FakeBankDataProvider();
     public FakeDatabaseUnitOfWork UnitOfWork { get; }
+    public FakeDatabaseHealth DatabaseHealth { get; } = new FakeDatabaseHealth();
     public FakeEmailSender EmailSender { get; } = new FakeEmailSender();
+    public FakeBreachedPasswordChecker BreachedPasswordChecker { get; } = new FakeBreachedPasswordChecker();
     public FakeTimeProvider Clock { get; } = new FakeTimeProvider();
     public MemoryLoggerProvider LoggerProvider { get; } = new MemoryLoggerProvider();
 
@@ -92,6 +94,7 @@ public class ApiFactoryWithFakes : WebApplicationFactory<Program>
         builder.ConfigureTestServices(services =>
         {
             services.AddSingleton<IDatabaseUnitOfWork>(UnitOfWork);
+            services.AddSingleton<IDatabaseHealth>(DatabaseHealth);
             services.AddSingleton<IUserAccountRepository>(AccountRepository);
             services.AddSingleton<IUserSessionRepository>(SessionRepository);
             services.AddSingleton<ISecurityEventRepository>(SecurityEventRepository);
@@ -110,9 +113,11 @@ public class ApiFactoryWithFakes : WebApplicationFactory<Program>
             services.AddSingleton(EmailWakeUp);
             services.AddSingleton<IBankDataProvider>(BankProvider);
             services.AddSingleton<IEmailSender>(EmailSender);
+            services.AddSingleton<IBreachedPasswordChecker>(BreachedPasswordChecker);
             services.AddSingleton<TimeProvider>(Clock);
             services.AddSingleton<ILoggerProvider>(LoggerProvider);
             services.AddSingleton<IStartupFilter, VisitorAddressStartupFilter>();
+            ResponseContractCheck.AddTo(services);
         });
     }
 }
