@@ -37,7 +37,7 @@ public class SuggestionAcceptanceService
     }
 
     // Accepte la suggestion en plaçant ce montant dans ce sac.
-    public async Task<SuggestionAcceptanceResult> AcceptAsync(Guid userId, Guid suggestionId, Guid bagId, int amountInCents)
+    public async Task<SuggestionAcceptanceResult> AcceptAsync(Guid userId, Guid suggestionId, Guid bagId, int amountInCents, CancellationToken cancellationToken = default)
     {
         if (!BagRules.IsAmountValid(amountInCents))
         {
@@ -45,8 +45,9 @@ public class SuggestionAcceptanceService
         }
 
         return await savingService.SaveWithRetriesAsync(
-            () => PrepareAcceptanceAsync(userId, suggestionId, bagId, amountInCents),
-            new SuggestionAcceptanceResult.NotSaved());
+            () => PrepareAcceptanceAsync(userId, suggestionId, bagId, amountInCents, cancellationToken),
+            new SuggestionAcceptanceResult.NotSaved(),
+            cancellationToken);
     }
 
     // Un passage. La ligne de l'utilisateur est lue d'abord, puis réécrite avec le mouvement et la réponse : une autre réponse
@@ -56,16 +57,17 @@ public class SuggestionAcceptanceService
         Guid userId,
         Guid suggestionId,
         Guid bagId,
-        int amountInCents)
+        int amountInCents,
+        CancellationToken cancellationToken = default)
     {
-        var user = await bagRepository.FindUserAsync(userId);
+        var user = await bagRepository.FindUserAsync(userId, cancellationToken);
 
         if (user == null)
         {
             return PreparedChanges<SuggestionAcceptanceResult>.NothingToSave(new SuggestionAcceptanceResult.NotSaved());
         }
 
-        var suggestion = await suggestionRepository.FindAsync(userId, suggestionId);
+        var suggestion = await suggestionRepository.FindAsync(userId, suggestionId, cancellationToken);
 
         if (suggestion == null || suggestion.IsWithdrawn())
         {
@@ -83,7 +85,7 @@ public class SuggestionAcceptanceService
         }
 
         var now = clock.GetUtcNow().UtcDateTime;
-        var problem = await movementChecks.FindProblemAsync(userId, null, bagId, amountInCents, now);
+        var problem = await movementChecks.FindProblemAsync(userId, null, bagId, amountInCents, now, cancellationToken);
 
         if (problem != null)
         {
@@ -99,7 +101,7 @@ public class SuggestionAcceptanceService
         };
 
         bagRepository.PrepareMovement(movement);
-        await goalAlerts.PrepareAfterArrivalAsync(userId, bagId, amountInCents, now);
+        await goalAlerts.PrepareAfterArrivalAsync(userId, bagId, amountInCents, now, cancellationToken);
         suggestion.Accept(now);
         bagRepository.PrepareUserCheck(user);
 

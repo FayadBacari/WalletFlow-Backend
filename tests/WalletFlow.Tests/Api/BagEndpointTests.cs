@@ -236,10 +236,10 @@ public class BagEndpointTests
         var dateAlone = await SendAsync(user.Client, HttpMethod.Post, BagsEndpoint, new { name = "Vacances", targetDate = "2027-07-01" }, user.CsrfToken);
         var today = await SendAsync(user.Client, HttpMethod.Post, BagsEndpoint, new { name = "Vacances", targetAmountInCents = 500, targetDate = "2026-11-04" }, user.CsrfToken);
 
-        Assert.Equal(ErrorMessages.BagNameBreaksRules, await ReadFieldErrorAsync(name, "Name"));
-        Assert.Equal(ErrorMessages.BagGoalAmountBreaksRules, await ReadFieldErrorAsync(amount, "TargetAmountInCents"));
-        Assert.Equal(ErrorMessages.BagGoalDateWithoutAmount, await ReadFieldErrorAsync(dateAlone, "TargetAmountInCents"));
-        Assert.Equal(ErrorMessages.BagGoalDateTooEarly, await ReadFieldErrorAsync(today, "TargetDate"));
+        Assert.Equal(ErrorMessages.BagNameBreaksRules, await ReadFieldErrorAsync(name, "name"));
+        Assert.Equal(ErrorMessages.BagGoalAmountBreaksRules, await ReadFieldErrorAsync(amount, "targetAmountInCents"));
+        Assert.Equal(ErrorMessages.BagGoalDateWithoutAmount, await ReadFieldErrorAsync(dateAlone, "targetAmountInCents"));
+        Assert.Equal(ErrorMessages.BagGoalDateTooEarly, await ReadFieldErrorAsync(today, "targetDate"));
         Assert.Empty(api.BagRepository.SavedBags);
     }
 
@@ -294,7 +294,7 @@ public class BagEndpointTests
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.Equal("Voyage", (await ReadJsonAsync(response)).GetProperty("name").GetString());
         Assert.Equal(5000, (await ReadJsonAsync(response)).GetProperty("balanceInCents").GetInt64());
-        Assert.Equal(ErrorMessages.BagNameBreaksRules, await ReadFieldErrorAsync(refused, "Name"));
+        Assert.Equal(ErrorMessages.BagNameBreaksRules, await ReadFieldErrorAsync(refused, "name"));
         Assert.Equal("Voyage", holidays.Name);
     }
 
@@ -410,11 +410,11 @@ public class BagEndpointTests
         var bagTooLow = await SendAsync(user.Client, HttpMethod.Post, MovementsEndpoint, new { sourceBagId = holidays.Id, destinationBagId = savings.Id, amountInCents = 1001 }, user.CsrfToken);
         var availableTooLow = await SendAsync(user.Client, HttpMethod.Post, MovementsEndpoint, new { sourceBagId = (Guid?)null, destinationBagId = savings.Id, amountInCents = 99_001 }, user.CsrfToken);
 
-        Assert.Equal(ErrorMessages.MovementWithoutBag, await ReadFieldErrorAsync(noBag, "DestinationBagId"));
-        Assert.Equal(ErrorMessages.MovementWithSameBag, await ReadFieldErrorAsync(sameBag, "DestinationBagId"));
-        Assert.Equal(ErrorMessages.MovementAmountBreaksRules, await ReadFieldErrorAsync(amount, "AmountInCents"));
-        Assert.Equal(ErrorMessages.SourceBagTooLow, await ReadFieldErrorAsync(bagTooLow, "AmountInCents"));
-        Assert.Equal(ErrorMessages.AvailableMoneyTooLow, await ReadFieldErrorAsync(availableTooLow, "AmountInCents"));
+        Assert.Equal(ErrorMessages.MovementWithoutBag, await ReadFieldErrorAsync(noBag, "destinationBagId"));
+        Assert.Equal(ErrorMessages.MovementWithSameBag, await ReadFieldErrorAsync(sameBag, "destinationBagId"));
+        Assert.Equal(ErrorMessages.MovementAmountBreaksRules, await ReadFieldErrorAsync(amount, "amountInCents"));
+        Assert.Equal(ErrorMessages.SourceBagTooLow, await ReadFieldErrorAsync(bagTooLow, "amountInCents"));
+        Assert.Equal(ErrorMessages.AvailableMoneyTooLow, await ReadFieldErrorAsync(availableTooLow, "amountInCents"));
         Assert.Single(api.BagRepository.SavedMovements);
     }
 
@@ -452,7 +452,7 @@ public class BagEndpointTests
 
         var response = await SendAsync(user.Client, HttpMethod.Post, MovementsEndpoint, new { sourceBagId = holidays.Id, destinationBagId = (Guid?)null, amountInCents = 1 }, user.CsrfToken);
 
-        Assert.Equal(HttpStatusCode.TooManyRequests, response.StatusCode);
+        await TooManyRequestsAssertions.AssertTooManyRequestsAsync(response, 86400);
         Assert.Equal(BagRules.MaximumMovementsPerDay, api.BagRepository.SavedMovements.Count);
     }
 
@@ -495,7 +495,7 @@ public class BagEndpointTests
 
         var response = await user.Client.GetAsync(BagAddress(holidays.Id) + "/movements?page=" + page);
 
-        Assert.Equal(ErrorMessages.BagHistoryPageBreaksRules, await ReadFieldErrorAsync(response, "Page"));
+        Assert.Equal(ErrorMessages.BagHistoryPageBreaksRules, await ReadFieldErrorAsync(response, "page"));
     }
 
     [Fact]
@@ -508,7 +508,7 @@ public class BagEndpointTests
         var response = await user.Client.GetAsync(BagAddress(holidays.Id) + "/movements?page=deux");
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
-        Assert.Equal(ApiErrorConfiguration.InvalidValueMessage, await ReadFieldErrorAsync(response, "Page"));
+        Assert.Equal(ApiErrorConfiguration.InvalidValueMessage, await ReadFieldErrorAsync(response, "page"));
     }
 
     // --- Requêtes simultanées

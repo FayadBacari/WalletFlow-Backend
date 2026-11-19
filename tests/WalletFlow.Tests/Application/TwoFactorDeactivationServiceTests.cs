@@ -232,7 +232,7 @@ public class TwoFactorDeactivationServiceTests
     {
         var activatedAccount = services.AddActivatedAccount();
         services.BackupCodeHasher.OnBackupCodeHashed = () =>
-            activatedAccount.UserAccount.ActivateTwoFactor("secret-du-nouveau-telephone");
+            activatedAccount.UserAccount.ActivateTwoFactor("secret-du-nouveau-telephone", TwoFactorTestTools.OldStep);
 
         var result = await DeactivateAsync(activatedAccount.UserAccount, AccountPassword, activatedAccount.BackupCodes[0]);
 
@@ -288,5 +288,31 @@ public class TwoFactorDeactivationServiceTests
         await Assert.ThrowsAsync<InvalidOperationException>(() => DeactivateAsync(activatedAccount.UserAccount, AccountPassword, activatedAccount.BackupCodes[0]));
 
         AssertAccountStillActivated(activatedAccount);
+    }
+
+    // La désactivation oublie le secret avec le pas de son dernier code : un futur secret repart sans passé.
+    [Fact]
+    public async Task DeactivationForgetsTheStepOfTheLastCode()
+    {
+        var activatedAccount = services.AddActivatedAccount();
+
+        var result = await DeactivateAsync(activatedAccount.UserAccount, AccountPassword, services.CalculateCurrentCode(activatedAccount.Secret));
+
+        Assert.IsType<TwoFactorDeactivationResult.TwoFactorDeactivated>(result);
+        Assert.Null(activatedAccount.UserAccount.LastAuthenticatorStep);
+    }
+
+    // Une autre requête se sert du même code juste avant l'enregistrement : la désactivation relit le compte et refuse (SS §2).
+    [Fact]
+    public async Task CodeUsedByAnotherRequestMeanwhileRefusesTheDeactivation()
+    {
+        var activatedAccount = services.AddActivatedAccount();
+        services.AccountRepository.AuthenticatorStepUsedBeforeSave = services.CurrentStep();
+
+        var result = await DeactivateAsync(activatedAccount.UserAccount, AccountPassword, services.CalculateCurrentCode(activatedAccount.Secret));
+
+        Assert.IsType<TwoFactorDeactivationResult.WrongPasswordOrCode>(result);
+        AssertAccountStillActivated(activatedAccount);
+        Assert.Null(services.AccountRepository.AuthenticatorStepUsedBeforeSave);
     }
 }

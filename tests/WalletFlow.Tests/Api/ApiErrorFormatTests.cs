@@ -84,6 +84,23 @@ public class ApiErrorFormatTests
             new { email = "visiteur6@exemple.test", password = ValidPassword });
 
         await AssertFrenchProblemTitleAsync(response, HttpStatusCode.TooManyRequests, "Trop de demandes. Réessaie plus tard.");
+        await TooManyRequestsAssertions.AssertTooManyRequestsWithinAsync(response, TimeSpan.FromHours(1));
+    }
+
+    // Chaque erreur porte le lien qui décrit son code : celui d'ASP.NET Core reste, seul le 429 reçoit le sien.
+    [Fact]
+    public async Task EveryErrorKeepsTheLinkOfItsCode()
+    {
+        using var productionApi = new ApiFactoryInProduction();
+        var client = productionApi.CreateClient();
+
+        var refused = await client.PostAsJsonAsync(RegistrationEndpoint, new { email = "sans-arobase", password = ValidPassword });
+        var unknown = await client.GetAsync("/api/adresse-inconnue");
+
+        Assert.Equal(HttpStatusCode.BadRequest, refused.StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, unknown.StatusCode);
+        Assert.Equal("https://tools.ietf.org/html/rfc9110#section-15.5.1", JsonDocument.Parse(await refused.Content.ReadAsStringAsync()).RootElement.GetProperty("type").GetString());
+        Assert.Equal("https://tools.ietf.org/html/rfc9110#section-15.5.5", JsonDocument.Parse(await unknown.Content.ReadAsStringAsync()).RootElement.GetProperty("type").GetString());
     }
 
     [Fact]
@@ -113,7 +130,7 @@ public class ApiErrorFormatTests
 
         var responseText = await AssertFrenchProblemTitleAsync(response, HttpStatusCode.BadRequest, ApiErrorConfiguration.RefusedRequestTitle);
         var errors = JsonDocument.Parse(responseText).RootElement.GetProperty("errors");
-        Assert.Equal("L'adresse e-mail n'est pas valide.", errors.GetProperty("Email")[0].GetString());
+        Assert.Equal("L'adresse e-mail n'est pas valide.", errors.GetProperty("email")[0].GetString());
     }
 
     // Une requête illisible donne toujours la même erreur, quel que soit son contenu : aucune clé ne dépend du visiteur.
@@ -141,7 +158,7 @@ public class ApiErrorFormatTests
 
         var errors = JsonDocument.Parse(responseText).RootElement.GetProperty("errors");
         var errorProperty = Assert.Single(errors.EnumerateObject());
-        Assert.Equal(ApiErrorConfiguration.GeneralErrorsKey, errorProperty.Name);
+        Assert.Equal("general", errorProperty.Name);
         var errorMessage = Assert.Single(errorProperty.Value.EnumerateArray());
         Assert.Equal(ApiErrorConfiguration.UnreadableRequestMessage, errorMessage.GetString());
 
@@ -171,13 +188,13 @@ public class ApiErrorFormatTests
         Assert.Contains(ApiErrorConfiguration.UnreadableRequestMessage, responseText);
     }
 
-    // Nom que le code donne au paramètre d'une action : un détail interne, qui ne doit jamais sortir dans une réponse.
-    // Il est lu dans le code : le test reste juste si ce nom change.
+    // Nom que le code donne au corps de la requête d'une action : un détail interne, qui ne doit jamais sortir dans une réponse.
+    // Il est lu dans le code : le test reste juste si ce nom change. Le jeton d'annulation ne vient pas du corps.
     private static string ReadParameterName(Type controllerType, string actionName)
     {
         var action = controllerType.GetMethod(actionName)
             ?? throw new InvalidOperationException("L'action " + actionName + " n'existe pas.");
-        return action.GetParameters().Single().Name
+        return action.GetParameters().Single(parameter => parameter.ParameterType != typeof(CancellationToken)).Name
             ?? throw new InvalidOperationException("Le paramètre de l'action " + actionName + " n'a pas de nom.");
     }
 }

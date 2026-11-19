@@ -33,7 +33,7 @@ public class TwoFactorLoginService
     }
 
     // Vérifie le code de la connexion en attente, puis ouvre la session. Seul ce moment rend la connexion réussie (GR Auth).
-    public async Task<TwoFactorLoginResult> FinishAsync(TwoFactorCodeAttempt attempt)
+    public async Task<TwoFactorLoginResult> FinishAsync(TwoFactorCodeAttempt attempt, CancellationToken cancellationToken = default)
     {
         if (attempt.WaitingLoginToken == null)
         {
@@ -48,23 +48,23 @@ public class TwoFactorLoginService
             return new TwoFactorLoginResult.LoginMustRestart();
         }
 
-        var account = await accountRepository.FindByIdAsync(waitingLogin.AccountId);
+        var account = await accountRepository.FindByIdAsync(waitingLogin.AccountId, cancellationToken);
 
         if (account == null || !IsStillValid(waitingLogin, account))
         {
-            return await AbandonAsync(tokenHash, account?.Id, attempt);
+            return await AbandonAsync(tokenHash, account?.Id, attempt, cancellationToken);
         }
 
         // Lu avant la vérification, pas après : l'enregistrement contrôlera que ce secret, celui qui a servi au contrôle, est toujours le bon.
         var encryptedTotpSecret = account.EncryptedTotpSecret;
-        var codeCheck = await codeCheckingService.CheckAsync(account, attempt.Code);
+        var codeCheck = await codeCheckingService.CheckAsync(account, attempt.Code, cancellationToken);
 
         if (!codeCheck.IsCodeValid)
         {
-            return await RefuseWrongCodeAsync(tokenHash, waitingLogin, attempt);
+            return await RefuseWrongCodeAsync(tokenHash, waitingLogin, attempt, cancellationToken);
         }
 
-        return await OpenSessionAsync(tokenHash, waitingLogin, encryptedTotpSecret, codeCheck, attempt);
+        return await OpenSessionAsync(tokenHash, waitingLogin, encryptedTotpSecret, codeCheck, attempt, cancellationToken);
     }
 
     // Une récupération du mot de passe ou une désactivation a pu passer pendant l'attente.
@@ -78,11 +78,12 @@ public class TwoFactorLoginService
     private async Task<TwoFactorLoginResult> RefuseWrongCodeAsync(
         string tokenHash,
         WaitingLogin waitingLogin,
-        TwoFactorCodeAttempt attempt)
+        TwoFactorCodeAttempt attempt,
+        CancellationToken cancellationToken = default)
     {
         if (waitingLogin.TriedCodeCount >= TwoFactorAuthenticationRules.MaximumCodesPerLogin)
         {
-            return await AbandonAsync(tokenHash, waitingLogin.AccountId, attempt);
+            return await AbandonAsync(tokenHash, waitingLogin.AccountId, attempt, cancellationToken);
         }
 
         await securityJournal.SaveEventNowAsync(SecurityEventType.Login, SecurityEventResult.Failure, waitingLogin.AccountId, attempt.IpAddress);
@@ -90,13 +91,14 @@ public class TwoFactorLoginService
         return new TwoFactorLoginResult.WrongCode();
     }
 
-    // Ouvre la session, marque le code de secours comme utilisé s'il y en a un, puis oublie la connexion en attente.
+    // Ouvre la session, note le code comme utilisé, puis oublie la connexion en attente.
     private async Task<TwoFactorLoginResult> OpenSessionAsync(
         string tokenHash,
         WaitingLogin waitingLogin,
         string? encryptedTotpSecret,
         TwoFactorCodeCheckResult codeCheck,
-        TwoFactorCodeAttempt attempt)
+        TwoFactorCodeAttempt attempt,
+        CancellationToken cancellationToken = default)
     {
         var session = await sessionOpeningService.TryOpenSessionAsync(new SuccessfulLogin
         {
@@ -104,14 +106,16 @@ public class TwoFactorLoginService
             PasswordHash = waitingLogin.PasswordHash,
             EncryptedTotpSecret = encryptedTotpSecret,
             BackupCodeId = codeCheck.BackupCodeId,
+            AuthenticatorStep = codeCheck.AuthenticatorStep,
             IpAddress = attempt.IpAddress,
             DeviceToken = attempt.DeviceToken,
             SessionToken = attempt.SessionToken
-        });
+        },
+        cancellationToken);
 
         if (session == null)
         {
-            return await AbandonAsync(tokenHash, waitingLogin.AccountId, attempt);
+            return await AbandonAsync(tokenHash, waitingLogin.AccountId, attempt, cancellationToken);
         }
 
         waitingLoginStore.Remove(tokenHash);
@@ -125,7 +129,7 @@ public class TwoFactorLoginService
     }
 
     // Oublie la connexion en attente, note l'échec dans le journal, et demande de recommencer.
-    private async Task<TwoFactorLoginResult> AbandonAsync(string tokenHash, Guid? accountId, TwoFactorCodeAttempt attempt)
+    private async Task<TwoFactorLoginResult> AbandonAsync(string tokenHash, Guid? accountId, TwoFactorCodeAttempt attempt, CancellationToken cancellationToken = default)
     {
         waitingLoginStore.Remove(tokenHash);
 

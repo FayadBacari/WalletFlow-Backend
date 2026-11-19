@@ -18,60 +18,62 @@ public class BankConnectionRepository : IBankConnectionRepository
     }
 
     // Donne les connexions de l'utilisateur.
-    public async Task<List<BankConnection>> FindConnectionsAsync(Guid userId)
+    public async Task<List<BankConnection>> FindConnectionsAsync(Guid userId, CancellationToken cancellationToken = default)
     {
         return await databaseContext.BankConnections
             .Where(connection => connection.UserId == userId)
-            .ToListAsync();
+            .ToListAsync(cancellationToken);
     }
 
     // Cherche la connexion par son identifiant et par son utilisateur : celle d'un autre n'est jamais trouvée.
-    public async Task<BankConnection?> FindConnectionAsync(Guid userId, Guid connectionId)
+    public async Task<BankConnection?> FindConnectionAsync(Guid userId, Guid connectionId, CancellationToken cancellationToken = default)
     {
         return await databaseContext.BankConnections.SingleOrDefaultAsync(connection =>
             connection.Id == connectionId
-            && connection.UserId == userId);
+            && connection.UserId == userId,
+            cancellationToken);
     }
 
     // Cherche une connexion par son seul identifiant. Réservé à la tâche de fond, et aux connexions déjà trouvées
     // parmi celles de l'utilisateur.
-    public async Task<BankConnection?> FindConnectionByIdAsync(Guid connectionId)
+    public async Task<BankConnection?> FindConnectionByIdAsync(Guid connectionId, CancellationToken cancellationToken = default)
     {
         return await databaseContext.BankConnections.SingleOrDefaultAsync(connection =>
-            connection.Id == connectionId);
+            connection.Id == connectionId,
+            cancellationToken);
     }
 
     // Relit l'identifiant chez le prestataire sans rien suivre : la valeur vient toujours de la base, jamais d'une lecture précédente.
-    public async Task<string?> ReadExternalIdAsync(Guid userId, Guid connectionId)
+    public async Task<string?> ReadExternalIdAsync(Guid userId, Guid connectionId, CancellationToken cancellationToken = default)
     {
         return await databaseContext.BankConnections
             .AsNoTracking()
             .Where(connection => connection.Id == connectionId && connection.UserId == userId)
             .Select(connection => connection.ExternalConnectionId)
-            .SingleOrDefaultAsync();
+            .SingleOrDefaultAsync(cancellationToken);
     }
 
     // Donne les comptes de ces connexions.
-    public async Task<List<BankAccount>> FindAccountsAsync(List<Guid> connectionIds)
+    public async Task<List<BankAccount>> FindAccountsAsync(List<Guid> connectionIds, CancellationToken cancellationToken = default)
     {
         return await databaseContext.BankAccounts
             .Where(account => connectionIds.Contains(account.BankConnectionId))
-            .ToListAsync();
+            .ToListAsync(cancellationToken);
     }
 
     // Donne les connexions qui ne sont pas expirées, de tous les utilisateurs : la tâche de fond les met à jour.
-    public async Task<List<Guid>> FindConnectionIdsToUpdateAsync()
+    public async Task<List<Guid>> FindConnectionIdsToUpdateAsync(CancellationToken cancellationToken = default)
     {
         return await databaseContext.BankConnections
             .Where(connection =>
                 connection.Status != BankConnectionStatus.Expired
                 && databaseContext.Users.Any(user => user.Id == connection.UserId && user.DeletionRequestedAt == null))
             .Select(connection => connection.Id)
-            .ToListAsync();
+            .ToListAsync(cancellationToken);
     }
 
     // Lit les connexions à révoquer des comptes en suppression.
-    public async Task<List<Guid>> FindConnectionIdsToRevokeAsync()
+    public async Task<List<Guid>> FindConnectionIdsToRevokeAsync(CancellationToken cancellationToken = default)
     {
         return await databaseContext.BankConnections
             .AsNoTracking()
@@ -79,11 +81,11 @@ public class BankConnectionRepository : IBankConnectionRepository
                 connection.Status != BankConnectionStatus.Expired
                 && databaseContext.Users.Any(user => user.Id == connection.UserId && user.DeletionRequestedAt != null))
             .Select(connection => connection.Id)
-            .ToListAsync();
+            .ToListAsync(cancellationToken);
     }
 
     // Cherche ce compte dans les autres connexions de l'utilisateur, par son identifiant stable.
-    public async Task<bool> IsAccountConnectedElsewhereAsync(Guid userId, string stableId, Guid? exceptConnectionId)
+    public async Task<bool> IsAccountConnectedElsewhereAsync(Guid userId, string stableId, Guid? exceptConnectionId, CancellationToken cancellationToken = default)
     {
         var excludedConnectionId = exceptConnectionId ?? Guid.Empty;
 
@@ -96,7 +98,8 @@ public class BankConnectionRepository : IBankConnectionRepository
             .AnyAsync(row =>
                 row.UserId == userId
                 && row.ExternalAccountId == stableId
-                && row.ConnectionId != excludedConnectionId);
+                && row.ConnectionId != excludedConnectionId,
+                cancellationToken);
     }
 
     // Garde de côté la nouvelle connexion : elle ne sera écrite qu'avec les autres changements.
@@ -122,7 +125,7 @@ public class BankConnectionRepository : IBankConnectionRepository
     // Cette écriture est immédiate : elle refuse de partir si des changements attendent l'unité de travail.
     // Un renouvellement simultané verrouille le compte puis la connexion, cette suppression la connexion puis le compte :
     // si PostgreSQL arrête cette suppression pour débloquer les deux, rien n'est supprimé, et le cas d'utilisation recommence.
-    public async Task<bool> DeleteAsync(Guid userId, Guid connectionId, string externalConnectionId)
+    public async Task<bool> DeleteAsync(Guid userId, Guid connectionId, string externalConnectionId, CancellationToken cancellationToken = default)
     {
         databaseContext.ThrowIfChangesArePending();
 
@@ -133,7 +136,7 @@ public class BankConnectionRepository : IBankConnectionRepository
                     connection.Id == connectionId
                     && connection.UserId == userId
                     && connection.ExternalConnectionId == externalConnectionId)
-                .ExecuteDeleteAsync();
+                .ExecuteDeleteAsync(cancellationToken);
 
             return deletedCount > 0;
         }

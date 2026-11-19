@@ -4,6 +4,9 @@ using System.Reflection;
 using System.Text;
 using System.Text.Json;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging.Abstractions;
+using WalletFlow.Api.BackgroundTasks;
 using WalletFlow.Api.Configuration;
 using WalletFlow.Api.Contracts;
 using WalletFlow.Api.Controllers;
@@ -182,11 +185,11 @@ public class SuggestionEndpointTests
 
     // --- Liste
 
-    // La première lecture calcule octobre : 1 000 € hors des sacs, et 2 000 € de revenus pour 1 700 € de dépenses.
-    // La réponse donne le mois, la règle en clair, le montant par mois, et les économies déjà réalisées.
-    // Ce sont des données financières : la réponse interdit toute copie en cache.
+    // SS §6 : la lecture ne calcule rien. La tâche horaire calcule octobre : 1 000 € hors des sacs, et 2 000 € de revenus
+    // pour 1 700 € de dépenses. La lecture suivante donne le mois, la règle en clair, le montant par mois, et les économies
+    // déjà réalisées. Ce sont des données financières : la réponse interdit toute copie en cache.
     [Fact]
-    public async Task FirstReadCalculatesTheMonth()
+    public async Task ReadingNeverCalculatesAndTheHourlyTaskDoes()
     {
         using var api = new ApiFactoryWithFakes();
         var user = await LogInWithBalanceAsync(api, 100_000);
@@ -195,14 +198,32 @@ public class SuggestionEndpointTests
         var bankAccount = api.BankRepository.SavedAccounts.Single();
         api.TransactionRepository.SavedTransactions.Add(new BankTransaction
         {
-            ExternalTransactionId = "salaire", TransactionDate = October, Label = "SALAIRE", AmountInCents = 200_000,
-            BankAccountId = bankAccount.Id, CategoryId = income.Id
+            ExternalTransactionId = "salaire",
+            TransactionDate = October,
+            Label = "SALAIRE",
+            AmountInCents = 200_000,
+            BankAccountId = bankAccount.Id,
+            CategoryId = income.Id
         });
         api.TransactionRepository.SavedTransactions.Add(new BankTransaction
         {
-            ExternalTransactionId = "loyer", TransactionDate = October.AddDays(4), Label = "LOYER", AmountInCents = -170_000,
-            BankAccountId = bankAccount.Id, CategoryId = housing.Id
+            ExternalTransactionId = "loyer",
+            TransactionDate = October.AddDays(4),
+            Label = "LOYER",
+            AmountInCents = -170_000,
+            BankAccountId = bankAccount.Id,
+            CategoryId = housing.Id
         });
+
+        var beforePass = await ReadJsonAsync(await user.Client.GetAsync(SuggestionsEndpoint));
+        Assert.Empty(beforePass.GetProperty("suggestions").EnumerateArray());
+        Assert.Empty(api.SuggestionRepository.SavedSuggestions);
+        Assert.Null(user.Account.LastSuggestionMonth);
+        await new SuggestionsBackgroundService(
+            api.Services.GetRequiredService<IServiceScopeFactory>(),
+            api.Clock,
+            new BackgroundTaskHealth(),
+            NullLogger<SuggestionsBackgroundService>.Instance).RunPassAsync();
 
         var response = await user.Client.GetAsync(SuggestionsEndpoint);
 
@@ -267,6 +288,29 @@ public class SuggestionEndpointTests
         Assert.Equal(25_000, (await ReadJsonAsync(await user.Client.GetAsync(SuggestionsEndpoint))).GetProperty("savedInCents").GetInt64());
     }
 
+    // SS §6 : accepter une suggestion déplace de l'argent. Au-delà de 1 000 déplacements sur 24 heures, la réponse est
+    // « trop de requêtes », avec le délai de cette limite, et la suggestion attend toujours sa réponse.
+    [Fact]
+    public async Task AcceptanceBeyondTheDailyMovementLimitIsTooManyRequests()
+    {
+        using var api = new ApiFactoryWithFakes();
+        var user = await LogInWithBalanceAsync(api, 100_000);
+        user.Account.NoteSuggestionMonth(October);
+        var bag = SaveBag(api, user.Account, "Épargne");
+        var suggestion = SaveSuggestion(api, user.Account, SuggestionRule.UnallocatedMoney, 30_000);
+
+        for (var number = 1; number <= BagRules.MaximumMovementsPerDay; number++)
+        {
+            api.BagRepository.SavedMovements.Add(new BagMovement { AmountInCents = 1, MovedAt = api.Clock.GetUtcNow().UtcDateTime, DestinationBagId = bag.Id });
+        }
+
+        var response = await AcceptAsync(user, suggestion.Id, bag.Id, 25_000);
+
+        await TooManyRequestsAssertions.AssertTooManyRequestsAsync(response, 86400);
+        Assert.Equal(SuggestionStatus.Proposed, suggestion.Status);
+        Assert.Equal(BagRules.MaximumMovementsPerDay, api.BagRepository.SavedMovements.Count);
+    }
+
     // Les refus : un montant hors limites, l'argent disponible qui ne suffit pas, une suggestion déjà répondue,
     // et un champ manquant. Aucun ne déplace d'argent par erreur.
     [Fact]
@@ -283,9 +327,9 @@ public class SuggestionEndpointTests
         var missingAmount = await SendAsync(user.Client, HttpMethod.Post, AcceptAddress(suggestion.Id), new { bagId = bag.Id }, user.CsrfToken);
 
         Assert.Equal(HttpStatusCode.BadRequest, tooBig.StatusCode);
-        Assert.Equal(ErrorMessages.SuggestionAmountBreaksRules, await ReadFieldErrorAsync(tooBig, nameof(SuggestionAcceptanceRequest.AmountInCents)));
+        Assert.Equal(ErrorMessages.SuggestionAmountBreaksRules, await ReadFieldErrorAsync(tooBig, "amountInCents"));
         Assert.Equal(HttpStatusCode.BadRequest, tooLow.StatusCode);
-        Assert.Equal(ErrorMessages.AvailableMoneyTooLow, await ReadFieldErrorAsync(tooLow, nameof(SuggestionAcceptanceRequest.AmountInCents)));
+        Assert.Equal(ErrorMessages.AvailableMoneyTooLow, await ReadFieldErrorAsync(tooLow, "amountInCents"));
         Assert.Equal(HttpStatusCode.BadRequest, missingBag.StatusCode);
         Assert.Equal(HttpStatusCode.BadRequest, missingAmount.StatusCode);
         Assert.Empty(api.BagRepository.SavedMovements);

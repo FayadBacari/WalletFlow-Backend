@@ -4,16 +4,35 @@ using static WalletFlow.Tests.Application.SuggestionServices;
 
 namespace WalletFlow.Tests.Application;
 
-// Vérifie le calcul et la liste des suggestions (GR Sacs, DD §8, §11 et §12), avec une fausse base.
-// Le 5 novembre 2026, le mois évalué est octobre ; sa moyenne porte sur juillet, août et septembre.
+// Vérifie le calcul et la liste des suggestions (GR Sacs, DD §8, §11 et §12), avec une fausse base. Chaque test calcule
+// d'abord le mois comme la tâche horaire, puis lit la liste. Le 5 novembre 2026, le mois évalué est octobre ; sa moyenne
+// porte sur juillet, août et septembre.
 public class SuggestionListServiceTests
 {
     private readonly SuggestionServices services = new SuggestionServices();
 
-    // Lit la liste de l'utilisateur des tests.
-    private async Task<SuggestionList> ListAsync()
+    // Calcule le mois de l'utilisateur des tests comme la tâche horaire, puis lit sa liste.
+    private async Task<SuggestionList> CalculateThenListAsync()
     {
-        return await services.CreateList().ListAsync(services.UserId);
+        return await services.CalculateThenListAsync();
+    }
+
+    // SS §6 : la lecture ne fait que lire. Avant le passage de la tâche horaire, la liste d'octobre est vide, et rien n'est
+    // écrit : ni suggestion, ni mois noté, ni alerte.
+    [Fact]
+    public async Task ReadingTheListWritesNothing()
+    {
+        var account = services.AddBankAccount(50_000);
+        services.SaveTransaction(account, "Alimentation", October, -1_000);
+
+        var list = await services.CreateList().ListAsync(services.UserId);
+
+        Assert.Equal(October, list.Month);
+        Assert.Empty(list.Suggestions);
+        Assert.Empty(services.SavedSuggestionsOfUser());
+        Assert.Null(services.User.LastSuggestionMonth);
+        Assert.Equal(0, services.UnitOfWork.CommittedTransactionCount);
+        Assert.Empty(services.EmailRequests.SavedRequests);
     }
 
     // Donne la seule suggestion de cette règle dans la liste.
@@ -28,7 +47,7 @@ public class SuggestionListServiceTests
     {
         services.AddBankAccount(100_000);
 
-        var list = await ListAsync();
+        var list = await CalculateThenListAsync();
 
         Assert.Equal(October, list.Month);
         Assert.Empty(list.Suggestions);
@@ -46,7 +65,7 @@ public class SuggestionListServiceTests
         services.SaveMonthlyExpenses(account, "Alimentation", 10_000, 10_000, 10_000, 13_000);
         services.SaveMonthlyExpenses(account, "Transport", 10_000, 10_000, 10_000, 12_000);
 
-        var list = await ListAsync();
+        var list = await CalculateThenListAsync();
 
         var overrun = OnlyOf(list, SuggestionRule.CategoryOverrun);
         Assert.Equal(services.CategoryNamed("Alimentation").Id, overrun.CategoryId);
@@ -69,7 +88,7 @@ public class SuggestionListServiceTests
         services.SaveTransaction(account, "Revenus", October.AddDays(2), -5_000);
         services.SaveTransaction(account, "Loisirs", October.AddDays(5), -50_000);
 
-        var list = await ListAsync();
+        var list = await CalculateThenListAsync();
 
         Assert.DoesNotContain(list.Suggestions, view => view.Rule == SuggestionRule.CategoryOverrun);
     }
@@ -84,7 +103,7 @@ public class SuggestionListServiceTests
         services.SaveTransaction(account, "Alimentation", July.AddMonths(2), -10_000);
         services.SaveTransaction(account, "Alimentation", October, -50_000);
 
-        var list = await ListAsync();
+        var list = await CalculateThenListAsync();
 
         Assert.DoesNotContain(list.Suggestions, view => view.Rule == SuggestionRule.CategoryOverrun);
         Assert.Equal(October, services.User.LastSuggestionMonth);
@@ -99,7 +118,7 @@ public class SuggestionListServiceTests
         var bag = services.SaveBag("Vacances");
         services.Bags.SavedMovements.Add(new BagMovement { AmountInCents = 30_000, MovedAt = services.Now, DestinationBagId = bag.Id });
 
-        var list = await ListAsync();
+        var list = await CalculateThenListAsync();
 
         Assert.Equal(70_000, OnlyOf(list, SuggestionRule.UnallocatedMoney).MonthlySavingsInCents);
     }
@@ -115,7 +134,7 @@ public class SuggestionListServiceTests
         var bag = services.SaveBag("Vacances");
         services.Bags.SavedMovements.Add(new BagMovement { AmountInCents = bagBalanceInCents, MovedAt = services.Now, DestinationBagId = bag.Id });
 
-        var list = await ListAsync();
+        var list = await CalculateThenListAsync();
 
         Assert.DoesNotContain(list.Suggestions, view => view.Rule == SuggestionRule.UnallocatedMoney);
     }
@@ -132,7 +151,7 @@ public class SuggestionListServiceTests
         services.SaveTransaction(account, "Santé", October.AddDays(3), -25_000);
         services.SaveTransaction(account, "Santé", October.AddDays(8), 5_000);
 
-        var list = await ListAsync();
+        var list = await CalculateThenListAsync();
 
         Assert.Equal(10_000, OnlyOf(list, SuggestionRule.InsufficientSavings).MonthlySavingsInCents);
     }
@@ -151,7 +170,7 @@ public class SuggestionListServiceTests
         }
         services.SaveTransaction(account, "Logement", October.AddDays(firstDayOffset + 1), expenseInCents);
 
-        var list = await ListAsync();
+        var list = await CalculateThenListAsync();
 
         Assert.DoesNotContain(list.Suggestions, view => view.Rule == SuggestionRule.InsufficientSavings);
     }
@@ -166,7 +185,7 @@ public class SuggestionListServiceTests
         services.SaveTransaction(account, "Logement", October.AddDays(2), -160_000);
         services.Bank.SaveTransaction(account, "Autres", October.AddDays(3), -50_000, isInternalTransfer: true);
 
-        var list = await ListAsync();
+        var list = await CalculateThenListAsync();
 
         Assert.DoesNotContain(list.Suggestions, view => view.Rule == SuggestionRule.InsufficientSavings);
     }
@@ -178,11 +197,11 @@ public class SuggestionListServiceTests
     {
         var account = services.AddBankAccount(10_000);
         services.SaveTransaction(account, "Alimentation", October, -1_000);
-        await ListAsync();
+        await CalculateThenListAsync();
 
         services.AddBankAccount(90_000);
         services.SaveMonthlyExpenses(account, "Transport", 10_000, 10_000, 10_000, 50_000);
-        var list = await ListAsync();
+        var list = await CalculateThenListAsync();
 
         Assert.Equal(10_000, OnlyOf(list, SuggestionRule.UnallocatedMoney).MonthlySavingsInCents);
         Assert.Single(list.Suggestions);
@@ -201,7 +220,7 @@ public class SuggestionListServiceTests
         var oldIgnored = services.SaveSuggestion(SuggestionRule.UnallocatedMoney, September.AddMonths(-1), 3_000, SuggestionStatus.Ignored, statusChangedAt: services.Now.AddDays(-30));
         var recentIgnored = services.SaveSuggestion(SuggestionRule.UnallocatedMoney, September, 3_000, SuggestionStatus.Ignored, statusChangedAt: services.Now.AddDays(-29));
 
-        await ListAsync();
+        await CalculateThenListAsync();
 
         var savedIds = services.SavedSuggestionsOfUser().Select(suggestion => suggestion.Id).ToList();
         Assert.DoesNotContain(oldProposal.Id, savedIds);
@@ -222,7 +241,7 @@ public class SuggestionListServiceTests
         services.SaveTransaction(account, "Revenus", October.AddDays(1), 45_000);
         services.SaveSuggestion(SuggestionRule.CategoryOverrun, September, 5_000, SuggestionStatus.Ignored, services.CategoryNamed("Alimentation").Id, services.Now.AddDays(-10));
 
-        var list = await ListAsync();
+        var list = await CalculateThenListAsync();
 
         Assert.Equal(services.CategoryNamed("Transport").Id, OnlyOf(list, SuggestionRule.CategoryOverrun).CategoryId);
         Assert.Single(list.Suggestions, view => view.Rule == SuggestionRule.UnallocatedMoney);
@@ -237,7 +256,7 @@ public class SuggestionListServiceTests
         services.SaveTransaction(account, "Alimentation", October, -1_000);
         services.SaveSuggestion(SuggestionRule.UnallocatedMoney, September, 5_000, SuggestionStatus.Ignored, statusChangedAt: services.Now.AddDays(-29));
 
-        var list = await ListAsync();
+        var list = await CalculateThenListAsync();
 
         Assert.Empty(list.Suggestions);
     }
@@ -256,7 +275,7 @@ public class SuggestionListServiceTests
         services.SaveSuggestion(SuggestionRule.CategoryOverrun, October, 8_000);
         services.SaveSuggestion(SuggestionRule.InsufficientSavings, October, 7_000, userId: Guid.NewGuid());
 
-        var list = await ListAsync();
+        var list = await CalculateThenListAsync();
 
         Assert.Equal(new List<Guid> { big.Id, small.Id }, list.Suggestions.Select(view => view.Id).ToList());
         Assert.Equal("Transport", list.Suggestions[0].CategoryName);
@@ -275,7 +294,7 @@ public class SuggestionListServiceTests
         services.Bags.SavedMovements.Add(new BagMovement { AmountInCents = 9_000, MovedAt = services.Now, DestinationBagId = bag.Id, SavingsSuggestionId = ofOther.Id });
         services.Bags.SavedMovements.Add(new BagMovement { AmountInCents = 7_000, MovedAt = services.Now, DestinationBagId = bag.Id });
 
-        var list = await ListAsync();
+        var list = await CalculateThenListAsync();
 
         Assert.Equal(2_500, list.SavedInCents);
     }
@@ -294,7 +313,7 @@ public class SuggestionListServiceTests
             savedByOther = services.SaveSuggestion(SuggestionRule.UnallocatedMoney, October, 50_000);
         };
 
-        var list = await ListAsync();
+        var list = await CalculateThenListAsync();
 
         Assert.Equal(savedByOther!.Id, Assert.Single(list.Suggestions).Id);
         Assert.Single(services.SavedSuggestionsOfUser());
@@ -311,9 +330,9 @@ public class SuggestionListServiceTests
         early.User.NoteSuggestionMonth(September);
         var september = early.SaveSuggestion(SuggestionRule.UnallocatedMoney, September, 4_000);
 
-        var onFourth = await early.CreateList().ListAsync(early.UserId);
+        var onFourth = await early.CalculateThenListAsync();
         early.Bank.Clock.Advance(TimeSpan.FromDays(1));
-        var onFifth = await early.CreateList().ListAsync(early.UserId);
+        var onFifth = await early.CalculateThenListAsync();
 
         Assert.Equal(September, onFourth.Month);
         Assert.Equal(september.Id, Assert.Single(onFourth.Suggestions).Id);
@@ -331,7 +350,7 @@ public class SuggestionListServiceTests
         services.AddBankAccount(100_000);
         services.SaveSuggestion(SuggestionRule.UnallocatedMoney, September, 4_000);
 
-        var list = await ListAsync();
+        var list = await CalculateThenListAsync();
 
         Assert.Empty(list.Suggestions);
         Assert.Single(services.SavedSuggestionsOfUser());
@@ -346,7 +365,7 @@ public class SuggestionListServiceTests
         services.SaveTransaction(account, "Alimentation", October, -1_000);
         var existing = services.SaveSuggestion(SuggestionRule.UnallocatedMoney, October, 50_000);
 
-        var list = await ListAsync();
+        var list = await CalculateThenListAsync();
 
         Assert.Equal(existing.Id, Assert.Single(list.Suggestions).Id);
         Assert.Single(services.SavedSuggestionsOfUser());
@@ -367,14 +386,14 @@ public class SuggestionListServiceTests
             DestinationBagId = services.SaveBag("Vacances").Id
         };
 
-        var list = await ListAsync();
+        var list = await CalculateThenListAsync();
 
         Assert.Equal(30_000, Assert.Single(list.Suggestions).MonthlySavingsInCents);
         Assert.Single(services.SavedSuggestionsOfUser());
     }
 
     // Des conflits passagers ne perdent pas le calcul : il est refait et enregistré une seule fois. S'ils ne cessent pas,
-    // rien n'est noté, et la lecture suivante calculera le mois.
+    // rien n'est noté, et le passage suivant de la tâche calculera le mois.
     [Fact]
     public async Task ConflictsDelayTheCalculationWithoutLosingIt()
     {
@@ -382,9 +401,9 @@ public class SuggestionListServiceTests
         services.SaveTransaction(account, "Alimentation", October, -1_000);
         services.Suggestions.Conflicts = 100;
 
-        var blocked = await ListAsync();
+        var blocked = await CalculateThenListAsync();
         services.Suggestions.Conflicts = 3;
-        var calculated = await ListAsync();
+        var calculated = await CalculateThenListAsync();
 
         Assert.Empty(blocked.Suggestions);
         Assert.Single(calculated.Suggestions);

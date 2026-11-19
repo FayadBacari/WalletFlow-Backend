@@ -13,8 +13,8 @@ public class SecurityJournalCleanupService
     }
 
     // Efface les événements concernés, et renvoie leur nombre.
-    public async Task<int> DeleteExpiredEventsAsync()
+    public async Task<int> DeleteExpiredEventsAsync(CancellationToken cancellationToken = default)
     {
-        return await securityEventRepository.DeleteExpiredEventsAsync();
+        return await securityEventRepository.DeleteExpiredEventsAsync(cancellationToken);
     }
 }

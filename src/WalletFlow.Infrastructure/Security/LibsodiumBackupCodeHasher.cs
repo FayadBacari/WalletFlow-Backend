@@ -24,7 +24,7 @@ public class LibsodiumBackupCodeHasher : IBackupCodeHasher
     }
 
     // Calcule l'empreinte du code avec le sel du compte. Le même code, pour le même compte, donne toujours la même empreinte.
-    public async Task<string> HashAsync(string cleanedCode, Guid accountId)
+    public async Task<string> HashAsync(string cleanedCode, Guid accountId, CancellationToken cancellationToken = default)
     {
         var hashBytes = await argonLimiter.RunAsync(() =>
             PasswordHash.ArgonHashBinary(
@@ -32,7 +32,8 @@ public class LibsodiumBackupCodeHasher : IBackupCodeHasher
                 accountId.ToByteArray(),
                 PasswordHash.StrengthArgon.Interactive,
                 HashLength,
-                PasswordHash.ArgonAlgorithm.Argon_2ID13));
+                PasswordHash.ArgonAlgorithm.Argon_2ID13),
+                cancellationToken);
 
         return HashPrefix + Convert.ToBase64String(hashBytes);
     }

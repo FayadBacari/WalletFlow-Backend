@@ -14,14 +14,14 @@ public class FakePasswordHasher : IPasswordHasher
     public Action? OnPasswordVerified { get; set; } = null;
 
     // Renvoie une fausse empreinte, facile à reconnaître dans les tests.
-    public Task<string> HashAsync(string password)
+    public Task<string> HashAsync(string password, CancellationToken cancellationToken = default)
     {
         HashedPasswordCount = HashedPasswordCount + 1;
         return Task.FromResult(HashPrefix + password);
     }
 
     // Compare le mot de passe avec la fausse empreinte.
-    public Task<bool> VerifyAsync(string password, string storedHash)
+    public Task<bool> VerifyAsync(string password, string storedHash, CancellationToken cancellationToken = default)
     {
         VerifiedPasswordCount = VerifiedPasswordCount + 1;
         OnPasswordVerified?.Invoke();

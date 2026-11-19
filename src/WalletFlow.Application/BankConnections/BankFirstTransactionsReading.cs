@@ -38,10 +38,10 @@ public class BankFirstTransactionsReading
     // Lit les opérations de chaque compte gardé, l'utilisateur étant là, juste après l'autorisation : c'est alors que la banque
     // donne le plus d'historique. Si elle ne répond pas, la connexion reste faite : les opérations arriveront à la mise à jour
     // suivante, qui repart de la dernière opération gardée.
-    public async Task ReadAsync(Guid userId, Guid connectionId, ProvidedSession session, UserPresence presence)
+    public async Task ReadAsync(Guid userId, Guid connectionId, ProvidedSession session, UserPresence presence, CancellationToken cancellationToken = default)
     {
         var today = UsersCalendar.FindToday(clock.GetUtcNow());
-        var storedAccounts = await connectionRepository.FindAccountsAsync(new List<Guid> { connectionId });
+        var storedAccounts = await connectionRepository.FindAccountsAsync(new List<Guid> { connectionId }, cancellationToken);
         var transactionsByAccount = new Dictionary<Guid, List<ReceivedTransaction>>();
 
         foreach (var storedAccount in storedAccounts)
@@ -53,11 +53,11 @@ public class BankFirstTransactionsReading
                 continue;
             }
 
-            var startDate = await transactionArrival.ChooseReadingStartAsync(storedAccount.Id, today);
+            var startDate = await transactionArrival.ChooseReadingStartAsync(storedAccount.Id, today, cancellationToken);
 
             try
             {
-                var providedTransactions = await bankProvider.ReadTransactionsAsync(sessionAccount.Uid, startDate, presence);
+                var providedTransactions = await bankProvider.ReadTransactionsAsync(sessionAccount.Uid, startDate, presence, cancellationToken);
                 transactionsByAccount[storedAccount.Id] = TransactionReception.Receive(providedTransactions);
             }
             catch (BankProviderException)
@@ -71,12 +71,13 @@ public class BankFirstTransactionsReading
         }
 
         var addedCount = await savingService.SaveWithRetriesAsync(
-            () => PrepareFirstTransactionsAsync(userId, connectionId, transactionsByAccount),
-            0);
+            () => PrepareFirstTransactionsAsync(userId, connectionId, transactionsByAccount, cancellationToken),
+            0,
+            cancellationToken);
 
         if (addedCount > 0)
         {
-            await budgetAlerts.CheckAsync(userId);
+            await budgetAlerts.CheckAsync(userId, cancellationToken);
         }
     }
 
@@ -84,23 +85,24 @@ public class BankFirstTransactionsReading
     private async Task<PreparedChanges<int>> PrepareFirstTransactionsAsync(
         Guid userId,
         Guid connectionId,
-        Dictionary<Guid, List<ReceivedTransaction>> transactionsByAccount)
+        Dictionary<Guid, List<ReceivedTransaction>> transactionsByAccount,
+        CancellationToken cancellationToken = default)
     {
-        var connection = await connectionRepository.FindConnectionAsync(userId, connectionId);
+        var connection = await connectionRepository.FindConnectionAsync(userId, connectionId, cancellationToken);
 
         if (connection == null)
         {
             return PreparedChanges<int>.NothingToSave(0);
         }
 
-        var accounts = await connectionRepository.FindAccountsAsync(new List<Guid> { connectionId });
+        var accounts = await connectionRepository.FindAccountsAsync(new List<Guid> { connectionId }, cancellationToken);
         var preparedCount = 0;
 
         foreach (var account in accounts)
         {
             if (transactionsByAccount.TryGetValue(account.Id, out var receivedTransactions))
             {
-                preparedCount = preparedCount + await transactionArrival.PrepareNewTransactionsAsync(userId, account.Id, receivedTransactions);
+                preparedCount = preparedCount + await transactionArrival.PrepareNewTransactionsAsync(userId, account.Id, receivedTransactions, cancellationToken);
             }
         }
 

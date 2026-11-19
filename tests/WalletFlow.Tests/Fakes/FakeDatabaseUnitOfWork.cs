@@ -17,7 +17,7 @@ public class FakeDatabaseUnitOfWork : IDatabaseUnitOfWork
     }
 
     // Garde tout, sauf panne ou conflit simulé. Une panne est remontée, comme celle de la vraie base, après avoir tout annulé.
-    public Task<bool> TrySaveChangesAsync()
+    public Task<bool> TrySaveChangesAsync(CancellationToken cancellationToken = default)
     {
         try
         {

@@ -27,25 +27,26 @@ public class SuggestionDismissalService
     }
 
     // Ignore la suggestion.
-    public async Task<SuggestionDismissalResult> DismissAsync(Guid userId, Guid suggestionId)
+    public async Task<SuggestionDismissalResult> DismissAsync(Guid userId, Guid suggestionId, CancellationToken cancellationToken = default)
     {
         return await savingService.SaveWithRetriesAsync(
-            () => PrepareDismissalAsync(userId, suggestionId),
-            new SuggestionDismissalResult.NotSaved());
+            () => PrepareDismissalAsync(userId, suggestionId, cancellationToken),
+            new SuggestionDismissalResult.NotSaved(),
+            cancellationToken);
     }
 
     // Un passage. Comme pour l'acceptation, la ligne de l'utilisateur est lue d'abord puis réécrite : « ignorer » et « accepter »
     // au même instant ne donnent qu'une seule réponse, et le second trouve la suggestion déjà répondue.
-    private async Task<PreparedChanges<SuggestionDismissalResult>> PrepareDismissalAsync(Guid userId, Guid suggestionId)
+    private async Task<PreparedChanges<SuggestionDismissalResult>> PrepareDismissalAsync(Guid userId, Guid suggestionId, CancellationToken cancellationToken = default)
     {
-        var user = await bagRepository.FindUserAsync(userId);
+        var user = await bagRepository.FindUserAsync(userId, cancellationToken);
 
         if (user == null)
         {
             return PreparedChanges<SuggestionDismissalResult>.NothingToSave(new SuggestionDismissalResult.NotSaved());
         }
 
-        var suggestion = await suggestionRepository.FindAsync(userId, suggestionId);
+        var suggestion = await suggestionRepository.FindAsync(userId, suggestionId, cancellationToken);
 
         if (suggestion == null || suggestion.IsWithdrawn())
         {

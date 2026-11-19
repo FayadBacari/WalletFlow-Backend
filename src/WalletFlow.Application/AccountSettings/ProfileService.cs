@@ -14,9 +14,9 @@ public class ProfileService
     }
 
     // Donne le profil du compte, ou null s'il n'existe plus. Ni le mot de passe ni aucun secret n'en font partie.
-    public async Task<AccountProfile?> FindAsync(Guid userId)
+    public async Task<AccountProfile?> FindAsync(Guid userId, CancellationToken cancellationToken = default)
     {
-        var account = await accountRepository.FindByIdAsync(userId);
+        var account = await accountRepository.FindByIdAsync(userId, cancellationToken);
 
         if (account == null)
         {

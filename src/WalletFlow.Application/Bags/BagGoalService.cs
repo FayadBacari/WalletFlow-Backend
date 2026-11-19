@@ -29,7 +29,7 @@ public class BagGoalService
     }
 
     // Fixe l'objectif donné, ou l'enlève avec deux null. Le jour de la saisie est celui de Paris (voir UsersCalendar).
-    public async Task<BagGoalResult> ReplaceAsync(Guid userId, Guid bagId, int? targetAmountInCents, DateOnly? targetDate)
+    public async Task<BagGoalResult> ReplaceAsync(Guid userId, Guid bagId, int? targetAmountInCents, DateOnly? targetDate, CancellationToken cancellationToken = default)
     {
         var today = UsersCalendar.FindToday(clock.GetUtcNow());
         var goalProblem = BagRules.FindGoalProblem(targetAmountInCents, targetDate, today);
@@ -40,8 +40,9 @@ public class BagGoalService
         }
 
         return await savingService.SaveWithRetriesAsync(
-            () => PrepareGoalAsync(userId, bagId, targetAmountInCents, targetDate, today),
-            new BagGoalResult.NotSaved());
+            () => PrepareGoalAsync(userId, bagId, targetAmountInCents, targetDate, today, cancellationToken),
+            new BagGoalResult.NotSaved(),
+            cancellationToken);
     }
 
     // Un passage. La ligne de l'utilisateur est lue d'abord, puis réécrite avec l'objectif, comme pour un déplacement :
@@ -52,28 +53,29 @@ public class BagGoalService
         Guid bagId,
         int? targetAmountInCents,
         DateOnly? targetDate,
-        DateOnly today)
+        DateOnly today,
+        CancellationToken cancellationToken = default)
     {
-        var user = await bagRepository.FindUserAsync(userId);
+        var user = await bagRepository.FindUserAsync(userId, cancellationToken);
 
         if (user == null)
         {
             return PreparedChanges<BagGoalResult>.NothingToSave(new BagGoalResult.NotSaved());
         }
 
-        var bag = await bagRepository.FindAsync(userId, bagId);
+        var bag = await bagRepository.FindAsync(userId, bagId, cancellationToken);
 
         if (bag == null)
         {
             return PreparedChanges<BagGoalResult>.NothingToSave(new BagGoalResult.NotFound());
         }
 
-        var balances = await bagRepository.SumBalancesAsync(userId);
+        var balances = await bagRepository.SumBalancesAsync(userId, cancellationToken);
         var balanceInCents = balances.GetValueOrDefault(bag.Id);
         var previousTargetInCents = bag.TargetAmountInCents;
         bag.ReplaceGoal(targetAmountInCents, targetDate, today);
 
-        await goalAlerts.PrepareAfterGoalChangeAsync(bag, previousTargetInCents, balanceInCents, clock.GetUtcNow().UtcDateTime);
+        await goalAlerts.PrepareAfterGoalChangeAsync(bag, previousTargetInCents, balanceInCents, clock.GetUtcNow().UtcDateTime, cancellationToken);
         bagRepository.PrepareUserCheck(user);
 
         return PreparedChanges<BagGoalResult>.SaveThenReturn(

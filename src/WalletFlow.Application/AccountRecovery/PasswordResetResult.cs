@@ -22,4 +22,9 @@ public abstract class PasswordResetResult
     public sealed class PasswordBreaksRules : PasswordResetResult
     {
     }
+
+    // Le nouveau mot de passe figure dans une fuite de données connue (SS §2) : le lien reste valable.
+    public sealed class PasswordBreached : PasswordResetResult
+    {
+    }
 }

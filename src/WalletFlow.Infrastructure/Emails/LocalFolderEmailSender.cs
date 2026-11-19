@@ -18,11 +18,11 @@ public class LocalFolderEmailSender : IEmailSender
     }
 
     // Écrit l'e-mail dans un nouveau fichier, dont le nom commence par sa date.
-    public async Task SendAsync(EmailMessage message)
+    public async Task SendAsync(EmailMessage message, CancellationToken cancellationToken = default)
     {
         try
         {
-            await WriteFileAsync(message);
+            await WriteFileAsync(message, cancellationToken);
         }
         catch (IOException exception)
         {
@@ -35,7 +35,7 @@ public class LocalFolderEmailSender : IEmailSender
     }
 
     // Crée le dossier s'il n'existe pas, puis y écrit l'e-mail.
-    private async Task WriteFileAsync(EmailMessage message)
+    private async Task WriteFileAsync(EmailMessage message, CancellationToken cancellationToken = default)
     {
         Directory.CreateDirectory(folderPath);
 
@@ -47,6 +47,6 @@ public class LocalFolderEmailSender : IEmailSender
             "Objet : " + message.Subject + "\n\n" +
             message.Body + "\n";
 
-        await File.WriteAllTextAsync(filePath, content);
+        await File.WriteAllTextAsync(filePath, content, cancellationToken);
     }
 }

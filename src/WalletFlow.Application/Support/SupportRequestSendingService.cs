@@ -23,7 +23,7 @@ public class SupportRequestSendingService
     }
 
     // Enregistre le message tapé, sous sa forme enregistrée, s'il respecte la règle du texte et la limite des demandes.
-    public async Task<SupportRequestSendingResult> SendAsync(Guid userId, string? typedMessage)
+    public async Task<SupportRequestSendingResult> SendAsync(Guid userId, string? typedMessage, CancellationToken cancellationToken = default)
     {
         var message = SupportRules.NormalizeText(typedMessage);
 
@@ -33,16 +33,17 @@ public class SupportRequestSendingService
         }
 
         return await savingService.SaveWithRetriesAsync(
-            () => PrepareRequestAsync(userId, message),
-            new SupportRequestSendingResult.NotSaved());
+            () => PrepareRequestAsync(userId, message, cancellationToken),
+            new SupportRequestSendingResult.NotSaved(),
+            cancellationToken);
     }
 
     // Un passage : lit d'abord la ligne de l'utilisateur, compte ses demandes des dernières 24 heures, puis prépare la nouvelle.
     // La ligne de l'utilisateur est réécrite en même temps : de deux demandes simultanées, la seconde échoue et recompte.
     // Deux demandes ne peuvent donc pas passer ensemble le contrôle du nombre maximum.
-    private async Task<PreparedChanges<SupportRequestSendingResult>> PrepareRequestAsync(Guid userId, string message)
+    private async Task<PreparedChanges<SupportRequestSendingResult>> PrepareRequestAsync(Guid userId, string message, CancellationToken cancellationToken = default)
     {
-        var user = await supportRepository.FindUserAsync(userId);
+        var user = await supportRepository.FindUserAsync(userId, cancellationToken);
 
         if (user == null)
         {
@@ -51,7 +52,7 @@ public class SupportRequestSendingService
 
         var now = clock.GetUtcNow().UtcDateTime;
 
-        if (await supportRepository.CountSentSinceAsync(userId, now - SupportRules.RequestDay) >= SupportRules.MaximumRequestsPerDay)
+        if (await supportRepository.CountSentSinceAsync(userId, now - SupportRules.RequestDay, cancellationToken) >= SupportRules.MaximumRequestsPerDay)
         {
             return PreparedChanges<SupportRequestSendingResult>.NothingToSave(new SupportRequestSendingResult.TooManyRequests());
         }

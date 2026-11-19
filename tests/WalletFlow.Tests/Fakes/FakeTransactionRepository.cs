@@ -41,7 +41,7 @@ public class FakeTransactionRepository : ITransactionRepository, ITransactionalF
     public CategorizationRule? RuleCreatedBeforeSave { get; set; } = null;
 
     // Donne la date de la dernière opération gardée pour ce compte.
-    public Task<DateOnly?> FindLatestDateAsync(Guid accountId)
+    public Task<DateOnly?> FindLatestDateAsync(Guid accountId, CancellationToken cancellationToken = default)
     {
         lock (pendingChangesLock)
         {
@@ -55,7 +55,7 @@ public class FakeTransactionRepository : ITransactionRepository, ITransactionalF
     }
 
     // Donne les identifiants des opérations du compte à partir de ce jour.
-    public Task<HashSet<string>> FindExternalIdsAsync(Guid accountId, DateOnly fromDate)
+    public Task<HashSet<string>> FindExternalIdsAsync(Guid accountId, DateOnly fromDate, CancellationToken cancellationToken = default)
     {
         lock (pendingChangesLock)
         {
@@ -68,7 +68,7 @@ public class FakeTransactionRepository : ITransactionRepository, ITransactionalF
     }
 
     // Donne les règles des catégories de l'utilisateur.
-    public Task<List<CategorizationRule>> FindRulesAsync(Guid userId)
+    public Task<List<CategorizationRule>> FindRulesAsync(Guid userId, CancellationToken cancellationToken = default)
     {
         lock (pendingChangesLock)
         {
@@ -80,7 +80,7 @@ public class FakeTransactionRepository : ITransactionRepository, ITransactionalF
     }
 
     // Cherche la règle de l'utilisateur pour ce libellé.
-    public Task<CategorizationRule?> FindRuleAsync(Guid userId, string ruleLabel)
+    public Task<CategorizationRule?> FindRuleAsync(Guid userId, string ruleLabel, CancellationToken cancellationToken = default)
     {
         lock (pendingChangesLock)
         {
@@ -96,7 +96,7 @@ public class FakeTransactionRepository : ITransactionRepository, ITransactionalF
     }
 
     // Cherche l'opération parmi celles des comptes de l'utilisateur.
-    public Task<BankTransaction?> FindAsync(Guid userId, Guid transactionId)
+    public Task<BankTransaction?> FindAsync(Guid userId, Guid transactionId, CancellationToken cancellationToken = default)
     {
         lock (pendingChangesLock)
         {
@@ -114,7 +114,7 @@ public class FakeTransactionRepository : ITransactionRepository, ITransactionalF
     }
 
     // Donne l'opération de l'utilisateur telle qu'il la voit.
-    public Task<TransactionView?> ReadViewAsync(Guid userId, Guid transactionId)
+    public Task<TransactionView?> ReadViewAsync(Guid userId, Guid transactionId, CancellationToken cancellationToken = default)
     {
         lock (pendingChangesLock)
         {
@@ -126,12 +126,12 @@ public class FakeTransactionRepository : ITransactionRepository, ITransactionalF
 
     // Cherche parmi les opérations de l'utilisateur, comme la vraie base : le texte sans les majuscules,
     // le montant sans son signe, les dates comprises, les plus récentes d'abord.
-    public Task<TransactionPage> SearchAsync(Guid userId, TransactionSearch search)
+    public Task<TransactionPage> SearchAsync(Guid userId, TransactionSearch search, CancellationToken cancellationToken = default)
     {
         lock (pendingChangesLock)
         {
             var views = ListViews(userId).Where(view =>
-                (search.Text == null || view.Label.ToLowerInvariant().Contains(search.Text.ToLowerInvariant()))
+                (search.Text == null || view.Label.Contains(search.Text, StringComparison.OrdinalIgnoreCase))
                 && (search.AmountInCents == null || Math.Abs(view.AmountInCents) == search.AmountInCents)
                 && (search.From == null || view.Date >= search.From)
                 && (search.To == null || view.Date <= search.To)
@@ -147,7 +147,7 @@ public class FakeTransactionRepository : ITransactionRepository, ITransactionalF
     }
 
     // Additionne les opérations de l'utilisateur par catégorie et par mois, sans les transferts, comme la vraie base.
-    public Task<List<CategoryMonthTotal>> SumByCategoryAndMonthAsync(Guid userId, DateOnly from, DateOnly to, Guid? accountId)
+    public Task<List<CategoryMonthTotal>> SumByCategoryAndMonthAsync(Guid userId, DateOnly firstDay, DateOnly lastDay, Guid? accountId, CancellationToken cancellationToken = default)
     {
         lock (pendingChangesLock)
         {
@@ -155,8 +155,8 @@ public class FakeTransactionRepository : ITransactionRepository, ITransactionalF
                 .Where(transaction =>
                     IsUserAccount(userId, transaction.BankAccountId)
                     && !transaction.IsInternalTransfer
-                    && transaction.TransactionDate >= from
-                    && transaction.TransactionDate <= to
+                    && transaction.TransactionDate >= firstDay
+                    && transaction.TransactionDate <= lastDay
                     && (accountId == null || transaction.BankAccountId == accountId))
                 .GroupBy(transaction => (transaction.CategoryId, transaction.TransactionDate.Year, transaction.TransactionDate.Month))
                 .Select(group => new CategoryMonthTotal(
@@ -171,7 +171,7 @@ public class FakeTransactionRepository : ITransactionRepository, ITransactionalF
     }
 
     // Donne la date de la plus ancienne opération de l'utilisateur, ou de ce compte seul.
-    public Task<DateOnly?> FindEarliestDateAsync(Guid userId, Guid? accountId)
+    public Task<DateOnly?> FindEarliestDateAsync(Guid userId, Guid? accountId, CancellationToken cancellationToken = default)
     {
         lock (pendingChangesLock)
         {

@@ -37,35 +37,35 @@ public class BankAuthorizationStartService
     }
 
     // Commence l'autorisation d'une nouvelle banque, choisie dans la liste du prestataire.
-    public async Task<BankAuthorizationStartResult> StartNewAsync(Guid userId, string? bankName)
+    public async Task<BankAuthorizationStartResult> StartNewAsync(Guid userId, string? bankName, CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(bankName))
         {
             return new BankAuthorizationStartResult.UnknownBank();
         }
 
-        return await StartAsync(userId, bankName, null);
+        return await StartAsync(userId, bankName, null, cancellationToken);
     }
 
     // Commence le renouvellement d'une connexion de l'utilisateur, auprès de la même banque (GR Comptes).
-    public async Task<BankAuthorizationStartResult> StartRenewalAsync(Guid userId, Guid connectionId)
+    public async Task<BankAuthorizationStartResult> StartRenewalAsync(Guid userId, Guid connectionId, CancellationToken cancellationToken = default)
     {
-        var connection = await connectionRepository.FindConnectionAsync(userId, connectionId);
+        var connection = await connectionRepository.FindConnectionAsync(userId, connectionId, cancellationToken);
 
         if (connection == null)
         {
             return new BankAuthorizationStartResult.NotFound();
         }
 
-        return await StartAsync(userId, connection.BankName, connection.Id);
+        return await StartAsync(userId, connection.BankName, connection.Id, cancellationToken);
     }
 
     // Demande l'autorisation la plus longue que la banque accepte, jusqu'à 180 jours, et garde le state 15 minutes.
-    private async Task<BankAuthorizationStartResult> StartAsync(Guid userId, string bankName, Guid? renewedConnectionId)
+    private async Task<BankAuthorizationStartResult> StartAsync(Guid userId, string bankName, Guid? renewedConnectionId, CancellationToken cancellationToken = default)
     {
         try
         {
-            var banks = await bankProvider.ListBanksAsync();
+            var banks = await bankProvider.ListBanksAsync(cancellationToken);
             var bank = banks.FirstOrDefault(provided => provided.Name == bankName);
 
             if (bank == null)
@@ -81,7 +81,8 @@ public class BankAuthorizationStartService
                 bank.Name,
                 BankConnectionRules.ChooseAuthorizationEnd(now, bank.MaximumAuthorization),
                 state.Token,
-                websiteSettings.BuildPageAddress(ReturnPagePath)));
+                websiteSettings.BuildPageAddress(ReturnPagePath)),
+                cancellationToken);
 
             return new BankAuthorizationStartResult.Started { BankAddress = bankAddress };
         }

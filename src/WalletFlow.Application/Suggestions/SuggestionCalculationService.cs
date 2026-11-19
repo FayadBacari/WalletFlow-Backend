@@ -55,26 +55,27 @@ public class SuggestionCalculationService
 
     // Donne, dans l'ordre de leur identifiant, au plus ce nombre d'utilisateurs après celui-ci dont ce mois attend
     // son calcul : la tâche de fond les parcourt ainsi tous, même si le calcul de l'un d'eux échoue.
-    public async Task<List<Guid>> FindUsersToCalculateAsync(DateOnly month, Guid? afterUserId, int count)
+    public async Task<List<Guid>> FindUsersToCalculateAsync(DateOnly month, Guid? afterUserId, int count, CancellationToken cancellationToken = default)
     {
-        return await suggestionRepository.FindUsersToCalculateAsync(month, afterUserId, count);
+        return await suggestionRepository.FindUsersToCalculateAsync(month, afterUserId, count, cancellationToken);
     }
 
     // Calcule les suggestions de ce mois, le mois évalué que l'appelant vient de lire, si ce n'est pas encore fait.
     // Renvoie vrai si le mois vient d'être calculé. Un calcul que d'autres requêtes empêchent à chaque essai sera refait plus tard.
-    public async Task<bool> CalculateAsync(Guid userId, DateOnly month)
+    public async Task<bool> CalculateAsync(Guid userId, DateOnly month, CancellationToken cancellationToken = default)
     {
         return await savingService.SaveWithRetriesAsync(
-            () => PrepareCalculationAsync(userId, month, clock.GetUtcNow().UtcDateTime),
-            false);
+            () => PrepareCalculationAsync(userId, month, clock.GetUtcNow().UtcDateTime, cancellationToken),
+            false,
+            cancellationToken);
     }
 
     // Un passage du calcul. La ligne de l'utilisateur est lue d'abord, puis réécrite avec le mois calculé, en vérifiant sa version :
     // si une autre lecture calcule le même mois au même instant, un seul des deux enregistrements passe, et l'autre trouve
     // le mois déjà noté. Un déplacement d'argent enregistré entre-temps fait aussi refaire le calcul, avec l'argent disponible à jour.
-    private async Task<PreparedChanges<bool>> PrepareCalculationAsync(Guid userId, DateOnly month, DateTime now)
+    private async Task<PreparedChanges<bool>> PrepareCalculationAsync(Guid userId, DateOnly month, DateTime now, CancellationToken cancellationToken = default)
     {
-        var user = await bagRepository.FindUserAsync(userId);
+        var user = await bagRepository.FindUserAsync(userId, cancellationToken);
 
         if (user == null || (user.LastSuggestionMonth is DateOnly notedMonth && notedMonth >= month))
         {
@@ -82,14 +83,14 @@ public class SuggestionCalculationService
         }
 
         // Sans aucune opération, rien ne peut être évalué : le mois sera calculé quand la banque aura donné ses opérations.
-        var earliestDate = await transactionRepository.FindEarliestDateAsync(userId, null);
+        var earliestDate = await transactionRepository.FindEarliestDateAsync(userId, null, cancellationToken);
 
         if (earliestDate is not DateOnly firstDate)
         {
             return PreparedChanges<bool>.NothingToSave(false);
         }
 
-        var suggestions = await suggestionRepository.FindAllAsync(userId);
+        var suggestions = await suggestionRepository.FindAllAsync(userId, cancellationToken);
         var pausedSuggestions = new List<SavingsSuggestion>();
 
         foreach (var suggestion in suggestions)
@@ -111,7 +112,7 @@ public class SuggestionCalculationService
             }
         }
 
-        var newSuggestions = await FindNewSuggestionsAsync(userId, month, firstDate);
+        var newSuggestions = await FindNewSuggestionsAsync(userId, month, firstDate, cancellationToken);
         var proposedCount = 0;
 
         foreach (var suggestion in newSuggestions)
@@ -133,7 +134,7 @@ public class SuggestionCalculationService
         // qu'une fois : de deux calculs simultanés, le second bute sur l'index unique de l'alerte, relit, et trouve le mois noté.
         if (proposedCount > 0)
         {
-            await alertPreparation.TryPrepareAsync(Alert.ForSuggestions(userId, month, now));
+            await alertPreparation.TryPrepareAsync(Alert.ForSuggestions(userId, month, now), cancellationToken);
         }
 
         user.NoteSuggestionMonth(month);
@@ -144,11 +145,11 @@ public class SuggestionCalculationService
     // Applique les trois règles au mois évalué (GR Sacs). Le dépassement d'une catégorie demande 3 mois complets d'historique
     // avant ce mois, et l'épargne du mois demande que tout le mois soit connu : la première opération date de son premier jour
     // ou d'avant. L'argent disponible est celui de ce moment.
-    private async Task<List<SavingsSuggestion>> FindNewSuggestionsAsync(Guid userId, DateOnly month, DateOnly firstDate)
+    private async Task<List<SavingsSuggestion>> FindNewSuggestionsAsync(Guid userId, DateOnly month, DateOnly firstDate, CancellationToken cancellationToken = default)
     {
         var averageStart = month.AddMonths(-ChartRules.AverageMonthCount);
         var monthEnd = month.AddMonths(1).AddDays(-1);
-        var totals = await transactionRepository.SumByCategoryAndMonthAsync(userId, averageStart, monthEnd, null);
+        var totals = await transactionRepository.SumByCategoryAndMonthAsync(userId, averageStart, monthEnd, null, cancellationToken);
         var suggestions = new List<SavingsSuggestion>();
 
         if (firstDate <= averageStart)
@@ -165,8 +166,8 @@ public class SuggestionCalculationService
             }
         }
 
-        var balances = await bagRepository.SumBalancesAsync(userId);
-        var bankTotal = await balanceTotalService.ReadAsync(userId);
+        var balances = await bagRepository.SumBalancesAsync(userId, cancellationToken);
+        var bankTotal = await balanceTotalService.ReadAsync(userId, cancellationToken);
 
         if (SuggestionRules.FindUnallocatedMoneySavings(bankTotal.TotalInCents - balances.Values.Sum()) is int unallocatedSavings)
         {

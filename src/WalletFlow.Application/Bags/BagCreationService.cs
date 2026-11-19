@@ -22,7 +22,7 @@ public class BagCreationService
 
     // Crée un sac vide avec le nom tapé et l'objectif donné, s'ils respectent les règles. Sans montant ni date, il n'a pas d'objectif.
     // Le jour de la saisie est celui de Paris, comme partout dans l'application (voir UsersCalendar).
-    public async Task<BagCreationResult> CreateAsync(Guid userId, string? typedName, int? targetAmountInCents, DateOnly? targetDate)
+    public async Task<BagCreationResult> CreateAsync(Guid userId, string? typedName, int? targetAmountInCents, DateOnly? targetDate, CancellationToken cancellationToken = default)
     {
         var name = BagRules.NormalizeName(typedName);
 
@@ -40,8 +40,9 @@ public class BagCreationService
         }
 
         return await savingService.SaveWithRetriesAsync(
-            () => PrepareNewBagAsync(userId, name, targetAmountInCents, targetDate, today),
-            new BagCreationResult.NotSaved());
+            () => PrepareNewBagAsync(userId, name, targetAmountInCents, targetDate, today, cancellationToken),
+            new BagCreationResult.NotSaved(),
+            cancellationToken);
     }
 
     // Un passage : lit d'abord la ligne de l'utilisateur, compte ses sacs, puis prépare le nouveau sac.
@@ -52,16 +53,17 @@ public class BagCreationService
         string name,
         int? targetAmountInCents,
         DateOnly? targetDate,
-        DateOnly today)
+        DateOnly today,
+        CancellationToken cancellationToken = default)
     {
-        var user = await bagRepository.FindUserAsync(userId);
+        var user = await bagRepository.FindUserAsync(userId, cancellationToken);
 
         if (user == null)
         {
             return PreparedChanges<BagCreationResult>.NothingToSave(new BagCreationResult.NotSaved());
         }
 
-        if (await bagRepository.CountAsync(userId) >= BagRules.MaximumCountPerUser)
+        if (await bagRepository.CountAsync(userId, cancellationToken) >= BagRules.MaximumCountPerUser)
         {
             return PreparedChanges<BagCreationResult>.NothingToSave(new BagCreationResult.TooManyBags());
         }

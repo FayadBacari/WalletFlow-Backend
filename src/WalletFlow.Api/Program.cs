@@ -1,5 +1,7 @@
 using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.HostFiltering;
+using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Authorization;
 using WalletFlow.Api.Authentication;
@@ -7,31 +9,24 @@ using WalletFlow.Api.BackgroundTasks;
 using WalletFlow.Api.Configuration;
 using WalletFlow.Api.Filters;
 using WalletFlow.Api.Middlewares;
-using WalletFlow.Application.AccountDeletion;
-using WalletFlow.Application.AccountRecovery;
-using WalletFlow.Application.AccountSettings;
-using WalletFlow.Application.Administration;
-using WalletFlow.Application.Bags;
-using WalletFlow.Application.BankConnections;
-using WalletFlow.Application.Categories;
-using WalletFlow.Application.Charts;
 using WalletFlow.Application.Configuration;
-using WalletFlow.Application.DataExport;
 using WalletFlow.Application.Emails;
-using WalletFlow.Application.Notifications;
-using WalletFlow.Application.Persistence;
-using WalletFlow.Application.Security;
-using WalletFlow.Application.Suggestions;
-using WalletFlow.Application.Support;
-using WalletFlow.Application.Transactions;
-using WalletFlow.Application.TwoFactorAuthentication;
-using WalletFlow.Application.UserAccounts;
-using WalletFlow.Application.UserSessions;
 using WalletFlow.Domain.AccountsAndCategories;
 using WalletFlow.Infrastructure;
+using WalletFlow.Infrastructure.Emails;
+using WalletFlow.Infrastructure.Persistence;
 
 // Prépare l'application web de l'API WalletFlow.
 var builder = WebApplication.CreateBuilder(args);
+
+// La durée de vie des services est vérifiée dès le démarrage, dans tous les environnements. Un service gardé pour toute l'API
+// qui recevrait un service d'une seule requête garderait l'accès à la base de la première requête, fermé juste après : l'API
+// refuse donc de démarrer. Hors du développement, ASP.NET Core ne fait pas cette vérification de lui-même.
+builder.Host.UseDefaultServiceProvider(options =>
+{
+    options.ValidateScopes = true;
+    options.ValidateOnBuild = true;
+});
 
 // La chaîne de connexion vient des secrets (user-secrets en développement, variables
 // d'environnement en production), jamais du code ni de Git (SS §7).
@@ -43,6 +38,11 @@ if (string.IsNullOrWhiteSpace(connectionString))
         "La chaîne de connexion « WalletFlowDatabase » est absente. En développement, ajoute-la avec dotnet user-secrets.");
 }
 builder.Services.AddWalletFlowDatabase(connectionString);
+
+// Une seule instance de l'API par base (voir SingleInstanceGuard) : la garde prend son verrou au démarrage, avant toutes les
+// tâches de fond et avant le serveur. Elle doit rester le premier service hébergé branché.
+builder.Services.AddSingleton(new SingleInstanceLock(connectionString, SingleInstanceLock.ApiInstanceKey));
+builder.Services.AddHostedService<SingleInstanceGuard>();
 
 // L'horloge de l'application : les tests peuvent la remplacer pour vérifier les durées sans attendre.
 builder.Services.AddSingleton(TimeProvider.System);
@@ -56,15 +56,11 @@ builder.Services.AddSingleton(serviceProvider =>
 // Hachage des mots de passe, création des jetons et limites par adresse e-mail (SS §2 et §6).
 builder.Services.AddWalletFlowSecurityTools();
 
-// La clé qui chiffre les secrets de double authentification vient des secrets, jamais du code ni de Git (SS §2 et §7).
-// Sans elle, aucun compte avec double authentification ne pourrait utiliser son application : l'API refuse donc de démarrer.
-var totpEncryptionKey = builder.Configuration["TwoFactorSecretEncryptionKey"];
-if (string.IsNullOrWhiteSpace(totpEncryptionKey))
-{
-    throw new InvalidOperationException(
-        "Le réglage « TwoFactorSecretEncryptionKey » est absent. En développement, ajoute-le avec dotnet user-secrets.");
-}
-builder.Services.AddTotpSecretEncryption(totpEncryptionKey);
+// Les clés qui chiffrent les secrets de double authentification viennent des secrets, jamais du code ni de Git (SS §2 et §7).
+// Sans clé actuelle, aucun compte avec double authentification ne pourrait utiliser son application : l'API refuse donc de
+// démarrer. Les anciennes clés ne servent plus qu'à déchiffrer, le temps que la tâche quotidienne rechiffre tout.
+var totpEncryption = TotpEncryptionSettings.Read(builder.Configuration);
+builder.Services.AddTotpSecretEncryption(totpEncryption.CurrentKeyId, totpEncryption.CurrentKey, totpEncryption.PreviousKeys);
 
 // File des e-mails préparés en arrière-plan : le temps de réponse des routes ne révèle aucun compte (SS §2).
 builder.Services.AddEmailQueue();
@@ -72,16 +68,31 @@ builder.Services.AddEmailQueue();
 // Texte des e-mails envoyés aux utilisateurs.
 builder.Services.AddEmailTexts();
 
-// En développement, les e-mails sont écrits dans un dossier local. L'envoi réel sera branché
-// avant la mise en production : d'ici là, l'API refuse de démarrer sans ce réglage.
-var emailsFolder = builder.Configuration["LocalEmailsFolder"];
-if (string.IsNullOrWhiteSpace(emailsFolder))
+// En développement seulement, les e-mails sont écrits dans un dossier local, ignoré par Git, au lieu de partir : même avec des
+// réglages SMTP, aucun vrai e-mail ne part d'un poste de développement. Ailleurs, ils partent par le serveur SMTP du prestataire,
+// et aucun n'est jamais écrit sur le disque : ses liens à usage unique ouvrent un compte (SS §9). Sans réglages SMTP, l'API refuse
+// donc de démarrer hors du développement (voir après la construction de l'application).
+var smtpServer = SmtpConfiguration.Read(builder.Configuration);
+if (builder.Environment.IsDevelopment())
 {
-    throw new InvalidOperationException(
-        "Le réglage « LocalEmailsFolder » est absent : aucun moyen d'envoyer les e-mails n'est configuré.");
+    var emailsFolder = builder.Configuration["LocalEmailsFolder"];
+    if (string.IsNullOrWhiteSpace(emailsFolder))
+    {
+        throw new InvalidOperationException(
+            "Le réglage « LocalEmailsFolder » est absent : aucun moyen d'envoyer les e-mails n'est configuré.");
+    }
+
+    builder.Services.AddLocalFolderEmails(
+        Path.GetFullPath(Path.Combine(builder.Environment.ContentRootPath, emailsFolder)));
 }
-builder.Services.AddLocalFolderEmails(
-    Path.GetFullPath(Path.Combine(builder.Environment.ContentRootPath, emailsFolder)));
+else if (smtpServer != null)
+{
+    builder.Services.AddSmtpEmails(smtpServer);
+}
+else
+{
+    builder.Services.AddEmailSenderNotConfigured();
+}
 
 // En dehors du développement, l'API ne répond qu'aux noms du site, lus dans l'en-tête Host : « * » répondrait à n'importe quel nom
 // qui pointe vers le serveur. Le réglage « AllowedHosts » donne ces noms, séparés par des points-virgules. Sans lui, l'API refuse
@@ -93,6 +104,10 @@ if (!builder.Environment.IsDevelopment()
     throw new InvalidOperationException(
         "Le réglage « AllowedHosts » doit donner les noms du site, séparés par des points-virgules, jamais « * ».");
 }
+
+// Une requête sous un autre nom reçoit un 400 vide. La page HTML qu'ASP.NET Core écrit par défaut serait la seule réponse de
+// l'API hors JSON, et partirait sans les en-têtes de sécurité : le filtre des noms passe avant eux.
+builder.Services.Configure<HostFilteringOptions>(options => options.IncludeFailureMessage = false);
 
 // Adresse publique du site, qui sert à construire les liens envoyés par e-mail (SS §9).
 builder.Services.AddSingleton(
@@ -124,113 +139,35 @@ else
 }
 builder.Services.AddBankConnectionTools();
 
-// Outils communs de la couche Application : enregistrement avec réessai, et journal de sécurité.
-builder.Services.AddScoped<DatabaseChangesSavingService>();
-builder.Services.AddScoped<SecurityJournalService>();
-builder.Services.AddScoped<ForeignAccessJournalService>();
-builder.Services.AddScoped<SecurityJournalCleanupService>();
+// Cas d'utilisation de la couche Application, avec leurs outils communs, rangés par domaine (voir ApplicationServicesRegistration).
+builder.Services.AddWalletFlowUseCases();
 
-// Cas d'utilisation de la couche Application.
-builder.Services.AddScoped<AccountRegistrationService>();
-builder.Services.AddScoped<AccountConfirmationService>();
-builder.Services.AddScoped<UnconfirmedAccountsCleanupService>();
-builder.Services.AddScoped<UserSessionOpeningService>();
-builder.Services.AddScoped<AccountLoginService>();
-builder.Services.AddScoped<UserSessionService>();
-builder.Services.AddScoped<ExpiredUserSessionsCleanupService>();
-builder.Services.AddScoped<PasswordRecoveryRequestService>();
-builder.Services.AddScoped<EmailRequestProcessingService>();
-builder.Services.AddScoped<PasswordResetService>();
-builder.Services.AddScoped<AccountUnlockService>();
-builder.Services.AddScoped<TwoFactorCodeCheckingService>();
-builder.Services.AddScoped<TwoFactorLoginService>();
-builder.Services.AddScoped<TwoFactorActivationService>();
-builder.Services.AddScoped<TwoFactorDeactivationService>();
-builder.Services.AddScoped<AccountIdentityCheckingService>();
-builder.Services.AddScoped<ProfileService>();
-builder.Services.AddScoped<PersonalNameChangeService>();
-builder.Services.AddScoped<PasswordChangeService>();
-builder.Services.AddScoped<EmailChangeRequestService>();
-builder.Services.AddScoped<DataExportService>();
-builder.Services.AddScoped<DeletedAccountBankRevocation>();
-builder.Services.AddScoped<AccountDeletionService>();
-builder.Services.AddScoped<AccountErasureService>();
-builder.Services.AddScoped<EmailChangeConfirmationService>();
-builder.Services.AddScoped<CategoryListService>();
-builder.Services.AddScoped<CategoryCreationService>();
-builder.Services.AddScoped<CategoryRenameService>();
-builder.Services.AddScoped<CategoryBudgetService>();
-builder.Services.AddScoped<CategoryDeletionService>();
-builder.Services.AddScoped<BankListService>();
-builder.Services.AddScoped<BankAuthorizationStartService>();
-builder.Services.AddScoped<BankFirstTransactionsReading>();
-builder.Services.AddScoped<BankConnectionFinishService>();
-builder.Services.AddScoped<BankConnectionListService>();
-builder.Services.AddScoped<BankBalanceUpdateService>();
-builder.Services.AddScoped<BankBackgroundUpdateService>();
-builder.Services.AddScoped<BankDisconnectionService>();
-builder.Services.AddScoped<BankBalanceTotalService>();
-builder.Services.AddScoped<BankTransactionArrival>();
-builder.Services.AddScoped<TransactionSearchService>();
-builder.Services.AddScoped<TransactionCategoryChangeService>();
-builder.Services.AddScoped<TransactionTransferService>();
-builder.Services.AddScoped<CategoryExpenseChartService>();
-builder.Services.AddScoped<MonthlyTotalsChartService>();
-builder.Services.AddScoped<MonthComparisonService>();
-builder.Services.AddScoped<BagListService>();
-builder.Services.AddScoped<BagCreationService>();
-builder.Services.AddScoped<BagRenameService>();
-builder.Services.AddScoped<BagGoalService>();
-builder.Services.AddScoped<BagDeletionService>();
-builder.Services.AddScoped<BagMovementChecks>();
-builder.Services.AddScoped<BagMovementService>();
-builder.Services.AddScoped<BagHistoryService>();
-builder.Services.AddScoped<SuggestionCalculationService>();
-builder.Services.AddScoped<SuggestionListService>();
-builder.Services.AddScoped<SuggestionAcceptanceService>();
-builder.Services.AddScoped<SuggestionDismissalService>();
-builder.Services.AddScoped<AlertPreparation>();
-builder.Services.AddScoped<BudgetAlertService>();
-builder.Services.AddScoped<BagGoalAlerts>();
-builder.Services.AddScoped<BankAuthorizationAlertService>();
-builder.Services.AddScoped<AlertCleanupService>();
-builder.Services.AddScoped<AlertSettingsService>();
-builder.Services.AddScoped<SupportRequestSendingService>();
-builder.Services.AddScoped<VisitorSupportRequestService>();
-builder.Services.AddScoped<SupportRequestReadingService>();
-builder.Services.AddScoped<SupportRequestCleanupService>();
-builder.Services.AddScoped<AdministratorAccessService>();
-builder.Services.AddScoped<AdministratorOnlyFilter>();
-builder.Services.AddScoped<AdminAccountSearchService>();
-builder.Services.AddScoped<AdminAccountUnlockService>();
-builder.Services.AddScoped<AdminTwoFactorLinkService>();
-builder.Services.AddScoped<AdminSupportService>();
-builder.Services.AddScoped<AdminStatisticsService>();
-builder.Services.AddScoped<TwoFactorSupportLinkService>();
-
-// Tâches de fond : effacent chaque jour les comptes non confirmés dont le lien a expiré (GR Auth), les sessions expirées,
-// les événements du journal de sécurité de plus d'un an (SS §11) et les demandes de support de plus d'un an (GR Admin),
-// envoient les e-mails de la file (SS §9), mettent à jour les soldes jusqu'à 4 fois par jour (GR Comptes),
-// et, toutes les heures, calculent les suggestions du mois (GR Sacs), préviennent 7 jours avant la fin d'une autorisation
-// bancaire (GR Comptes) et effacent les vieilles alertes (SS §7).
-builder.Services.AddHostedService<UnconfirmedAccountsCleanupBackgroundService>();
-builder.Services.AddHostedService<ExpiredUserSessionsCleanupBackgroundService>();
-builder.Services.AddHostedService<SecurityJournalCleanupBackgroundService>();
-builder.Services.AddHostedService<SupportRequestsCleanupBackgroundService>();
-builder.Services.AddHostedService<EmailRequestsBackgroundService>();
-builder.Services.AddHostedService<BankBalancesBackgroundService>();
-builder.Services.AddHostedService<SuggestionsBackgroundService>();
-builder.Services.AddHostedService<AlertsBackgroundService>();
-builder.Services.AddHostedService<AccountDeletionBackgroundService>();
+// Tâches de fond : nettoyages quotidiens, file d'e-mails, soldes, suggestions, alertes, suppression des comptes et rechiffrement
+// des secrets de double authentification (voir ApplicationServicesRegistration).
+builder.Services.AddWalletFlowBackgroundTasks();
 
 // Limites de débit des points d'entrée sensibles (SS §6).
 builder.Services.AddWalletFlowRateLimiting();
+
+// L'adresse du client derrière un proxy inverse : lue seulement depuis un proxy déclaré (SS §6).
+var reverseProxy = ReverseProxyConfiguration.Read(builder.Configuration);
+builder.Services.Configure<ForwardedHeadersOptions>(reverseProxy.Apply);
 
 // L'utilisateur est reconnu par son cookie de session, gardée côté serveur (SS §3).
 builder.Services
     .AddAuthentication(UserSessionAuthenticationHandler.SchemeName)
     .AddScheme<AuthenticationSchemeOptions, UserSessionAuthenticationHandler>(UserSessionAuthenticationHandler.SchemeName, null);
 builder.Services.AddAuthorization();
+
+// Les clés qui signent le jeton anti-CSRF survivent aux redéploiements : hors du développement, elles sont gardées dans le dossier
+// du réglage « DataProtection:KeysFolder », chiffrées avec le certificat de « DataProtection:CertificatePath » et sa clé privée.
+// Sans eux, l'API refuse de démarrer (SS §6 et §7).
+var keysFolder = DataProtectionConfiguration.ReadKeysFolder(builder.Configuration, builder.Environment.IsDevelopment());
+var keysCertificate = DataProtectionConfiguration.ReadCertificate(builder.Configuration, builder.Environment.IsDevelopment());
+builder.Services.AddWalletFlowDataProtection(keysFolder, keysCertificate);
+
+// Points de santé pour l'hébergeur : l'API tourne, et la base répond (SS §11).
+builder.Services.AddWalletFlowHealthChecks();
 
 // Jeton anti-CSRF fourni par ASP.NET Core (SS §6).
 builder.Services.AddAntiforgery(AntiforgeryConfiguration.ApplyOptions);
@@ -243,8 +180,16 @@ builder.Services
     {
         // Toute route demande une session et le jeton anti-CSRF, même si on oublie de le demander :
         // une route publique doit le dire avec [AllowAnonymous] et [IgnoreAntiforgeryToken] (SS §4 et §6).
+        // Chaque contrôleur le redit aussi, avec [Authorize] ou [AllowAnonymous] : CodeQL ne voit pas cette règle commune.
         options.Filters.Add(new AuthorizeFilter());
         options.Filters.Add(new AutoValidateAntiforgeryTokenAttribute());
+
+        // Le refus d'un jeton anti-CSRF absent ou faux dit au site d'en demander un nouveau. Le filtre est ajouté lui-même, et non
+        // par son type : ASP.NET Core ne lirait pas son rang, qui doit passer avant celui des erreurs sans raison.
+        options.Filters.Add(new CsrfRefusalFilter());
+
+        // Un calcul coûteux refusé parce que le serveur est saturé répond « serveur occupé » (503), dans tous les environnements.
+        options.Filters.Add<ServerBusyExceptionFilter>();
 
         // Une valeur illisible dans l'adresse, comme « amountInCents=abc », reçoit un message en français
         // qui ne recopie jamais ce que le visiteur a écrit (SS §10).
@@ -262,13 +207,17 @@ builder.Services
         options.JsonSerializerOptions.NumberHandling = JsonNumberHandling.Strict;
     });
 
-// Décrit l'API au format OpenAPI (publié seulement en développement).
-builder.Services.AddOpenApi();
+// Décrit l'API au format OpenAPI (publié seulement en développement) : chaque route, avec toutes ses réponses.
+// La description lit les réglages JSON généraux d'ASP.NET Core, et non ceux des contrôleurs : ils refusent aussi un nombre
+// écrit comme un texte, sinon elle annoncerait que « "3000" » est accepté.
+builder.Services.ConfigureHttpJsonOptions(options => options.SerializerOptions.NumberHandling = JsonNumberHandling.Strict);
+builder.Services.AddOpenApi(OpenApiConfiguration.ApplyOptions);
 
 // Les erreurs sont renvoyées au format « problem details », en français et sans détail technique (SS §10).
+// Les clés des champs refusés s'écrivent comme dans le JSON : « newEmail », et non « NewEmail ».
 builder.Services.AddProblemDetails(options =>
 {
-    options.CustomizeProblemDetails = ApiErrorConfiguration.TranslateTitle;
+    options.CustomizeProblemDetails = ApiErrorConfiguration.PrepareProblem;
 });
 
 // HSTS : le navigateur n'utilise plus que HTTPS pendant un an, sous-domaines compris (SS §6).
@@ -278,11 +227,26 @@ builder.Services.AddHsts(options =>
     options.IncludeSubDomains = true;
 });
 
+// Les réponses ne disent pas quel serveur web les envoie : l'en-tête « Server: Kestrel » n'aiderait qu'un attaquant (SS §6).
+builder.WebHost.ConfigureKestrel(options => options.AddServerHeader = false);
+
 var app = builder.Build();
+
+// En tout premier : chaque étape suivante, limites, journal et redirection HTTPS, voit l'adresse et le protocole du client.
+app.UseForwardedHeaders();
 
 // Les jours se comptent à l'heure de Paris (voir UsersCalendar) : sans ce fuseau sur la machine, par exemple dans une image
 // sans tzdata, l'API refuse de démarrer, au lieu de répondre 500 aux graphiques, aux sacs et aux lectures de la banque.
 TimeZoneInfo.FindSystemTimeZoneById(UsersCalendar.TimeZoneId);
+
+// Hors du développement, l'API ne démarre pas sans un vrai moyen d'envoyer les e-mails : personne ne pourrait confirmer son
+// adresse ni récupérer son compte. Le contrôle vient après la construction : un test peut ainsi fournir son propre envoi.
+if (app.Services.GetRequiredService<IEmailSender>() is EmailSenderNotConfigured)
+{
+    throw new InvalidOperationException(
+        "Aucun envoi réel des e-mails n'est branché : hors du développement, l'API refuse de démarrer sans les réglages « "
+        + SmtpConfiguration.SectionName + ":… » du serveur SMTP, au lieu d'écrire les e-mails sur le disque.");
+}
 
 // En développement, sans application Enable Banking configurée, le journal technique le dit dès le démarrage.
 if (bankProviderSettings == null)
@@ -326,5 +290,8 @@ app.UseAuthorization();
 
 // Relie chaque route à son contrôleur.
 app.MapControllers();
+
+// Relie les points de santé, ouverts sans session : /health/live et /health/ready.
+app.MapWalletFlowHealthChecks();
 
 app.Run();

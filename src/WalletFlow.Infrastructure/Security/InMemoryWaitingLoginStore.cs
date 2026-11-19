@@ -105,7 +105,7 @@ public class InMemoryWaitingLoginStore : IWaitingLoginStore
     }
 
     // Une connexion en attente, avec son nombre d'essais de code et la fin de son attente.
-    private class StoredLogin
+    private sealed class StoredLogin
     {
         public required Guid AccountId { get; init; }
         public required string PasswordHash { get; init; }

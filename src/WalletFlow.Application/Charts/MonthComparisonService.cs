@@ -23,16 +23,16 @@ public class MonthComparisonService
     }
 
     // Donne chaque catégorie de l'utilisateur, dans l'ordre de leur liste, avec son mois en cours et sa moyenne.
-    public async Task<MonthComparison> ReadAsync(Guid userId, Guid? accountId)
+    public async Task<MonthComparison> ReadAsync(Guid userId, Guid? accountId, CancellationToken cancellationToken = default)
     {
         var today = UsersCalendar.FindToday(clock.GetUtcNow());
         var monthStart = new DateOnly(today.Year, today.Month, 1);
         var monthEnd = monthStart.AddMonths(1).AddDays(-1);
         var averageStart = monthStart.AddMonths(-ChartRules.AverageMonthCount);
-        var totals = await transactionRepository.SumByCategoryAndMonthAsync(userId, averageStart, monthEnd, accountId);
-        var earliestDate = await transactionRepository.FindEarliestDateAsync(userId, accountId);
+        var totals = await transactionRepository.SumByCategoryAndMonthAsync(userId, averageStart, monthEnd, accountId, cancellationToken);
+        var earliestDate = await transactionRepository.FindEarliestDateAsync(userId, accountId, cancellationToken);
         var hasEnoughHistory = earliestDate != null && earliestDate <= averageStart;
-        var categories = await categoryRepository.FindAllAsync(userId);
+        var categories = await categoryRepository.FindAllAsync(userId, cancellationToken);
         categories.Sort(CategoryOrder.Compare);
         var comparisons = new List<CategoryComparison>();
 

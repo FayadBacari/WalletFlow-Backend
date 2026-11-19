@@ -33,16 +33,39 @@ public class ApiErrorConfigurationTests
         return Assert.IsType<ValidationProblemDetails>(response.Value);
     }
 
-    // Une erreur sur un champ garde sa clé stable et son message.
+    // Une erreur sur un champ garde son message, sous une clé écrite comme le champ dans le JSON.
     [Theory]
-    [InlineData("Email")]
-    [InlineData("Password")]
-    [InlineData("Token2")]
-    public void NameOfRequestFieldKeepsItsKeyAndItsMessage(string fieldName)
+    [InlineData("Email", "email")]
+    [InlineData("Password", "password")]
+    [InlineData("NewEmail", "newEmail")]
+    [InlineData("Token2", "token2")]
+    public void NameOfRequestFieldKeepsItsMessageUnderItsJsonKey(string fieldName, string jsonKey)
     {
         var problemDetails = CreateAnswerForErrorKeys(fieldName);
 
-        Assert.Equal(ValidationMessage, Assert.Single(problemDetails.Errors[fieldName]));
+        var onlyError = Assert.Single(problemDetails.Errors);
+        Assert.Equal(jsonKey, onlyError.Key);
+        Assert.Equal(ValidationMessage, Assert.Single(onlyError.Value));
+    }
+
+    // Deux clés qui s'écrivent de la même façon dans le JSON gardent tous leurs messages, sous une seule clé.
+    [Fact]
+    public void KeysThatBecomeTheSameKeepAllTheirMessages()
+    {
+        var problem = new HttpValidationProblemDetails(new Dictionary<string, string[]>
+        {
+            ["Email"] = ["premier message"],
+            ["email"] = ["second message"],
+        })
+        {
+            Status = StatusCodes.Status400BadRequest
+        };
+
+        ApiErrorConfiguration.PrepareProblem(new ProblemDetailsContext { HttpContext = new DefaultHttpContext(), ProblemDetails = problem });
+
+        var onlyError = Assert.Single(problem.Errors);
+        Assert.Equal("email", onlyError.Key);
+        Assert.Equal(["premier message", "second message"], onlyError.Value);
     }
 
     // Toute autre clé pourrait citer un nom interne du code ou recopier un texte du visiteur : ni elle ni son message ne sortent.

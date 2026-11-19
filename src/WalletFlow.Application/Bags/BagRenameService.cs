@@ -17,7 +17,7 @@ public class BagRenameService
     }
 
     // Donne le nom tapé au sac, s'il respecte les règles.
-    public async Task<BagRenameResult> RenameAsync(Guid userId, Guid bagId, string? typedName)
+    public async Task<BagRenameResult> RenameAsync(Guid userId, Guid bagId, string? typedName, CancellationToken cancellationToken = default)
     {
         var name = BagRules.NormalizeName(typedName);
 
@@ -27,21 +27,22 @@ public class BagRenameService
         }
 
         return await savingService.SaveWithRetriesAsync(
-            () => PrepareNewNameAsync(userId, bagId, name),
-            new BagRenameResult.NotSaved());
+            () => PrepareNewNameAsync(userId, bagId, name, cancellationToken),
+            new BagRenameResult.NotSaved(),
+            cancellationToken);
     }
 
     // Un passage : lit le sac parmi ceux de l'utilisateur, puis prépare le changement. Le solde sert seulement à la réponse.
-    private async Task<PreparedChanges<BagRenameResult>> PrepareNewNameAsync(Guid userId, Guid bagId, string name)
+    private async Task<PreparedChanges<BagRenameResult>> PrepareNewNameAsync(Guid userId, Guid bagId, string name, CancellationToken cancellationToken = default)
     {
-        var bag = await bagRepository.FindAsync(userId, bagId);
+        var bag = await bagRepository.FindAsync(userId, bagId, cancellationToken);
 
         if (bag == null)
         {
             return PreparedChanges<BagRenameResult>.NothingToSave(new BagRenameResult.NotFound());
         }
 
-        var balances = await bagRepository.SumBalancesAsync(userId);
+        var balances = await bagRepository.SumBalancesAsync(userId, cancellationToken);
         bag.Rename(name);
 
         return PreparedChanges<BagRenameResult>.SaveThenReturn(

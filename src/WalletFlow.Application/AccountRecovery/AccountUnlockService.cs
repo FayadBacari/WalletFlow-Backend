@@ -33,28 +33,29 @@ public class AccountUnlockService
 
     // Débloque le compte si le lien est encore valable. Si une autre requête a changé le compte ou le lien,
     // tout est relu : un lien déjà utilisé ou remplacé entre-temps est alors refusé.
-    public async Task<AccountUnlockResult> UnlockAsync(string linkToken, IPAddress? ipAddress)
+    public async Task<AccountUnlockResult> UnlockAsync(string linkToken, IPAddress? ipAddress, CancellationToken cancellationToken = default)
     {
         var tokenHash = tokenGenerator.HashToken(linkToken);
 
         return await savingService.SaveWithRetriesAsync(
-            () => PrepareUnlockAsync(tokenHash, ipAddress),
-            new AccountUnlockResult.LinkNoLongerValid());
+            () => PrepareUnlockAsync(tokenHash, ipAddress, cancellationToken),
+            new AccountUnlockResult.LinkNoLongerValid(),
+            cancellationToken);
     }
 
     // Un passage : lit le lien et son compte, vérifie le lien, puis prépare le déblocage, le lien utilisé et l'événement du journal.
     // Tout lien qui ne vaut plus reçoit le même refus, sans dire pourquoi.
-    private async Task<PreparedChanges<AccountUnlockResult>> PrepareUnlockAsync(string tokenHash, IPAddress? ipAddress)
+    private async Task<PreparedChanges<AccountUnlockResult>> PrepareUnlockAsync(string tokenHash, IPAddress? ipAddress, CancellationToken cancellationToken = default)
     {
         var now = clock.GetUtcNow().UtcDateTime;
-        var token = await accountRepository.FindTokenAsync(tokenHash, EmailTokenType.AccountUnlock);
+        var token = await accountRepository.FindTokenAsync(tokenHash, EmailTokenType.AccountUnlock, cancellationToken);
 
         if (token == null || !token.CanBeUsedAt(now))
         {
             return PreparedChanges<AccountUnlockResult>.NothingToSave(new AccountUnlockResult.LinkNoLongerValid());
         }
 
-        var account = await accountRepository.FindByIdAsync(token.UserId);
+        var account = await accountRepository.FindByIdAsync(token.UserId, cancellationToken);
         if (account == null)
         {
             return PreparedChanges<AccountUnlockResult>.NothingToSave(new AccountUnlockResult.LinkNoLongerValid());

@@ -75,7 +75,7 @@ public class AccountConfirmationEndpointTests
         var wrongPasswordResponse = await SendConfirmationRequestAsync(client, confirmationToken, OtherPassword);
 
         Assert.Equal(HttpStatusCode.BadRequest, wrongPasswordResponse.StatusCode);
-        Assert.Equal(ErrorMessages.WrongConfirmationPassword, await ReadFieldErrorAsync(wrongPasswordResponse, "Password"));
+        Assert.Equal(ErrorMessages.WrongConfirmationPassword, await ReadFieldErrorAsync(wrongPasswordResponse, "password"));
         Assert.False(api.AccountRepository.SavedUsers[0].IsEmailConfirmed);
         SecurityHeadersAssertions.AssertExactSecurityHeaders(wrongPasswordResponse);
 
@@ -93,7 +93,7 @@ public class AccountConfirmationEndpointTests
         var response = await SendConfirmationRequestAsync(client, "jeton-inconnu", ValidPassword);
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
-        Assert.Equal(ErrorMessages.ConfirmationLinkNoLongerValid, await ReadFieldErrorAsync(response, "Token"));
+        Assert.Equal(ErrorMessages.ConfirmationLinkNoLongerValid, await ReadFieldErrorAsync(response, "token"));
     }
 
     [Fact]
@@ -107,7 +107,7 @@ public class AccountConfirmationEndpointTests
         var response = await SendConfirmationRequestAsync(client, confirmationToken, ValidPassword);
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
-        Assert.Equal(ErrorMessages.ConfirmationLinkNoLongerValid, await ReadFieldErrorAsync(response, "Token"));
+        Assert.Equal(ErrorMessages.ConfirmationLinkNoLongerValid, await ReadFieldErrorAsync(response, "token"));
     }
 
     [Fact]
@@ -121,7 +121,7 @@ public class AccountConfirmationEndpointTests
         var response = await SendConfirmationRequestAsync(client, confirmationToken, ValidPassword);
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
-        Assert.Equal(ErrorMessages.ConfirmationLinkNoLongerValid, await ReadFieldErrorAsync(response, "Token"));
+        Assert.Equal(ErrorMessages.ConfirmationLinkNoLongerValid, await ReadFieldErrorAsync(response, "token"));
         Assert.False(api.AccountRepository.SavedUsers[0].IsEmailConfirmed);
     }
 
@@ -140,8 +140,8 @@ public class AccountConfirmationEndpointTests
             new StringContent(requestBody, Encoding.UTF8, "application/json"));
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
-        Assert.Equal("Le lien de confirmation est obligatoire.", await ReadFieldErrorAsync(response, "Token"));
-        Assert.Equal("Le mot de passe est obligatoire.", await ReadFieldErrorAsync(response, "Password"));
+        Assert.Equal("Le lien de confirmation est obligatoire.", await ReadFieldErrorAsync(response, "token"));
+        Assert.Equal("Le mot de passe est obligatoire.", await ReadFieldErrorAsync(response, "password"));
     }
 
     // SS §4 : seuls les champs prévus sont lus. Un champ ajouté ne confirme rien.

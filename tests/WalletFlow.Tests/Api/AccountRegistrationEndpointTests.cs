@@ -70,6 +70,7 @@ public class AccountRegistrationEndpointTests
         var fourthResponse = await fourthClient.PostAsJsonAsync(RegistrationEndpoint, request);
 
         Assert.Equal(HttpStatusCode.TooManyRequests, fourthResponse.StatusCode);
+        await TooManyRequestsAssertions.AssertTooManyRequestsAsync(fourthResponse, 3600);
         Assert.Equal(3, api.EmailSender.SentEmails.Count);
         SecurityHeadersAssertions.AssertExactSecurityHeaders(fourthResponse);
 
@@ -127,7 +128,7 @@ public class AccountRegistrationEndpointTests
         await client.PostAsJsonAsync(RegistrationEndpoint, request);
 
         var messages = api.LoggerProvider.Messages;
-        Assert.Contains(messages, message => message.StartsWith("Debug"));
+        Assert.Contains(messages, message => message.StartsWith("Debug", StringComparison.Ordinal));
 
         var logText = string.Join("\n", messages);
         Assert.DoesNotContain("visiteur-du-journal@exemple.test", logText);
@@ -149,7 +150,26 @@ public class AccountRegistrationEndpointTests
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
         var jsonDocument = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
         var errors = jsonDocument.RootElement.GetProperty("errors");
-        Assert.Equal(ErrorMessages.PasswordBreaksRules, errors.GetProperty("Password")[0].GetString());
+        Assert.Equal(ErrorMessages.PasswordBreaksRules, errors.GetProperty("password")[0].GetString());
+        Assert.Empty(api.AccountRepository.SavedUsers);
+        Assert.Empty(api.EmailSender.SentEmails);
+    }
+
+    // SS §2 : un mot de passe des fuites connues est refusé sur son champ, sans rien écrire ni envoyer.
+    [Fact]
+    public async Task BreachedPasswordIsRefusedOnItsField()
+    {
+        using var api = new ApiFactoryWithFakes();
+        api.BreachedPasswordChecker.AddBreachedPassword(ValidPassword);
+        var client = api.CreateClient();
+
+        var response = await client.PostAsJsonAsync(
+            RegistrationEndpoint,
+            new { email = "visiteur@exemple.test", password = ValidPassword });
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var errors = JsonDocument.Parse(await response.Content.ReadAsStringAsync()).RootElement.GetProperty("errors");
+        Assert.Equal(ErrorMessages.BreachedPassword, errors.GetProperty("password")[0].GetString());
         Assert.Empty(api.AccountRepository.SavedUsers);
         Assert.Empty(api.EmailSender.SentEmails);
     }
@@ -172,8 +192,8 @@ public class AccountRegistrationEndpointTests
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
         var jsonDocument = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
         var errors = jsonDocument.RootElement.GetProperty("errors");
-        Assert.Equal("L'adresse e-mail est obligatoire.", errors.GetProperty("Email")[0].GetString());
-        Assert.Equal("Le mot de passe est obligatoire.", errors.GetProperty("Password")[0].GetString());
+        Assert.Equal("L'adresse e-mail est obligatoire.", errors.GetProperty("email")[0].GetString());
+        Assert.Equal("Le mot de passe est obligatoire.", errors.GetProperty("password")[0].GetString());
     }
 
     // SS §4 : seuls les champs prévus sont lus. Ajouter un champ à la requête ne donne aucun droit.
@@ -315,7 +335,7 @@ public class AccountRegistrationEndpointTests
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
         var jsonDocument = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
         var errors = jsonDocument.RootElement.GetProperty("errors");
-        Assert.True(errors.TryGetProperty("Email", out _));
+        Assert.True(errors.TryGetProperty("email", out _));
         Assert.Empty(api.AccountRepository.SavedUsers);
         Assert.Empty(api.EmailSender.SentEmails);
     }

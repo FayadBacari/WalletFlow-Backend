@@ -177,7 +177,7 @@ public class DataExportServiceTests
     {
         var activatedAccount = tools.AddActivatedAccount();
         exportRepository.SaveDataFor(activatedAccount.UserAccount.Id, AccountEmail);
-        tools.PasswordHasher.OnPasswordVerified = () => activatedAccount.UserAccount.ActivateTwoFactor("autre-secret-chiffre");
+        tools.PasswordHasher.OnPasswordVerified = () => activatedAccount.UserAccount.ActivateTwoFactor("autre-secret-chiffre", TwoFactorTestTools.OldStep);
 
         var result = await ExportAsync(activatedAccount.UserAccount.Id, AccountPassword, activatedAccount.BackupCodes[0]);
 
@@ -219,5 +219,33 @@ public class DataExportServiceTests
         Assert.IsType<DataExportResult.AccountGone>(unknown);
         Assert.IsType<DataExportResult.AccountGone>(erasedBeforeTheRead);
         Assert.Equal(new List<Guid> { account.Id }, exportRepository.ReadUserIds);
+    }
+
+    // SS §2 : le code de l'application qui autorise le téléchargement est noté avec lui : il ne resservira plus.
+    [Fact]
+    public async Task AuthenticatorCodeIsNotedWithTheExport()
+    {
+        var activatedAccount = tools.AddActivatedAccount();
+        exportRepository.SaveDataFor(activatedAccount.UserAccount.Id, AccountEmail);
+
+        var result = await ExportAsync(activatedAccount.UserAccount.Id, AccountPassword, tools.CalculateCurrentCode(activatedAccount.Secret));
+
+        Assert.IsType<DataExportResult.Exported>(result);
+        Assert.Equal(tools.CurrentStep(), activatedAccount.UserAccount.LastAuthenticatorStep);
+    }
+
+    // Une autre requête se sert du même code juste avant l'enregistrement : rien n'est téléchargé (SS §2).
+    [Fact]
+    public async Task CodeUsedByAnotherRequestMeanwhileRefusesTheExport()
+    {
+        var activatedAccount = tools.AddActivatedAccount();
+        exportRepository.SaveDataFor(activatedAccount.UserAccount.Id, AccountEmail);
+        tools.AccountRepository.AuthenticatorStepUsedBeforeSave = tools.CurrentStep();
+
+        var result = await ExportAsync(activatedAccount.UserAccount.Id, AccountPassword, tools.CalculateCurrentCode(activatedAccount.Secret));
+
+        Assert.IsType<DataExportResult.WrongPasswordOrCode>(result);
+        Assert.Empty(exportRepository.ReadUserIds);
+        Assert.Null(tools.AccountRepository.AuthenticatorStepUsedBeforeSave);
     }
 }

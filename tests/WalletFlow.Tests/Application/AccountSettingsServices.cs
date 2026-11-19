@@ -31,6 +31,7 @@ public static class AccountSettingsServices
             tools.CreateSecurityJournal(),
             CreateIdentityChecking(tools),
             tools.PasswordHasher,
+            tools.BreachedPasswordChecker,
             tools.TokenGenerator,
             tools.Clock);
     }

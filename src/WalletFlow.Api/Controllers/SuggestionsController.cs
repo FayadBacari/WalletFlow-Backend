@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
 using WalletFlow.Api.Authentication;
@@ -9,10 +10,11 @@ using WalletFlow.Application.Suggestions;
 namespace WalletFlow.Api.Controllers;
 
 // Suggestions d'épargne de l'utilisateur connecté : la liste avec les économies réalisées, l'acceptation et l'ignorance (GR Sacs).
-// Ces routes n'ont aucun attribut de sécurité : toute route demande par défaut une session et le jeton anti-CSRF
+// Ces routes demandent une session, que [Authorize] redit, et le jeton anti-CSRF, comme toute route
 // (voir Program.cs). La suggestion d'un autre utilisateur répond 404, comme une adresse qui n'existe pas (SS §4).
 [ApiController]
 [Route("api/suggestions")]
+[Authorize]
 public class SuggestionsController : ControllerBase
 {
     private readonly SuggestionListService listService;
@@ -33,15 +35,15 @@ public class SuggestionsController : ControllerBase
         this.foreignAccessJournal = foreignAccessJournal;
     }
 
-    // GET api/suggestions : les suggestions du dernier mois complet et ce que l'utilisateur a économisé. La première lecture
-    // à partir du 5 calcule les suggestions du mois d'avant. Ce sont des données financières : aucun navigateur ni intermédiaire
-    // ne doit les garder.
+    // GET api/suggestions : les suggestions du dernier mois complet et ce que l'utilisateur a économisé. La tâche horaire les
+    // calcule à partir du 5 : la lecture ne change rien (SS §6). Ce sont des données financières : aucun navigateur ni
+    // intermédiaire ne doit les garder.
     [HttpGet]
     [EnableRateLimiting(RateLimitingConfiguration.CostlyReadPolicy)]
-    [ResponseCache(NoStore = true, Location = ResponseCacheLocation.None)]
-    public async Task<IActionResult> List()
+    [ProducesResponseType<SuggestionListResponse>(StatusCodes.Status200OK)]
+    public async Task<IActionResult> List(CancellationToken cancellationToken = default)
     {
-        var list = await listService.ListAsync(SessionClaims.ReadUserId(User));
+        var list = await listService.ListAsync(SessionClaims.ReadUserId(User), cancellationToken);
         var suggestions = list.Suggestions
             .Select(view => new SuggestionResponse(
                 view.Id,
@@ -58,13 +60,17 @@ public class SuggestionsController : ControllerBase
     // POST api/suggestions/{id}/accept : place le montant choisi dans le sac choisi, et accepte la suggestion.
     [HttpPost("{suggestionId:guid}/accept")]
     [RequestSizeLimit(RequestSizeConfiguration.MaximumSuggestionRequestBytes)]
-    public async Task<IActionResult> Accept(Guid suggestionId, SuggestionAcceptanceRequest request)
+    [ProducesResponseType<BagMovementResponse>(StatusCodes.Status201Created)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    public async Task<IActionResult> Accept(Guid suggestionId, SuggestionAcceptanceRequest request, CancellationToken cancellationToken = default)
     {
         var result = await acceptanceService.AcceptAsync(
             SessionClaims.ReadUserId(User),
             suggestionId,
             request.BagId,
-            request.AmountInCents);
+            request.AmountInCents,
+            cancellationToken);
 
         if (result is SuggestionAcceptanceResult.Accepted accepted)
         {
@@ -81,14 +87,14 @@ public class SuggestionsController : ControllerBase
 
         if (result is SuggestionAcceptanceResult.NotFound)
         {
-            await RecordForeignAccessAsync(OwnedResource.Suggestion, suggestionId);
+            await RecordForeignAccessAsync(OwnedResource.Suggestion, suggestionId, cancellationToken);
 
             return Problem(statusCode: StatusCodes.Status404NotFound);
         }
 
         if (result is SuggestionAcceptanceResult.BagNotFound)
         {
-            await RecordForeignAccessAsync(OwnedResource.Bag, request.BagId);
+            await RecordForeignAccessAsync(OwnedResource.Bag, request.BagId, cancellationToken);
 
             return Problem(statusCode: StatusCodes.Status404NotFound);
         }
@@ -110,7 +116,7 @@ public class SuggestionsController : ControllerBase
 
         if (result is SuggestionAcceptanceResult.TooManyMovements)
         {
-            return Problem(statusCode: StatusCodes.Status429TooManyRequests);
+            return this.AnswerTooManyRequests(RetryDelays.BagMovements);
         }
 
         return Problem(statusCode: StatusCodes.Status409Conflict, title: ErrorMessages.BagsChangedMeanwhile);
@@ -119,9 +125,12 @@ public class SuggestionsController : ControllerBase
     // POST api/suggestions/{id}/ignore : ignore la suggestion. Sa règle ne propose plus rien pendant 30 jours.
     [HttpPost("{suggestionId:guid}/ignore")]
     [RequestSizeLimit(RequestSizeConfiguration.MaximumSuggestionRequestBytes)]
-    public async Task<IActionResult> Ignore(Guid suggestionId)
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    public async Task<IActionResult> Ignore(Guid suggestionId, CancellationToken cancellationToken = default)
     {
-        var result = await dismissalService.DismissAsync(SessionClaims.ReadUserId(User), suggestionId);
+        var result = await dismissalService.DismissAsync(SessionClaims.ReadUserId(User), suggestionId, cancellationToken);
 
         if (result is SuggestionDismissalResult.Dismissed)
         {
@@ -130,7 +139,7 @@ public class SuggestionsController : ControllerBase
 
         if (result is SuggestionDismissalResult.NotFound)
         {
-            await RecordForeignAccessAsync(OwnedResource.Suggestion, suggestionId);
+            await RecordForeignAccessAsync(OwnedResource.Suggestion, suggestionId, cancellationToken);
 
             return Problem(statusCode: StatusCodes.Status404NotFound);
         }
@@ -144,13 +153,14 @@ public class SuggestionsController : ControllerBase
     }
 
     // Note au journal si la ressource visée est à un autre utilisateur (SS §11). La réponse reste la même dans tous les cas.
-    private async Task RecordForeignAccessAsync(OwnedResource resource, Guid resourceId)
+    private async Task RecordForeignAccessAsync(OwnedResource resource, Guid resourceId, CancellationToken cancellationToken = default)
     {
         await foreignAccessJournal.RecordIfForeignAsync(
             SessionClaims.ReadUserId(User),
             HttpContext.Connection.RemoteIpAddress,
             resource,
-            resourceId);
+            resourceId,
+            cancellationToken);
     }
 
     // Donne le message d'un champ refusé.

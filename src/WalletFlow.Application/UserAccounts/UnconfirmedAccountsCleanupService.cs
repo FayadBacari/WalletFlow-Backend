@@ -17,10 +17,10 @@ public class UnconfirmedAccountsCleanupService
     }
 
     // Efface les comptes concernés, et renvoie leur nombre.
-    public async Task<int> DeleteExpiredUnconfirmedAccountsAsync()
+    public async Task<int> DeleteExpiredUnconfirmedAccountsAsync(CancellationToken cancellationToken = default)
     {
         var now = clock.GetUtcNow().UtcDateTime;
 
-        return await accountRepository.DeleteExpiredUnconfirmedAccountsAsync(now);
+        return await accountRepository.DeleteExpiredUnconfirmedAccountsAsync(now, cancellationToken);
     }
 }

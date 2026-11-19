@@ -17,6 +17,7 @@ Le choix de PostgreSQL ne vient pas des règles de gestion : il a été fait au 
 | AN 45 (adresse IP)        | INET               | `adresse_ip_evenement`, `adresse_ip_demande`, format IPv4 ou IPv6 vérifié                     |
 | N (montant, 10 chiffres)  | INTEGER            | Montants en centimes                                                                          |
 | N 1, N 3                  | SMALLINT           | `nb_tentatives_echouees`, `nb_blocages`, `nb_essais_envoi`, `nb_essais_jeton`, `seuil_alerte` |
+| N 19 (pas de temps)       | BIGINT             | `dernier_pas_totp`, en pas de 30 secondes depuis 1970                                         |
 | D                         | DATE               | `date_transaction`, `date_objectif`                                                           |
 | DH                        | TIMESTAMPTZ        | Dates et heures, avec fuseau horaire                                                          |
 | B                         | BOOLEAN            | Booléens                                                                                      |
@@ -81,6 +82,7 @@ CREATE TABLE utilisateur (
     date_fin_blocage         TIMESTAMPTZ,
     date_demande_suppression TIMESTAMPTZ,
     dernier_mois_suggestions DATE,
+    dernier_pas_totp         BIGINT,
     CONSTRAINT ck_utilisateur_email CHECK (email_utilisateur = lower(email_utilisateur)),
     CONSTRAINT ck_utilisateur_nom CHECK (char_length(nom_utilisateur) >= 1),
     CONSTRAINT ck_utilisateur_prenom CHECK (char_length(prenom_utilisateur) >= 1),
@@ -90,7 +92,8 @@ CREATE TABLE utilisateur (
         canal_notification IN ('email', 'telephone', 'les_deux')),
     CONSTRAINT ck_utilisateur_mois_suggestions CHECK (EXTRACT(DAY FROM dernier_mois_suggestions) = 1),
     CONSTRAINT ck_utilisateur_tentatives CHECK (nb_tentatives_echouees BETWEEN 0 AND 5),
-    CONSTRAINT ck_utilisateur_blocages CHECK (nb_blocages BETWEEN 0 AND 8)
+    CONSTRAINT ck_utilisateur_blocages CHECK (nb_blocages BETWEEN 0 AND 8),
+    CONSTRAINT ck_utilisateur_pas_totp CHECK (dernier_pas_totp IS NULL OR (double_auth_activee AND dernier_pas_totp > 0))
 );
 
 CREATE TABLE code_secours (
@@ -121,19 +124,24 @@ CREATE TABLE jeton (
     CONSTRAINT ck_jeton_essais_type CHECK (nb_essais_jeton = 0 OR type_jeton = 'desactivation_double_auth')
 );
 
+-- Un appareil inutilisé depuis un an est oublié, sauf le plus récent du compte ; un compte en garde 20 au plus (SS §3).
 CREATE TABLE appareil (
-    id_appareil    UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
-    jeton_appareil CHAR(64)     NOT NULL UNIQUE,
-    jeton_push     VARCHAR(255),
-    id_utilisateur UUID         NOT NULL
-        REFERENCES utilisateur (id_utilisateur) ON DELETE CASCADE
+    id_appareil                      UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
+    jeton_appareil                   CHAR(64)     NOT NULL UNIQUE,
+    jeton_push                       VARCHAR(255),
+    id_utilisateur                   UUID         NOT NULL
+        REFERENCES utilisateur (id_utilisateur) ON DELETE CASCADE,
+    date_derniere_connexion_appareil TIMESTAMPTZ  NOT NULL DEFAULT now()
 );
 
+-- Une session expire après 30 minutes sans activité, et 12 heures après sa création ; un compte en garde 10 au plus (SS §3).
 CREATE TABLE session (
     id_session             CHAR(64)     PRIMARY KEY,
     date_derniere_activite TIMESTAMPTZ  NOT NULL DEFAULT now(),
     id_utilisateur         UUID         NOT NULL
-        REFERENCES utilisateur (id_utilisateur) ON DELETE CASCADE
+        REFERENCES utilisateur (id_utilisateur) ON DELETE CASCADE,
+    date_creation_session  TIMESTAMPTZ  NOT NULL DEFAULT now(),
+    CONSTRAINT ck_session_dates CHECK (date_creation_session <= date_derniere_activite)
 );
 
 CREATE TABLE evenement_securite (
@@ -468,16 +476,18 @@ CREATE TRIGGER tg_sac_avant_suppression
 -- Les mouvements de ses sacs sont supprimés avant les sacs eux-mêmes, et ses
 -- événements du journal perdent l'adresse IP (l'identifiant part avec ON DELETE SET NULL).
 -- SECURITY DEFINER : la fonction a les droits du propriétaire du script, car l'application
--- ne peut pas modifier le journal elle-même (section 8).
+-- ne peut pas modifier le journal elle-même (section 8). Elle cherche les tables temporaires
+-- en dernier, et nomme le schéma de chaque table : une table temporaire de l'application ne
+-- peut donc ni prendre la place d'une vraie table, ni faire exécuter son code avec ces droits.
 CREATE FUNCTION fn_utilisateur_avant_suppression() RETURNS trigger LANGUAGE plpgsql
-    SECURITY DEFINER SET search_path = public AS $$
+    SECURITY DEFINER SET search_path = public, pg_temp AS $$
 BEGIN
-    DELETE FROM mouvement_sac m
-    USING sac s
+    DELETE FROM public.mouvement_sac m
+    USING public.sac s
     WHERE s.id_utilisateur = OLD.id_utilisateur
       AND s.id_sac IN (m.id_sac_depart, m.id_sac_arrivee);
 
-    UPDATE evenement_securite
+    UPDATE public.evenement_securite
     SET adresse_ip_evenement = NULL
     WHERE id_utilisateur = OLD.id_utilisateur;
 
@@ -508,13 +518,14 @@ CREATE TRIGGER tg_parametrer_controle
 
 -- SS §11 : le journal de sécurité est conservé un an. L'application ne peut pas effacer le journal elle-même
 -- (section 8) : cette fonction, qu'elle appelle chaque jour, efface seulement les événements de plus d'un an,
--- et renvoie leur nombre. SECURITY DEFINER : la fonction a les droits du propriétaire du script.
+-- et renvoie leur nombre. SECURITY DEFINER : la fonction a les droits du propriétaire du script. Comme la fonction
+-- précédente, elle cherche les tables temporaires en dernier et nomme le schéma de sa table.
 CREATE FUNCTION fn_effacer_vieux_evenements() RETURNS integer LANGUAGE plpgsql
-    SECURITY DEFINER SET search_path = public AS $$
+    SECURITY DEFINER SET search_path = public, pg_temp AS $$
 DECLARE
     nb_effaces integer;
 BEGIN
-    DELETE FROM evenement_securite
+    DELETE FROM public.evenement_securite
     WHERE date_evenement < now() - interval '1 year';
 
     GET DIAGNOSTICS nb_effaces = ROW_COUNT;
@@ -560,8 +571,11 @@ $$;
 -- administrateur de PostgreSQL (SS §8 et §14). Il ne peut pas lancer cette fonction.
 -- Il ne peut qu'ajouter des événements au journal de sécurité, jamais les modifier
 -- ni les effacer (SS §11). Seule la fonction fn_effacer_vieux_evenements efface ceux de plus d'un an.
+-- Il ne crée aucun objet dans le schéma public : une table ou une fonction à lui pourrait y cacher du code. PostgreSQL 15
+-- retire déjà ce droit à tous les rôles ; la révocation ci-dessous le retire aussi avec PostgreSQL 13 et 14.
 
 CREATE ROLE walletflow_app LOGIN;
+REVOKE CREATE ON SCHEMA public FROM PUBLIC;
 GRANT USAGE ON SCHEMA public TO walletflow_app;
 GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO walletflow_app;
 REVOKE INSERT, UPDATE, DELETE ON type_alerte FROM walletflow_app;
@@ -576,7 +590,7 @@ GRANT UPDATE (
     email_utilisateur, mot_de_passe_hash, nom_utilisateur, prenom_utilisateur,
     email_confirme, double_auth_activee, secret_totp_chiffre, canal_notification,
     nb_tentatives_echouees, nb_blocages, date_fin_blocage, date_demande_suppression,
-    dernier_mois_suggestions)
+    dernier_mois_suggestions, dernier_pas_totp)
     ON utilisateur TO walletflow_app;
 REVOKE EXECUTE ON FUNCTION fn_effacer_vieux_evenements() FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION fn_effacer_vieux_evenements() TO walletflow_app;
@@ -591,6 +605,7 @@ COMMIT;
 **Vérifié par la base de données**
 - Les valeurs possibles, les longueurs minimales et les bornes des montants (contraintes `ck_`).
 - Le secret TOTP rempli seulement quand la double authentification est activée ; la nouvelle adresse seulement pour un jeton de changement d'e-mail ; des essais comptés, 5 au plus, seulement pour le lien qui désactive la double authentification.
+- Le pas du dernier code TOTP seulement quand la double authentification est activée, et positif (`ck_utilisateur_pas_totp`) ; une session jamais active avant son ouverture (`ck_session_dates`).
 - La date d'objectif seulement avec un montant ; un ou deux sacs, différents, pour chaque mouvement.
 - Une seule catégorie « Autres » par utilisateur (`ux_categorie_autres`).
 - Une seule suggestion par règle et par mois, et par catégorie pour le dépassement (`ux_suggestion_categorie_mois`, `ux_suggestion_regle_mois`).
@@ -600,6 +615,9 @@ COMMIT;
 - Chaque compte et chaque opération reçus de la banque, enregistrés une seule fois (`ux_compte_externe`, `ux_transaction_externe`).
 - Une alerte non désactivable toujours activée (`tg_parametrer_controle`).
 - La suppression d'un sac et l'effacement d'un compte utilisateur (`tg_sac_avant_suppression`, `tg_utilisateur_avant_suppression` et les règles ON DELETE).
+- Les deux fonctions SECURITY DEFINER, `fn_utilisateur_avant_suppression` et `fn_effacer_vieux_evenements`, cherchent les tables temporaires en dernier et nomment le schéma de leurs tables : une table temporaire de l'application ne peut ni prendre la place d'une vraie table, ni faire exécuter son code avec les droits du propriétaire du script.
+- Aucun objet créé par l'application dans le schéma `public` : ni table, ni fonction, ni type (section 8 du script, pour PostgreSQL 13 et 14 ; PostgreSQL 15 le fait déjà).
+- Le pas du dernier code TOTP et le mois des dernières suggestions, que l'application peut changer mais n'écrit jamais à l'inscription (droits de `walletflow_app`).
 - Le rôle d'un utilisateur, que l'application ne peut ni choisir ni changer, et le journal de sécurité, auquel elle ne peut qu'ajouter des événements (droits de `walletflow_app`, section 8 du script). Seule la fonction `fn_effacer_vieux_evenements` efface les événements de plus d'un an. Le rôle ne change que par la fonction `fn_changer_role`, lancée avec le compte administrateur de PostgreSQL : elle refuse un compte non confirmé ou qui a déjà ce rôle, et écrit le changement au journal (SS §8).
 
 **Vérifié par l'application**
@@ -608,8 +626,10 @@ COMMIT;
 - La borne qui dépend de la date du jour : une date d'objectif dans le futur. Une contrainte CHECK ne peut pas la vérifier de façon fiable.
 - La catégorie « Autres » ni renommée ni supprimée, et les transactions d'une catégorie déplacées dans « Autres » avant sa suppression (GR Dépenses).
 - La création des 8 catégories par défaut, dans la même transaction SQL que l'utilisateur (cardinalité 1,n de DISPOSER).
-- Le hachage des mots de passe et des codes de secours, et le chiffrement du secret TOTP, avant l'enregistrement (SS §2).
-- Les durées : expiration des jetons, fermeture des sessions après 30 minutes d'inactivité, mise à jour des comptes jusqu'à 4 fois par jour, rappel 7 jours avant la fin d'une autorisation bancaire, effacement des comptes 30 jours après la demande, effacement des comptes non confirmés une fois leur lien expiré, effacement des demandes de support un an après leur envoi, avec leurs réponses, conservation du journal un an (la tâche appelle `fn_effacer_vieux_evenements`). Ce sont des tâches planifiées.
+- Le hachage des mots de passe et des codes de secours, et le chiffrement du secret TOTP, avant l'enregistrement (SS §2). Le secret chiffré porte le numéro de sa clé, et une tâche quotidienne le rechiffre avec la clé actuelle (SS §7).
+- Un code TOTP qui ne sert qu'une fois : son pas est comparé à `dernier_pas_totp` et noté dans la transaction SQL de l'action qu'il autorise, qui réécrit la ligne de l'utilisateur en vérifiant sa version (`xmin`) : de deux requêtes avec le même code, la seconde échoue, relit le compte et refuse (SS §2).
+- Les plafonds : 10 sessions et 20 appareils par compte, la connexion de trop fermant la session la moins récemment active et le nouvel appareil de trop faisant oublier le moins récemment utilisé (SS §3).
+- Les durées : expiration des jetons, fermeture des sessions après 30 minutes d'inactivité ou 12 heures après leur ouverture, oubli des appareils inutilisés depuis un an sauf le plus récent de chaque compte, mise à jour des comptes jusqu'à 4 fois par jour, rappel 7 jours avant la fin d'une autorisation bancaire, effacement des comptes 30 jours après la demande, effacement des comptes non confirmés une fois leur lien expiré, effacement des demandes de support un an après leur envoi, avec leurs réponses, conservation du journal un an (la tâche appelle `fn_effacer_vieux_evenements`). Ce sont des tâches planifiées.
 - Le calcul des suggestions une fois par mois, la pause de 30 jours après une suggestion ignorée, et l'effacement des suggestions dépassées, au moment du calcul (GR Sacs).
 - Les alertes : la préférence de l'utilisateur, le passage des seuils de budget après chaque changement des dépenses du mois ou du budget, l'objectif d'un sac après chaque mouvement ou changement d'objectif, et l'effacement de l'alerte d'un sac quand le montant de son objectif change ou disparaît, ou d'une connexion quand son autorisation est renouvelée (GR Notif, GR Dépenses, GR Sacs, GR Comptes).
 - La file d'e-mails : les essais d'envoi, 5 au plus (1 min, 5 min, 30 min, puis 2 h d'attente), et l'effacement d'une demande une fois l'e-mail parti. L'effacement des alertes de budget et de suggestion deux mois après leur mois, et le calcul des suggestions de chaque utilisateur à partir du 5, avec son alerte, sont des tâches planifiées (SS §7, §9).

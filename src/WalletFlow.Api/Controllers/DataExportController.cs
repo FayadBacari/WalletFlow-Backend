@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authorization;
 using System.Globalization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Net.Http.Headers;
@@ -10,9 +11,10 @@ using WalletFlow.Domain.AccountsAndCategories;
 namespace WalletFlow.Api.Controllers;
 
 // Téléchargement de toutes ses données par l'utilisateur connecté (GR Compte, droit à la portabilité du RGPD ; SS §2 et §6).
-// Cette route n'a aucun attribut de sécurité : toute route demande par défaut une session et le jeton anti-CSRF (voir Program.cs).
+// Cette route demande une session, que [Authorize] redit, et le jeton anti-CSRF, comme toute route (voir Program.cs).
 [ApiController]
 [Route("api/account")]
+[Authorize]
 public class DataExportController : ControllerBase
 {
     public const string FileNamePrefix = "walletflow-donnees-";
@@ -31,8 +33,9 @@ public class DataExportController : ControllerBase
     // porte le mot de passe, et chaque téléchargement est noté au journal.
     [HttpPost("export")]
     [RequestSizeLimit(RequestSizeConfiguration.MaximumAccountRequestBytes)]
-    [ResponseCache(NoStore = true, Location = ResponseCacheLocation.None)]
-    public async Task<IActionResult> Export(DataExportRequest request)
+    [ProducesResponseType<DataExportFile>(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status503ServiceUnavailable, Description = OpenApiConfiguration.ServerBusyDescription)]
+    public async Task<IActionResult> Export(DataExportRequest request, CancellationToken cancellationToken = default)
     {
         var result = await exportService.ExportAsync(new DataExportAttempt
         {
@@ -40,7 +43,8 @@ public class DataExportController : ControllerBase
             Password = request.Password,
             Code = request.Code,
             IpAddress = HttpContext.Connection.RemoteIpAddress
-        });
+        },
+        cancellationToken);
 
         if (result is DataExportResult.Exported exported)
         {
@@ -55,7 +59,7 @@ public class DataExportController : ControllerBase
 
         if (result is DataExportResult.TooManyExports)
         {
-            return Problem(statusCode: StatusCodes.Status429TooManyRequests);
+            return this.AnswerTooManyRequests(RetryDelays.DataExport);
         }
 
         if (result is DataExportResult.AccountGone)

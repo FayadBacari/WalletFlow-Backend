@@ -23,6 +23,7 @@ public class PasswordResetServiceTests
     private readonly FakeSecurityEventRepository securityEventRepository = new FakeSecurityEventRepository();
     private readonly FakeEmailRequestRepository emailRequests = new FakeEmailRequestRepository();
     private readonly FakePasswordHasher passwordHasher = new FakePasswordHasher();
+    private readonly FakeBreachedPasswordChecker breachedPasswordChecker = new FakeBreachedPasswordChecker();
     private readonly FakeTimeProvider clock = new FakeTimeProvider();
 
     // Crée le service à tester, avec ses faux outils.
@@ -35,6 +36,7 @@ public class PasswordResetServiceTests
             new DatabaseChangesSavingService(new FakeDatabaseUnitOfWork(accountRepository, sessionRepository, securityEventRepository, emailRequests)),
             new SecurityJournalService(securityEventRepository, clock),
             passwordHasher,
+            breachedPasswordChecker,
             new FakeSecureTokenGenerator(),
             clock);
     }
@@ -73,6 +75,7 @@ public class PasswordResetServiceTests
     {
         sessionRepository.SavedSessions.Add(new UserSession
         {
+            CreatedAt = clock.GetUtcNow().UtcDateTime,
             Id = Guid.NewGuid().ToString(),
             LastActivityAt = clock.GetUtcNow().UtcDateTime,
             UserId = accountId
@@ -418,5 +421,20 @@ public class PasswordResetServiceTests
 
         Assert.Equal(OldHash, account.PasswordHash);
         Assert.Empty(emailRequests.SavedRequests);
+    }
+
+    // SS §2 : un mot de passe des fuites connues est refusé, et le lien reste valable pour en choisir un autre.
+    [Fact]
+    public async Task BreachedPasswordIsRefusedAndTheLinkStaysUsable()
+    {
+        var account = AddAccountWithRecoveryLink();
+        breachedPasswordChecker.AddBreachedPassword(NewPassword);
+
+        var refused = await ResetPasswordAsync();
+        var accepted = await ResetPasswordAsync("Autre-Mot-De-Passe-3");
+
+        Assert.IsType<PasswordResetResult.PasswordBreached>(refused);
+        Assert.IsType<PasswordResetResult.PasswordChanged>(accepted);
+        Assert.Equal(FakePasswordHasher.HashPrefix + "Autre-Mot-De-Passe-3", account.PasswordHash);
     }
 }

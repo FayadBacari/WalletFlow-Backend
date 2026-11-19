@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using WalletFlow.Api.Authentication;
 using WalletFlow.Api.Configuration;
@@ -9,10 +10,11 @@ using WalletFlow.Domain.AccountsAndCategories;
 namespace WalletFlow.Api.Controllers;
 
 // Catégories de l'utilisateur connecté : la liste, la création, le nom, le budget et la suppression (GR Dépenses).
-// Ces routes n'ont aucun attribut de sécurité : toute route demande par défaut une session et le jeton anti-CSRF (voir Program.cs).
+// Ces routes demandent une session, que [Authorize] redit, et le jeton anti-CSRF, comme toute route (voir Program.cs).
 // La catégorie d'un autre utilisateur répond 404, comme une adresse qui n'existe pas : rien ne dit qu'elle existe (SS §4).
 [ApiController]
 [Route("api/categories")]
+[Authorize]
 public class CategoriesController : ControllerBase
 {
     public const string CategoryDeletedMessage = "La catégorie est supprimée. Ses transactions sont maintenant dans « Autres ».";
@@ -44,10 +46,10 @@ public class CategoriesController : ControllerBase
     // GET api/categories : les catégories de l'utilisateur avec leur budget, dans l'ordre alphabétique, « Autres » à la fin.
     // Ce sont des données financières : aucun navigateur ni intermédiaire ne doit les garder.
     [HttpGet]
-    [ResponseCache(NoStore = true, Location = ResponseCacheLocation.None)]
-    public async Task<IActionResult> List()
+    [ProducesResponseType<List<CategoryResponse>>(StatusCodes.Status200OK)]
+    public async Task<IActionResult> List(CancellationToken cancellationToken = default)
     {
-        var categories = await listService.ListAsync(SessionClaims.ReadUserId(User));
+        var categories = await listService.ListAsync(SessionClaims.ReadUserId(User), cancellationToken);
         var responses = new List<CategoryResponse>();
 
         foreach (var category in categories)
@@ -61,9 +63,11 @@ public class CategoriesController : ControllerBase
     // POST api/categories : crée une catégorie avec ce nom, sans budget.
     [HttpPost]
     [RequestSizeLimit(RequestSizeConfiguration.MaximumCategoryRequestBytes)]
-    public async Task<IActionResult> Create(CategoryNameRequest request)
+    [ProducesResponseType<CategoryResponse>(StatusCodes.Status201Created)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    public async Task<IActionResult> Create(CategoryNameRequest request, CancellationToken cancellationToken = default)
     {
-        var result = await creationService.CreateAsync(SessionClaims.ReadUserId(User), request.Name);
+        var result = await creationService.CreateAsync(SessionClaims.ReadUserId(User), request.Name, cancellationToken);
 
         if (result is CategoryCreationResult.Created created)
         {
@@ -91,9 +95,12 @@ public class CategoriesController : ControllerBase
     // PUT api/categories/{id}/name : donne un nouveau nom à la catégorie. « Autres » ne se renomme pas.
     [HttpPut("{categoryId:guid}/name")]
     [RequestSizeLimit(RequestSizeConfiguration.MaximumCategoryRequestBytes)]
-    public async Task<IActionResult> Rename(Guid categoryId, CategoryNameRequest request)
+    [ProducesResponseType<CategoryResponse>(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    public async Task<IActionResult> Rename(Guid categoryId, CategoryNameRequest request, CancellationToken cancellationToken = default)
     {
-        var result = await renameService.RenameAsync(SessionClaims.ReadUserId(User), categoryId, request.Name);
+        var result = await renameService.RenameAsync(SessionClaims.ReadUserId(User), categoryId, request.Name, cancellationToken);
 
         if (result is CategoryRenameResult.Renamed renamed)
         {
@@ -102,7 +109,7 @@ public class CategoriesController : ControllerBase
 
         if (result is CategoryRenameResult.NotFound)
         {
-            await RecordForeignAccessAsync(OwnedResource.Category, categoryId);
+            await RecordForeignAccessAsync(OwnedResource.Category, categoryId, cancellationToken);
             return Problem(statusCode: StatusCodes.Status404NotFound);
         }
 
@@ -127,9 +134,12 @@ public class CategoriesController : ControllerBase
     // PUT api/categories/{id}/budget : fixe le budget mensuel en centimes, ou l'enlève avec null.
     [HttpPut("{categoryId:guid}/budget")]
     [RequestSizeLimit(RequestSizeConfiguration.MaximumCategoryRequestBytes)]
-    public async Task<IActionResult> ReplaceBudget(Guid categoryId, CategoryBudgetRequest request)
+    [ProducesResponseType<CategoryResponse>(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    public async Task<IActionResult> ReplaceBudget(Guid categoryId, CategoryBudgetRequest request, CancellationToken cancellationToken = default)
     {
-        var result = await budgetService.ReplaceAsync(SessionClaims.ReadUserId(User), categoryId, request.MonthlyBudgetInCents);
+        var result = await budgetService.ReplaceAsync(SessionClaims.ReadUserId(User), categoryId, request.MonthlyBudgetInCents, cancellationToken);
 
         if (result is CategoryBudgetResult.Changed changed)
         {
@@ -138,7 +148,7 @@ public class CategoriesController : ControllerBase
 
         if (result is CategoryBudgetResult.NotFound)
         {
-            await RecordForeignAccessAsync(OwnedResource.Category, categoryId);
+            await RecordForeignAccessAsync(OwnedResource.Category, categoryId, cancellationToken);
             return Problem(statusCode: StatusCodes.Status404NotFound);
         }
 
@@ -155,9 +165,12 @@ public class CategoriesController : ControllerBase
     // Cette route ne lit aucun corps : la limite empêche seulement qu'on lui en envoie un énorme.
     [HttpDelete("{categoryId:guid}")]
     [RequestSizeLimit(RequestSizeConfiguration.MaximumCategoryRequestBytes)]
-    public async Task<IActionResult> Delete(Guid categoryId)
+    [ProducesResponseType<MessageResponse>(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    public async Task<IActionResult> Delete(Guid categoryId, CancellationToken cancellationToken = default)
     {
-        var result = await deletionService.DeleteAsync(SessionClaims.ReadUserId(User), categoryId);
+        var result = await deletionService.DeleteAsync(SessionClaims.ReadUserId(User), categoryId, cancellationToken);
 
         if (result is CategoryDeletionResult.Deleted)
         {
@@ -166,7 +179,7 @@ public class CategoriesController : ControllerBase
 
         if (result is CategoryDeletionResult.NotFound)
         {
-            await RecordForeignAccessAsync(OwnedResource.Category, categoryId);
+            await RecordForeignAccessAsync(OwnedResource.Category, categoryId, cancellationToken);
             return Problem(statusCode: StatusCodes.Status404NotFound);
         }
 
@@ -179,13 +192,14 @@ public class CategoriesController : ControllerBase
     }
 
     // Note au journal si la ressource visée est à un autre utilisateur (SS §11). La réponse reste la même dans tous les cas.
-    private async Task RecordForeignAccessAsync(OwnedResource resource, Guid? resourceId)
+    private async Task RecordForeignAccessAsync(OwnedResource resource, Guid? resourceId, CancellationToken cancellationToken = default)
     {
         await foreignAccessJournal.RecordIfForeignAsync(
             SessionClaims.ReadUserId(User),
             HttpContext.Connection.RemoteIpAddress,
             resource,
-            resourceId);
+            resourceId,
+            cancellationToken);
     }
 
     // Donne le message d'un nom refusé, sur le champ Name.

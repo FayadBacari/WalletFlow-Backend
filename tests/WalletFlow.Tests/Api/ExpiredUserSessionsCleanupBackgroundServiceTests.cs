@@ -7,7 +7,7 @@ using WalletFlow.Tests.Fakes;
 
 namespace WalletFlow.Tests.Api;
 
-// Vérifie la tâche quotidienne qui efface les sessions expirées (MPD §3).
+// Vérifie la tâche quotidienne qui efface les sessions expirées et les appareils oubliés (MPD §3, SS §3).
 public class ExpiredUserSessionsCleanupBackgroundServiceTests
 {
     // Crée la tâche à tester, branchée sur ce faux accès à la base.
@@ -25,18 +25,20 @@ public class ExpiredUserSessionsCleanupBackgroundServiceTests
         return new ExpiredUserSessionsCleanupBackgroundService(
             serviceProvider.GetRequiredService<IServiceScopeFactory>(),
             clock,
+            new BackgroundTaskHealth(),
             logger ?? NullLogger<ExpiredUserSessionsCleanupBackgroundService>.Instance);
     }
 
     [Fact]
-    public async Task OneCleanupAsksTheDatabaseToDeleteTheExpiredSessions()
+    public async Task OneCleanupAsksTheDatabaseToDeleteTheExpiredSessionsAndTheForgottenDevices()
     {
         var sessionRepository = new FakeUserSessionRepository();
         var cleanupTask = CreateCleanupTask(sessionRepository);
 
-        await cleanupTask.RunCleanupAsync();
+        await cleanupTask.RunPassAsync();
 
         Assert.Single(sessionRepository.CleanupDates);
+        Assert.Single(sessionRepository.DeviceCleanupDates);
     }
 
     // La panne est notée dans le journal technique : sans cela, personne ne saurait que l'effacement échoue.
@@ -50,15 +52,30 @@ public class ExpiredUserSessionsCleanupBackgroundServiceTests
             sessionRepository,
             new Logger<ExpiredUserSessionsCleanupBackgroundService>(loggerFactory));
 
-        await cleanupTask.RunCleanupAsync();
+        await cleanupTask.RunPassAsync();
 
         Assert.Contains(loggerProvider.Messages, message =>
-            message.StartsWith("Error") && message.Contains("a échoué"));
+            message.StartsWith("Error", StringComparison.Ordinal) && message.Contains("a échoué"));
 
         sessionRepository.FailsDuringCleanup = false;
-        await cleanupTask.RunCleanupAsync();
+        await cleanupTask.RunPassAsync();
 
         Assert.Single(sessionRepository.CleanupDates);
+    }
+
+    // L'arrêt de l'API pendant l'effacement n'est pas une panne : rien n'est noté comme une erreur.
+    [Fact]
+    public async Task ShutdownDuringTheCleanupIsNotWrittenAsAFailure()
+    {
+        var loggerProvider = new MemoryLoggerProvider();
+        using var loggerFactory = new LoggerFactory(new ILoggerProvider[] { loggerProvider });
+        var cleanupTask = CreateCleanupTask(
+            new FakeUserSessionRepository(),
+            new Logger<ExpiredUserSessionsCleanupBackgroundService>(loggerFactory));
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => cleanupTask.RunPassAsync(new CancellationToken(true)));
+
+        Assert.DoesNotContain(loggerProvider.Messages, message => message.StartsWith("Error", StringComparison.Ordinal));
     }
 
     // La tâche tourne une fois par jour : le test ne peut pas attendre un jour pour le vérifier.

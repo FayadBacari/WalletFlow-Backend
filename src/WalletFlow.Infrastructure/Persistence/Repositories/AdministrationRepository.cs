@@ -22,7 +22,7 @@ public class AdministrationRepository : IAdministrationRepository
 
     // Lit les demandes dans cet état, la plus ancienne d'abord. Deux demandes du même instant gardent toujours le même ordre.
     // L'adresse où répondre est celle du compte, lue maintenant, ou celle du visiteur.
-    public async Task<List<AdminSupportRequestItem>> FindRequestsAsync(SupportRequestStatus status)
+    public async Task<List<AdminSupportRequestItem>> FindRequestsAsync(SupportRequestStatus status, CancellationToken cancellationToken = default)
     {
         return await (
                 from request in databaseContext.SupportRequests.AsNoTracking()
@@ -37,11 +37,11 @@ public class AdministrationRepository : IAdministrationRepository
                     account != null ? account.Email : request.ContactEmail!,
                     request.UserId,
                     databaseContext.SupportResponses.Count(response => response.SupportRequestId == request.Id)))
-            .ToListAsync();
+            .ToListAsync(cancellationToken);
     }
 
     // Lit la demande, l'adresse où répondre, puis ses réponses de la plus ancienne à la plus récente.
-    public async Task<AdminSupportRequestDetails?> FindRequestDetailsAsync(Guid requestId)
+    public async Task<AdminSupportRequestDetails?> FindRequestDetailsAsync(Guid requestId, CancellationToken cancellationToken = default)
     {
         var found = await (
                 from request in databaseContext.SupportRequests.AsNoTracking()
@@ -49,7 +49,7 @@ public class AdministrationRepository : IAdministrationRepository
                 from account in accounts.DefaultIfEmpty()
                 where request.Id == requestId
                 select new { Request = request, ReplyAddress = account != null ? account.Email : request.ContactEmail! })
-            .SingleOrDefaultAsync();
+            .SingleOrDefaultAsync(cancellationToken);
 
         if (found == null)
         {
@@ -61,7 +61,7 @@ public class AdministrationRepository : IAdministrationRepository
             .OrderBy(response => response.SentAt)
             .ThenBy(response => response.Id)
             .Select(response => new SupportResponseView(response.Content, response.SentAt))
-            .ToListAsync();
+            .ToListAsync(cancellationToken);
 
         return new AdminSupportRequestDetails(
             found.Request.Id,
@@ -74,9 +74,9 @@ public class AdministrationRepository : IAdministrationRepository
     }
 
     // Lit la demande pour la changer : elle est suivie, et sa version est contrôlée à l'enregistrement.
-    public async Task<SupportRequest?> FindRequestAsync(Guid requestId)
+    public async Task<SupportRequest?> FindRequestAsync(Guid requestId, CancellationToken cancellationToken = default)
     {
-        return await databaseContext.SupportRequests.SingleOrDefaultAsync(request => request.Id == requestId);
+        return await databaseContext.SupportRequests.SingleOrDefaultAsync(request => request.Id == requestId, cancellationToken);
     }
 
     // La ligne de la demande sera écrite même si son état n'a pas changé : cette écriture contrôle en base sa version,
@@ -95,7 +95,7 @@ public class AdministrationRepository : IAdministrationRepository
     // Compte les comptes dans le même ordre que l'état d'un compte (voir AccountStateRules) : une demande de suppression passe
     // avant tout, puis l'adresse non confirmée, puis le blocage en cours. Les quatre nombres viennent d'une seule requête, donc
     // du même instant de la base : un compte qui change d'état pendant la lecture est compté une fois, dans un seul état.
-    public async Task<AdministrationStatistics> CountStatisticsAsync(DateTime now)
+    public async Task<AdministrationStatistics> CountStatisticsAsync(DateTime now, CancellationToken cancellationToken = default)
     {
         var accounts = await databaseContext.Users.AsNoTracking()
             .GroupBy(user => 1)
@@ -108,13 +108,13 @@ public class AdministrationRepository : IAdministrationRepository
                 Active = all.Count(user =>
                     user.DeletionRequestedAt == null && user.IsEmailConfirmed && (user.LockoutEndsAt == null || user.LockoutEndsAt <= now))
             })
-            .SingleOrDefaultAsync();
+            .SingleOrDefaultAsync(cancellationToken);
         var activeConnections = await databaseContext.BankConnections.AsNoTracking()
-            .CountAsync(connection => connection.Status == BankConnectionStatus.Active);
+            .CountAsync(connection => connection.Status == BankConnectionStatus.Active, cancellationToken);
         var requestsByStatus = await databaseContext.SupportRequests.AsNoTracking()
             .GroupBy(request => request.Status)
             .Select(group => new { Status = group.Key, Count = group.Count() })
-            .ToListAsync();
+            .ToListAsync(cancellationToken);
 
         int CountRequests(SupportRequestStatus status)
         {

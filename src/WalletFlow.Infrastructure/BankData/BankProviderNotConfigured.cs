@@ -14,43 +14,43 @@ public class BankProviderNotConfigured : IBankDataProvider
     }
 
     // Échoue : aucun prestataire n'est configuré.
-    public Task<List<ProvidedBank>> ListBanksAsync()
+    public Task<List<ProvidedBank>> ListBanksAsync(CancellationToken cancellationToken = default)
     {
         throw NotConfigured();
     }
 
     // Échoue : aucun prestataire n'est configuré.
-    public Task<string> StartAuthorizationAsync(BankAuthorizationRequest request)
+    public Task<string> StartAuthorizationAsync(BankAuthorizationRequest request, CancellationToken cancellationToken = default)
     {
         throw NotConfigured();
     }
 
     // Échoue : aucun prestataire n'est configuré.
-    public Task<ProvidedSession> CreateSessionAsync(string code)
+    public Task<ProvidedSession> CreateSessionAsync(string code, CancellationToken cancellationToken = default)
     {
         throw NotConfigured();
     }
 
     // Échoue : aucun prestataire n'est configuré.
-    public Task<List<SessionAccount>> ReadSessionAccountsAsync(string sessionId)
+    public Task<List<SessionAccount>> ReadSessionAccountsAsync(string sessionId, CancellationToken cancellationToken = default)
     {
         throw NotConfigured();
     }
 
     // Échoue : aucun prestataire n'est configuré.
-    public Task<List<ProvidedBalance>> ReadBalancesAsync(string accountUid, UserPresence? presence)
+    public Task<List<ProvidedBalance>> ReadBalancesAsync(string accountUid, UserPresence? presence, CancellationToken cancellationToken = default)
     {
         throw NotConfigured();
     }
 
     // Échoue : aucun prestataire n'est configuré.
-    public Task<List<ProvidedTransaction>> ReadTransactionsAsync(string accountUid, DateOnly startDate, UserPresence? presence)
+    public Task<List<ProvidedTransaction>> ReadTransactionsAsync(string accountUid, DateOnly startDate, UserPresence? presence, CancellationToken cancellationToken = default)
     {
         throw NotConfigured();
     }
 
     // Échoue : aucun prestataire n'est configuré.
-    public Task RevokeSessionAsync(string sessionId)
+    public Task RevokeSessionAsync(string sessionId, CancellationToken cancellationToken = default)
     {
         throw NotConfigured();
     }

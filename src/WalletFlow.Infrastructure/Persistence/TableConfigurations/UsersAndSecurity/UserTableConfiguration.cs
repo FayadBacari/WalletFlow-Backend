@@ -42,6 +42,9 @@ public class UserTableConfiguration : IEntityTypeConfiguration<User>
         // section 8 du script) : EF Core ne l'envoie donc pas à la création du compte, où il reste vide.
         builder.Property(nameof(User.LastSuggestionMonth)).HasColumnName("dernier_mois_suggestions")
             .Metadata.SetBeforeSaveBehavior(PropertySaveBehavior.Ignore);
+        // De même pour le pas du dernier code de l'application : un compte qui s'inscrit n'a pas encore de double authentification.
+        builder.Property(nameof(User.LastAuthenticatorStep)).HasColumnName("dernier_pas_totp")
+            .Metadata.SetBeforeSaveBehavior(PropertySaveBehavior.Ignore);
 
         // Toute écriture du compte vérifie que personne ne l'a changé depuis sa lecture, quelle que soit la colonne. Par exemple :
         // - une nouvelle inscription ne remplace pas le mot de passe d'un compte confirmé au même instant ;

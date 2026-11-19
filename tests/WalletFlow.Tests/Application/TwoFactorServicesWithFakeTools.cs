@@ -29,6 +29,7 @@ public class TwoFactorServicesWithFakeTools
     public FakeBankConnectionRepository BankRepository { get; } = new FakeBankConnectionRepository();
     public FakeBankDataProvider BankProvider { get; } = new FakeBankDataProvider();
     public FakePasswordHasher PasswordHasher { get; } = new FakePasswordHasher();
+    public FakeBreachedPasswordChecker BreachedPasswordChecker { get; } = new FakeBreachedPasswordChecker();
     public FakeBackupCodeHasher BackupCodeHasher { get; } = new FakeBackupCodeHasher();
     public FakeTimeProvider Clock { get; } = new FakeTimeProvider();
     public RandomSecureTokenGenerator TokenGenerator { get; } = new RandomSecureTokenGenerator();
@@ -36,7 +37,6 @@ public class TwoFactorServicesWithFakeTools
     public AesGcmTotpSecretProtector SecretProtector { get; set; } = new AesGcmTotpSecretProtector(TwoFactorTestTools.CreateEncryptionKey());
     public InMemoryWaitingLoginStore WaitingLoginStore { get; }
     public InMemoryWaitingSecretStore WaitingSecretStore { get; }
-    public InMemoryUsedAuthenticatorCodesRegister UsedCodesRegister { get; }
 
     // Relie les faux accès à la fausse unité de travail, et donne aux outils en mémoire la fausse horloge.
     public TwoFactorServicesWithFakeTools()
@@ -51,7 +51,6 @@ public class TwoFactorServicesWithFakeTools
         BankRepository.Users = AccountRepository.SavedUsers;
         WaitingLoginStore = new InMemoryWaitingLoginStore(Clock);
         WaitingSecretStore = new InMemoryWaitingSecretStore(Clock);
-        UsedCodesRegister = new InMemoryUsedAuthenticatorCodesRegister(Clock);
     }
 
     // Crée le service qui enregistre les changements, avec ses réessais.
@@ -74,7 +73,6 @@ public class TwoFactorServicesWithFakeTools
             BackupCodeHasher,
             AuthenticatorCodeTool,
             SecretProtector,
-            UsedCodesRegister,
             Clock);
     }
 
@@ -176,6 +174,7 @@ public class TwoFactorServicesWithFakeTools
             CreateSavingService(),
             CreateSecurityJournal(),
             PasswordHasher,
+            BreachedPasswordChecker,
             TokenGenerator,
             Clock);
     }
@@ -200,7 +199,7 @@ public class TwoFactorServicesWithFakeTools
     {
         var account = AddAccountWithoutTwoFactor(emailAddress, lockoutCount);
         var secret = AuthenticatorCodeTool.GenerateSecret();
-        account.ActivateTwoFactor(SecretProtector.Encrypt(secret, account.Id));
+        account.ActivateTwoFactor(SecretProtector.Encrypt(secret, account.Id), TwoFactorTestTools.OldStep);
 
         var cleanedCodes = new List<string>();
         for (var codeNumber = 1; codeNumber <= TwoFactorAuthenticationRules.BackupCodesPerActivation; codeNumber++)
@@ -232,6 +231,12 @@ public class TwoFactorServicesWithFakeTools
     public string FindWrongCode(string secret)
     {
         return TwoFactorTestTools.FindWrongCodeAt(secret, Clock.GetUtcNow());
+    }
+
+    // Le pas de temps du code qu'affiche le téléphone à la date de la fausse horloge.
+    public long CurrentStep()
+    {
+        return Clock.GetUtcNow().ToUnixTimeSeconds() / TwoFactorTestTools.PeriodInSeconds;
     }
 
     // Passe à la période suivante : le téléphone affiche un nouveau code.

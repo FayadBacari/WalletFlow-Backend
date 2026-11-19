@@ -1,4 +1,5 @@
 using System.Net;
+using WalletFlow.Application.Persistence;
 using System.Net.Http.Json;
 using System.Text.Json;
 using Microsoft.AspNetCore.Mvc;
@@ -202,9 +203,9 @@ public class AdministrationEndpointTests
 
         var search = await SendAsync(administrator.Client, new AdminRequest(HttpMethod.Post, SearchEndpoint, new { email = OtherEmail }), null);
 
-        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        await CsrfRefusalAssertions.AssertCsrfRefusalAsync(response);
         Assert.Empty(api.SupportRepository.SavedResponses);
-        Assert.Equal(HttpStatusCode.BadRequest, search.StatusCode);
+        await CsrfRefusalAssertions.AssertCsrfRefusalAsync(search);
         Assert.DoesNotContain(api.SecurityEventRepository.SavedSecurityEvents, securityEvent => securityEvent.Type == SecurityEventType.AdminAction);
     }
 
@@ -222,7 +223,7 @@ public class AdministrationEndpointTests
         {
             var response = await SendAsync(user.Client, write, null);
 
-            Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+            await CsrfRefusalAssertions.AssertCsrfRefusalAsync(response);
         }
 
         Assert.Equal(5, writes.Count);
@@ -253,7 +254,7 @@ public class AdministrationEndpointTests
         Assert.Equal(4, foundAccount.EnumerateObject().Count());
         Assert.Equal(JsonValueKind.Null, (await ReadJsonAsync(missing)).GetProperty("account").ValueKind);
         Assert.Equal(HttpStatusCode.BadRequest, malformed.StatusCode);
-        Assert.True((await ReadJsonAsync(malformed)).GetProperty("errors").TryGetProperty(nameof(AdminAccountSearchRequest.Email), out _));
+        Assert.True((await ReadJsonAsync(malformed)).GetProperty("errors").TryGetProperty("email", out _));
     }
 
     // L'état d'un compte porte son nom du site : non confirmé, actif, bloqué ou en suppression.
@@ -389,7 +390,7 @@ public class AdministrationEndpointTests
         var unknownAnswer = await SendAsync(administrator, HttpMethod.Post, "/api/admin/support-requests/" + Guid.NewGuid() + "/responses", new { content = "Réponse" });
 
         Assert.Equal(HttpStatusCode.BadRequest, emptyAnswer.StatusCode);
-        Assert.Equal(ErrorMessages.SupportAnswerBreaksRules, (await ReadJsonAsync(emptyAnswer)).GetProperty("errors").GetProperty("Content")[0].GetString());
+        Assert.Equal(ErrorMessages.SupportAnswerBreaksRules, (await ReadJsonAsync(emptyAnswer)).GetProperty("errors").GetProperty("content")[0].GetString());
         Assert.Equal(ErrorMessages.SupportRequestStatusUnknown, (await ReadJsonAsync(unknownStatus)).GetProperty("errors").GetProperty("status")[0].GetString());
         Assert.Equal(HttpStatusCode.NotFound, unknownRequest.StatusCode);
         Assert.Equal(HttpStatusCode.NotFound, unknownAnswer.StatusCode);
@@ -416,5 +417,34 @@ public class AdministrationEndpointTests
             (statistics.GetProperty("accounts").GetProperty("notConfirmed").GetInt32(), statistics.GetProperty("accounts").GetProperty("active").GetInt32(),
                 statistics.GetProperty("accounts").GetProperty("locked").GetInt32(), statistics.GetProperty("accounts").GetProperty("beingDeleted").GetInt32()));
         Assert.Equal(1, statistics.GetProperty("supportRequests").GetProperty("sent").GetInt32());
+    }
+
+    // Un compte ou une demande inconnus répondent 404, au lien de désactivation comme à la clôture.
+    [Fact]
+    public async Task UnknownAccountOrRequestIsNotFound()
+    {
+        using var api = new ApiFactoryWithFakes();
+        var administrator = await LogInAdministratorAsync(api);
+
+        var link = await SendAsync(administrator, HttpMethod.Post, "/api/admin/accounts/" + Guid.NewGuid() + "/two-factor-link");
+        var resolution = await SendAsync(administrator, HttpMethod.Post, "/api/admin/support-requests/" + Guid.NewGuid() + "/resolve");
+
+        Assert.Equal(HttpStatusCode.NotFound, link.StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, resolution.StatusCode);
+    }
+
+    // Une réponse que d'autres requêtes empêchent à chaque essai répond 409 : rien n'est enregistré, l'administrateur peut réessayer.
+    [Fact]
+    public async Task AnswerThatNeverSavesAsksToRetry()
+    {
+        using var api = new ApiFactoryWithFakes();
+        var administrator = await LogInAdministratorAsync(api);
+        var request = AddRequest(api, null);
+        api.AdministrationRepository.Conflicts = DatabaseChangesSavingService.MaximumTries;
+
+        var response = await SendAsync(administrator, HttpMethod.Post, "/api/admin/support-requests/" + request.Id + "/responses", new { content = "Réponse" });
+
+        await AssertProblemTitleAsync(response, HttpStatusCode.Conflict, ErrorMessages.SupportRequestChangedMeanwhile);
+        Assert.Empty(api.SupportRepository.SavedResponses);
     }
 }

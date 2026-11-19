@@ -23,12 +23,12 @@ public class UserSessionService
 
     // Donne l'identifiant du propriétaire si la session est encore active, et note qu'elle vient de servir,
     // au plus une fois par minute (voir UserSessionRules). Renvoie null si le cookie ne correspond à aucune session, ou si la session a expiré.
-    public async Task<Guid?> FindOwnerAndRecordActivityAsync(string sessionToken)
+    public async Task<Guid?> FindOwnerAndRecordActivityAsync(string sessionToken, CancellationToken cancellationToken = default)
     {
         var sessionTokenHash = tokenGenerator.HashToken(sessionToken);
         var now = clock.GetUtcNow().UtcDateTime;
 
-        var session = await sessionRepository.FindAsync(sessionTokenHash);
+        var session = await sessionRepository.FindAsync(sessionTokenHash, cancellationToken);
         if (session == null || !session.IsActiveAt(now))
         {
             return null;
@@ -36,16 +36,16 @@ public class UserSessionService
 
         if (session.ShouldRecordActivityAt(now))
         {
-            await sessionRepository.RecordActivityAsync(sessionTokenHash, now);
+            await sessionRepository.RecordActivityAsync(sessionTokenHash, now, cancellationToken);
         }
         return session.UserId;
     }
 
     // Détruit la session côté serveur, pas seulement le cookie (SS §3).
-    public async Task CloseAsync(string sessionToken)
+    public async Task CloseAsync(string sessionToken, CancellationToken cancellationToken = default)
     {
         var sessionTokenHash = tokenGenerator.HashToken(sessionToken);
 
-        await sessionRepository.DeleteAsync(sessionTokenHash);
+        await sessionRepository.DeleteAsync(sessionTokenHash, cancellationToken);
     }
 }

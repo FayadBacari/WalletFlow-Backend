@@ -17,11 +17,11 @@ public class BankListService
     }
 
     // Donne les banques que le prestataire sait lire, dans l'ordre alphabétique.
-    public async Task<BankListResult> ListAsync()
+    public async Task<BankListResult> ListAsync(CancellationToken cancellationToken = default)
     {
         try
         {
-            var banks = await bankProvider.ListBanksAsync();
+            var banks = await bankProvider.ListBanksAsync(cancellationToken);
             banks.Sort((first, second) => FrenchOrder.Compare(first.Name, second.Name));
 
             return new BankListResult.Listed { Banks = banks };

@@ -4,15 +4,16 @@ using WalletFlow.Domain.BagsAndSuggestions;
 namespace WalletFlow.Application.Suggestions;
 
 // Cas d'utilisation : l'utilisateur connecté voit ses suggestions d'épargne et ce qu'il a économisé (GR Sacs).
-// Les suggestions portent sur le dernier mois complet, à Paris. Si la tâche de fond ne les a pas encore calculées,
-// la première lecture à partir du 5 du mois suivant le fait (voir SuggestionCalculationService). Elles sont ensuite lues telles quelles.
+// Les suggestions portent sur le dernier mois complet, à Paris. La tâche horaire les calcule, à partir du 5 du mois suivant
+// (voir SuggestionCalculationService) : la lecture ne fait que lire, comme toute requête GET (SS §6). Avant le passage de la
+// tâche, la liste du nouveau mois est vide.
 public class SuggestionListService
 {
     private readonly SuggestionCalculationService calculationService;
     private readonly ISuggestionRepository suggestionRepository;
     private readonly ICategoryRepository categoryRepository;
 
-    // Reçoit le calcul des suggestions, et l'accès aux suggestions et aux catégories.
+    // Reçoit le calcul des suggestions, pour le mois évalué, et l'accès aux suggestions et aux catégories.
     public SuggestionListService(
         SuggestionCalculationService calculationService,
         ISuggestionRepository suggestionRepository,
@@ -23,16 +24,12 @@ public class SuggestionListService
         this.categoryRepository = categoryRepository;
     }
 
-    // Calcule les suggestions du mois évalué si ce n'est pas encore fait, puis les donne, les plus grosses économies d'abord.
-    // Un calcul que d'autres requêtes empêchent à chaque essai sera refait plus tard : la liste reste lisible.
-    public async Task<SuggestionList> ListAsync(Guid userId)
+    // Donne les suggestions du mois évalué encore sans réponse, les plus grosses économies d'abord. Rien n'est écrit.
+    public async Task<SuggestionList> ListAsync(Guid userId, CancellationToken cancellationToken = default)
     {
         var month = calculationService.FindEvaluatedMonth();
-
-        await calculationService.CalculateAsync(userId, month);
-
-        var suggestions = await suggestionRepository.FindAllAsync(userId);
-        var categories = await categoryRepository.FindAllAsync(userId);
+        var suggestions = await suggestionRepository.FindAllAsync(userId, cancellationToken);
+        var categories = await categoryRepository.FindAllAsync(userId, cancellationToken);
         var views = new List<SuggestionView>();
 
         foreach (var suggestion in suggestions)
@@ -57,6 +54,6 @@ public class SuggestionListService
             .ThenBy(view => view.Id)
             .ToList();
 
-        return new SuggestionList(month, views, await suggestionRepository.SumSavedAsync(userId));
+        return new SuggestionList(month, views, await suggestionRepository.SumSavedAsync(userId, cancellationToken));
     }
 }

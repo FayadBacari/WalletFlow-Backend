@@ -33,6 +33,7 @@ public class ApiFactoryWithRealDatabase : WebApplicationFactory<Program>
 
             // Un test peut donner une adresse IP à ses requêtes, pour la retrouver dans le vrai journal.
             services.AddSingleton<IStartupFilter, VisitorAddressStartupFilter>();
+            ResponseContractCheck.AddTo(services);
         });
     }
 }

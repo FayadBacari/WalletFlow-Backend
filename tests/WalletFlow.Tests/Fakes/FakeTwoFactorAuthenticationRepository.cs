@@ -32,7 +32,7 @@ public class FakeTwoFactorAuthenticationRepository : ITwoFactorAuthenticationRep
     public int DeactivationConflicts { get; set; } = 0;
 
     // Cherche en mémoire les codes de secours de ce compte qui n'ont pas servi.
-    public Task<List<BackupCode>> FindUnusedBackupCodesAsync(Guid accountId)
+    public Task<List<BackupCode>> FindUnusedBackupCodesAsync(Guid accountId, CancellationToken cancellationToken = default)
     {
         if (FailsWhenReadingBackupCodes)
         {
@@ -52,7 +52,7 @@ public class FakeTwoFactorAuthenticationRepository : ITwoFactorAuthenticationRep
     }
 
     // Cherche en mémoire un code de secours par son identifiant, et garde une copie de ce qu'il était.
-    public Task<BackupCode?> FindBackupCodeAsync(Guid backupCodeId)
+    public Task<BackupCode?> FindBackupCodeAsync(Guid backupCodeId, CancellationToken cancellationToken = default)
     {
         foreach (var backupCode in SavedBackupCodes)
         {
@@ -76,7 +76,7 @@ public class FakeTwoFactorAuthenticationRepository : ITwoFactorAuthenticationRep
     }
 
     // Note que tous les codes de ce compte devront partir avec les autres changements.
-    public Task PrepareBackupCodesRemovalAsync(Guid accountId)
+    public Task PrepareBackupCodesRemovalAsync(Guid accountId, CancellationToken cancellationToken = default)
     {
         lock (pendingChangesLock)
         {

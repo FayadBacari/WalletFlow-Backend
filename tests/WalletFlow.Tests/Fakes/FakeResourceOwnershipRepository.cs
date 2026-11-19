@@ -29,7 +29,7 @@ public class FakeResourceOwnershipRepository : IResourceOwnershipRepository
     }
 
     // Cherche la ressource dans le faux dépôt de sa sorte. Un compte et une opération sont à l'utilisateur de leur connexion.
-    public Task<Guid?> FindOwnerAsync(OwnedResource resource, Guid resourceId)
+    public Task<Guid?> FindOwnerAsync(OwnedResource resource, Guid resourceId, CancellationToken cancellationToken = default)
     {
         Guid? accountId = null;
 

@@ -1,4 +1,6 @@
+using System.Data.Common;
 using System.Net;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using WalletFlow.Domain.NotificationsAndSupport;
 using WalletFlow.Application.Emails;
 using Microsoft.EntityFrameworkCore;
@@ -35,14 +37,12 @@ public class TwoFactorRealChainTests
     private readonly FakeTimeProvider clock = new FakeTimeProvider();
     private readonly InMemoryWaitingLoginStore waitingLoginStore;
     private readonly InMemoryWaitingSecretStore waitingSecretStore;
-    private readonly InMemoryUsedAuthenticatorCodesRegister usedCodesRegister;
 
     // Donne aux outils en mémoire la fausse horloge. Ils survivent aux requêtes, comme dans la vraie API.
     public TwoFactorRealChainTests()
     {
         waitingLoginStore = new InMemoryWaitingLoginStore(clock);
         waitingSecretStore = new InMemoryWaitingSecretStore(clock);
-        usedCodesRegister = new InMemoryUsedAuthenticatorCodesRegister(clock);
     }
 
     // Inscrit puis confirme un compte, comme le feraient deux requêtes, et renvoie son identifiant.
@@ -52,6 +52,7 @@ public class TwoFactorRealChainTests
             new UserAccountRepository(databaseContext),
             new EntityFrameworkDatabaseUnitOfWork(databaseContext),
             passwordHasher,
+            new FakeBreachedPasswordChecker(),
             tokenGenerator,
             emailSender,
             new FrenchAccountRegistrationEmails(),
@@ -87,7 +88,6 @@ public class TwoFactorRealChainTests
             backupCodeHasher,
             authenticatorCodeTool,
             secretProtector,
-            usedCodesRegister,
             clock);
     }
 
@@ -209,6 +209,12 @@ public class TwoFactorRealChainTests
     private void WaitForNextCode()
     {
         clock.Advance(TimeSpan.FromSeconds(TwoFactorTestTools.PeriodInSeconds));
+    }
+
+    // Le pas de temps du code qu'affiche le téléphone à la date de la fausse horloge.
+    private long CurrentStep()
+    {
+        return clock.GetUtcNow().ToUnixTimeSeconds() / TwoFactorTestTools.PeriodInSeconds;
     }
 
     // Compte les événements de ce type et de ce résultat dans le vrai journal, pour ce compte.
@@ -369,6 +375,7 @@ public class TwoFactorRealChainTests
         var reloadedAccount = await ReadAccountAsync(databaseContext, accountId);
         Assert.False(reloadedAccount.IsTwoFactorEnabled);
         Assert.Null(reloadedAccount.EncryptedTotpSecret);
+        Assert.Null(reloadedAccount.LastAuthenticatorStep);
         Assert.Equal(0, await databaseContext.BackupCodes.CountAsync(row => row.UserId == accountId));
         Assert.Equal(1, await CountSecurityEventsAsync(databaseContext, accountId, SecurityEventType.TwoFactorDeactivation, SecurityEventResult.Success));
 
@@ -379,6 +386,7 @@ public class TwoFactorRealChainTests
         var (secondPhoneSecret, _) = await ActivateTwoFactorAsync(databaseContext, accountId);
 
         Assert.NotEqual(firstPhoneSecret, secondPhoneSecret);
+        Assert.Equal(CurrentStep(), (await ReadAccountAsync(databaseContext, accountId)).LastAuthenticatorStep);
         Assert.Equal(10, await databaseContext.BackupCodes.CountAsync(row => row.UserId == accountId));
         Assert.False(await databaseContext.BackupCodes.AnyAsync(row => row.CodeHash == firstCodeHash));
     }
@@ -431,6 +439,7 @@ public class TwoFactorRealChainTests
             CreateSavingService(databaseContext),
             CreateSecurityJournal(databaseContext, clock),
             passwordHasher,
+            new FakeBreachedPasswordChecker(),
             tokenGenerator,
             clock);
         var recoveryResult = await passwordResetService.ResetAsync(recoveryToken.Token, "Nouveau-Mot-De-Passe-3", IpAddress);
@@ -462,5 +471,104 @@ public class TwoFactorRealChainTests
         await databaseContext.Users.Where(row => row.Id == accountId).ExecuteDeleteAsync();
 
         Assert.Equal(0, await databaseContext.BackupCodes.CountAsync(row => row.UserId == accountId));
+    }
+
+    // SS §2 : un code ne sert qu'une fois, et la vraie base s'en souvient. Ni le code de l'activation, ni un code qui vient
+    // d'ouvrir une session ne rouvrent une session, même lus par de tout nouveaux services, comme après un redémarrage de l'API.
+    [Fact]
+    public async Task EachCodeServesOnlyOnceOnTheRealDatabase()
+    {
+        await using var databaseContext = CreateDatabaseContext();
+        await using var transaction = await databaseContext.Database.BeginTransactionAsync();
+        var accountId = await RegisterThenConfirmAsync(databaseContext);
+        var (secret, _) = await ActivateTwoFactorAsync(databaseContext, accountId);
+        var firstLogin = Assert.IsType<AccountLoginResult.WaitingForTwoFactorCode>(await LogInWithPasswordAsync(databaseContext));
+
+        var activationCodeResult = await FinishLoginAsync(databaseContext, firstLogin.WaitingLoginToken, CalculateCurrentCode(secret));
+        WaitForNextCode();
+        var code = CalculateCurrentCode(secret);
+        var firstResult = await FinishLoginAsync(databaseContext, firstLogin.WaitingLoginToken, code);
+        var savedStep = (await ReadAccountAsync(databaseContext, accountId)).LastAuthenticatorStep;
+        var secondLogin = Assert.IsType<AccountLoginResult.WaitingForTwoFactorCode>(await LogInWithPasswordAsync(databaseContext));
+        var replayResult = await FinishLoginAsync(databaseContext, secondLogin.WaitingLoginToken, code);
+        WaitForNextCode();
+        var nextResult = await FinishLoginAsync(databaseContext, secondLogin.WaitingLoginToken, CalculateCurrentCode(secret));
+
+        Assert.IsType<TwoFactorLoginResult.WrongCode>(activationCodeResult);
+        Assert.IsType<TwoFactorLoginResult.LoggedIn>(firstResult);
+        Assert.Equal(CurrentStep() - 1, savedStep);
+        Assert.IsType<TwoFactorLoginResult.WrongCode>(replayResult);
+        Assert.IsType<TwoFactorLoginResult.LoggedIn>(nextResult);
+        Assert.Equal(2, await databaseContext.UserSessions.CountAsync(row => row.UserId == accountId));
+    }
+
+    // Une autre requête se sert du même code entre sa vérification et l'enregistrement de cette connexion : la connexion relit
+    // le compte, voit le code utilisé, et n'ouvre aucune session. De deux requêtes avec le même code, une seule passe (SS §2).
+    [Fact]
+    public async Task CodeUsedByAnotherRequestBeforeTheLoginIsSavedOpensNoSession()
+    {
+        var otherRequest = new UseTheCodeBeforeTheSessionsAreRead();
+        await using var databaseContext = CreateDatabaseContext(otherRequest);
+        await using var transaction = await databaseContext.Database.BeginTransactionAsync();
+        var accountId = await RegisterThenConfirmAsync(databaseContext);
+        var (secret, _) = await ActivateTwoFactorAsync(databaseContext, accountId);
+        var login = Assert.IsType<AccountLoginResult.WaitingForTwoFactorCode>(await LogInWithPasswordAsync(databaseContext));
+        WaitForNextCode();
+        otherRequest.ActOnce(accountId, CurrentStep());
+
+        var result = await FinishLoginAsync(databaseContext, login.WaitingLoginToken, CalculateCurrentCode(secret));
+
+        Assert.True(otherRequest.HasActed);
+        Assert.IsType<TwoFactorLoginResult.LoginMustRestart>(result);
+        Assert.Equal(0, await databaseContext.UserSessions.CountAsync(row => row.UserId == accountId));
+        Assert.Equal(CurrentStep(), (await ReadAccountAsync(databaseContext, accountId)).LastAuthenticatorStep);
+    }
+
+    // Une autre requête note un code sur le compte juste avant que la connexion ne lise les sessions du compte : le compte est
+    // déjà relu, l'enregistrement viendra ensuite. Un point de sauvegarde donne à cette écriture son propre numéro de version,
+    // comme une autre transaction.
+    private sealed class UseTheCodeBeforeTheSessionsAreRead : DbCommandInterceptor
+    {
+        private Guid? accountId = null;
+        private long step = 0;
+
+        public bool HasActed { get; private set; } = false;
+
+        // Prépare l'autre requête : elle agira une fois, à la prochaine lecture des sessions.
+        public void ActOnce(Guid accountId, long step)
+        {
+            this.accountId = accountId;
+            this.step = step;
+        }
+
+        // Agit juste avant la lecture des sessions (nom imposé par le framework).
+        public override async ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(
+            DbCommand command,
+            CommandEventData eventData,
+            InterceptionResult<DbDataReader> result,
+            CancellationToken cancellationToken = default)
+        {
+            if (accountId != null && !HasActed && command.CommandText.Contains("FROM session", StringComparison.Ordinal))
+            {
+                HasActed = true;
+                await ExecuteAsync(command, "SAVEPOINT autre_requete", cancellationToken);
+                await ExecuteAsync(
+                    command,
+                    "UPDATE utilisateur SET dernier_pas_totp = " + step + " WHERE id_utilisateur = '" + accountId + "'",
+                    cancellationToken);
+                await ExecuteAsync(command, "RELEASE SAVEPOINT autre_requete", cancellationToken);
+            }
+
+            return result;
+        }
+
+        // Exécute cette instruction dans la transaction de la commande interceptée.
+        private static async Task ExecuteAsync(DbCommand interceptedCommand, string sql, CancellationToken cancellationToken)
+        {
+            await using var command = interceptedCommand.Connection!.CreateCommand();
+            command.Transaction = interceptedCommand.Transaction;
+            command.CommandText = sql;
+            await command.ExecuteNonQueryAsync(cancellationToken);
+        }
     }
 }

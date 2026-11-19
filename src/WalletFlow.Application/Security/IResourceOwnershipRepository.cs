@@ -6,5 +6,5 @@ namespace WalletFlow.Application.Security;
 public interface IResourceOwnershipRepository
 {
     // Donne l'utilisateur à qui appartient cette ressource, ou null si elle n'existe pas.
-    Task<Guid?> FindOwnerAsync(OwnedResource resource, Guid resourceId);
+    Task<Guid?> FindOwnerAsync(OwnedResource resource, Guid resourceId, CancellationToken cancellationToken = default);
 }

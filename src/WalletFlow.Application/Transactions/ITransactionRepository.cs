@@ -8,33 +8,33 @@ namespace WalletFlow.Application.Transactions;
 public interface ITransactionRepository
 {
     // Donne la date de la dernière opération gardée pour ce compte, ou null s'il n'en a aucune. Rien n'est suivi.
-    Task<DateOnly?> FindLatestDateAsync(Guid accountId);
+    Task<DateOnly?> FindLatestDateAsync(Guid accountId, CancellationToken cancellationToken = default);
 
     // Donne les identifiants des opérations de ce compte datées de ce jour ou après. Rien n'est suivi.
-    Task<HashSet<string>> FindExternalIdsAsync(Guid accountId, DateOnly fromDate);
+    Task<HashSet<string>> FindExternalIdsAsync(Guid accountId, DateOnly fromDate, CancellationToken cancellationToken = default);
 
     // Donne les règles de classement de l'utilisateur.
-    Task<List<CategorizationRule>> FindRulesAsync(Guid userId);
+    Task<List<CategorizationRule>> FindRulesAsync(Guid userId, CancellationToken cancellationToken = default);
 
     // Cherche la règle de l'utilisateur pour ce libellé, sous sa forme simple. Renvoie null s'il n'en a pas.
-    Task<CategorizationRule?> FindRuleAsync(Guid userId, string ruleLabel);
+    Task<CategorizationRule?> FindRuleAsync(Guid userId, string ruleLabel, CancellationToken cancellationToken = default);
 
     // Cherche cette opération parmi celles de l'utilisateur. Renvoie null si elle n'existe pas, ou si elle est à un autre.
-    Task<BankTransaction?> FindAsync(Guid userId, Guid transactionId);
+    Task<BankTransaction?> FindAsync(Guid userId, Guid transactionId, CancellationToken cancellationToken = default);
 
     // Donne cette opération de l'utilisateur telle qu'il la voit. Renvoie null si elle n'existe pas, ou si elle est à un autre.
     // Rien n'est suivi.
-    Task<TransactionView?> ReadViewAsync(Guid userId, Guid transactionId);
+    Task<TransactionView?> ReadViewAsync(Guid userId, Guid transactionId, CancellationToken cancellationToken = default);
 
     // Cherche parmi les opérations de l'utilisateur, les plus récentes d'abord, et donne la page demandée. Rien n'est suivi.
-    Task<TransactionPage> SearchAsync(Guid userId, TransactionSearch search);
+    Task<TransactionPage> SearchAsync(Guid userId, TransactionSearch search, CancellationToken cancellationToken = default);
 
     // Additionne les opérations de l'utilisateur datées entre ces deux jours compris, par catégorie et par mois.
     // Les transferts ne comptent pas (GR Comptes). Avec un compte, seules ses opérations comptent. Rien n'est suivi.
-    Task<List<CategoryMonthTotal>> SumByCategoryAndMonthAsync(Guid userId, DateOnly from, DateOnly to, Guid? accountId);
+    Task<List<CategoryMonthTotal>> SumByCategoryAndMonthAsync(Guid userId, DateOnly firstDay, DateOnly lastDay, Guid? accountId, CancellationToken cancellationToken = default);
 
     // Donne la date de la plus ancienne opération de l'utilisateur, ou de ce compte seul, ou null s'il n'en a aucune.
-    Task<DateOnly?> FindEarliestDateAsync(Guid userId, Guid? accountId);
+    Task<DateOnly?> FindEarliestDateAsync(Guid userId, Guid? accountId, CancellationToken cancellationToken = default);
 
     // Garde de côté une nouvelle opération : elle ne sera enregistrée qu'avec les autres changements.
     void PrepareTransaction(BankTransaction transaction);

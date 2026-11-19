@@ -50,7 +50,34 @@ public class ApiInProductionModeTests
             "max-age=31536000; includeSubDomains");
     }
 
-    // En production, l'API ne répond qu'aux noms du site : une requête sous un autre nom est refusée avant toute lecture.
+    // Sur le vrai serveur Kestrel, le seul qui écrit l'en-tête Server, aucune réponse ne nomme le serveur web, et aucune ne peut
+    // être gardée par un navigateur ou un intermédiaire : ni une réponse réussie, ni un refus faute de session, ni une adresse
+    // inconnue (SS §6).
+    [Fact]
+    public async Task AnswersOfTheRealServerNeverNameItAndAreNeverStored()
+    {
+        using var productionApi = new ApiFactoryInProduction();
+        productionApi.UseKestrel(0);
+        var client = productionApi.CreateClient();
+
+        var answers = new[]
+        {
+            await client.PostAsJsonAsync(RegistrationEndpoint, new { email = "visiteur@exemple.test", password = ValidPassword }),
+            await client.GetAsync("/api/account/profile"),
+            await client.GetAsync("/api/adresse-inconnue")
+        };
+
+        Assert.Equal(
+            new[] { HttpStatusCode.OK, HttpStatusCode.Unauthorized, HttpStatusCode.NotFound },
+            answers.Select(answer => answer.StatusCode));
+        foreach (var answer in answers)
+        {
+            SecurityHeadersAssertions.AssertExactSecurityHeaders(answer);
+        }
+    }
+
+    // En production, l'API ne répond qu'aux noms du site : une requête sous un autre nom est refusée avant toute lecture, par un
+    // 400 vide, sans la page HTML d'ASP.NET Core.
     [Fact]
     public async Task RequestUnderAnotherHostNameIsRefused()
     {
@@ -64,6 +91,31 @@ public class ApiInProductionModeTests
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
         Assert.Empty(productionApi.AccountRepository.SavedUsers);
+        await AssertEmptyAnswerAsync(response);
+    }
+
+    // Une recherche des métadonnées d'un hébergeur cloud, sous le nom de son adresse interne comme le fait OWASP ZAP, reçoit le
+    // même 400 vide.
+    [Theory]
+    [InlineData("169.254.169.254", "/latest/meta-data/")]
+    [InlineData("metadata.google.internal", "/computeMetadata/v1/")]
+    public async Task CloudMetadataProbeGetsAnEmptyRefusal(string hostName, string path)
+    {
+        using var productionApi = new ApiFactoryInProduction();
+        var client = productionApi.CreateClient(
+            new WebApplicationFactoryClientOptions { BaseAddress = new Uri("http://" + hostName) });
+
+        var response = await client.GetAsync(path);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        await AssertEmptyAnswerAsync(response);
+    }
+
+    // Vérifie qu'une réponse n'a ni contenu, ni type de contenu.
+    private static async Task AssertEmptyAnswerAsync(HttpResponseMessage response)
+    {
+        Assert.Null(response.Content.Headers.ContentType);
+        Assert.Empty(await response.Content.ReadAsByteArrayAsync());
     }
 
     // Sans noms du site, ou avec « * », l'API refuse de démarrer en production.
@@ -116,7 +168,6 @@ public class ApiInProductionModeTests
     // L'API refuse de démarrer si un réglage obligatoire manque, au lieu de tourner à moitié configurée.
     [Theory]
     [InlineData("ConnectionStrings:WalletFlowDatabase", "WalletFlowDatabase")]
-    [InlineData("LocalEmailsFolder", "LocalEmailsFolder")]
     [InlineData("PublicWebsiteAddress", "PublicWebsiteAddress")]
     [InlineData("EnableBanking:ApplicationId", "EnableBanking:ApplicationId")]
     [InlineData("EnableBanking:PrivateKeyPath", "EnableBanking:PrivateKeyPath")]

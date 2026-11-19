@@ -31,20 +31,21 @@ public class TransactionCategoryChangeService
 
     // Range l'opération dans cette catégorie, crée ou change la règle de son libellé si l'utilisateur le demande,
     // puis relit l'opération telle qu'il la voit maintenant.
-    public async Task<TransactionCategoryChangeResult> ChangeAsync(Guid userId, Guid transactionId, Guid categoryId, bool applyToFutureTransactions)
+    public async Task<TransactionCategoryChangeResult> ChangeAsync(Guid userId, Guid transactionId, Guid categoryId, bool applyToFutureTransactions, CancellationToken cancellationToken = default)
     {
         var refusal = await savingService.SaveWithRetriesAsync(
-            () => PrepareChangeAsync(userId, transactionId, categoryId, applyToFutureTransactions),
-            (TransactionCategoryChangeResult?)new TransactionCategoryChangeResult.NotSaved());
+            () => PrepareChangeAsync(userId, transactionId, categoryId, applyToFutureTransactions, cancellationToken),
+            (TransactionCategoryChangeResult?)new TransactionCategoryChangeResult.NotSaved(),
+            cancellationToken);
 
         if (refusal != null)
         {
             return refusal;
         }
 
-        await budgetAlerts.CheckAsync(userId);
+        await budgetAlerts.CheckAsync(userId, cancellationToken);
 
-        var view = await transactionRepository.ReadViewAsync(userId, transactionId);
+        var view = await transactionRepository.ReadViewAsync(userId, transactionId, cancellationToken);
 
         // La banque vient d'être déconnectée, avec ses opérations.
         if (view == null)
@@ -63,16 +64,17 @@ public class TransactionCategoryChangeService
         Guid userId,
         Guid transactionId,
         Guid categoryId,
-        bool applyToFutureTransactions)
+        bool applyToFutureTransactions,
+        CancellationToken cancellationToken = default)
     {
-        var transaction = await transactionRepository.FindAsync(userId, transactionId);
+        var transaction = await transactionRepository.FindAsync(userId, transactionId, cancellationToken);
 
         if (transaction == null)
         {
             return PreparedChanges<TransactionCategoryChangeResult?>.NothingToSave(new TransactionCategoryChangeResult.TransactionNotFound());
         }
 
-        var category = await categoryRepository.FindAsync(userId, categoryId);
+        var category = await categoryRepository.FindAsync(userId, categoryId, cancellationToken);
 
         if (category == null)
         {
@@ -90,14 +92,14 @@ public class TransactionCategoryChangeService
 
         if (applyToFutureTransactions)
         {
-            var otherCategory = await categoryRepository.FindOtherCategoryAsync(userId);
+            var otherCategory = await categoryRepository.FindOtherCategoryAsync(userId, cancellationToken);
 
             if (otherCategory == null)
             {
                 return PreparedChanges<TransactionCategoryChangeResult?>.NothingToSave(new TransactionCategoryChangeResult.NotSaved());
             }
 
-            var rule = await transactionRepository.FindRuleAsync(userId, ruleLabel);
+            var rule = await transactionRepository.FindRuleAsync(userId, ruleLabel, cancellationToken);
 
             if (rule == null)
             {

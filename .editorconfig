@@ -1,0 +1,27 @@
+root = true
+
+[*.cs]
+# Une requête abandonnée par son client arrête son travail : tout jeton d'annulation reçu est transmis aux méthodes qui en
+# acceptent un, jusqu'à EF Core et au client HTTP du prestataire (CA2016). CancellationToken.None, commenté, marque les
+# écritures qui ne doivent jamais s'annuler : journal de sécurité, essais comptés, suite d'un effet chez la banque ou d'un e-mail parti.
+dotnet_diagnostic.CA2016.severity = error
+
+# Règles recommandées coupées, avec leur raison (voir AnalysisMode dans Directory.Build.props).
+
+# CA1805 : la valeur de départ d'un champ reste écrite (« = false », « = null »). C'est plus lisible, et cela ne coûte rien.
+dotnet_diagnostic.CA1805.severity = none
+
+# CA1848 et CA1873 : écrire les journaux avec des méthodes générées gagne du temps à chaque appel. Ici, les tâches de fond
+# écrivent une ligne par passage : le gain est nul.
+dotnet_diagnostic.CA1848.severity = none
+dotnet_diagnostic.CA1873.severity = none
+
+# CA1000 : PreparedChanges<T>.SaveThenReturn(…) et NothingToSave(…) disent à chaque appel ce qu'ils préparent, et leur type.
+dotnet_diagnostic.CA1000.severity = none
+
+# CA1711 : xUnit nomme « …Collection » les classes qui regroupent des tests sur une même ressource.
+dotnet_diagnostic.CA1711.severity = none
+
+# xUnit1051 : passer TestContext.Current.CancellationToken à chaque appel des tests ne sert qu'à arrêter plus vite une suite
+# annulée. Elle dure une minute : le gain est nul, et ce jeton encombrerait plus de 1 600 appels.
+dotnet_diagnostic.xUnit1051.severity = none

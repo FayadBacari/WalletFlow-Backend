@@ -224,7 +224,7 @@ public class TwoFactorLoginEndpointTests
 
         Assert.Equal(HttpStatusCode.BadRequest, wrongCodeResponse.StatusCode);
         Assert.Equal("application/problem+json", wrongCodeResponse.Content.Headers.ContentType?.MediaType);
-        Assert.Equal(ErrorMessages.WrongTwoFactorCode, await ReadFieldErrorAsync(wrongCodeResponse, "Code"));
+        Assert.Equal(ErrorMessages.WrongTwoFactorCode, await ReadFieldErrorAsync(wrongCodeResponse, "code"));
         Assert.Null(FindCookie(wrongCodeResponse, WaitingLoginCookieName));
         Assert.Null(FindCookie(wrongCodeResponse, SessionCookiesConfiguration.SessionCookieName));
         SecurityHeadersAssertions.AssertExactSecurityHeaders(wrongCodeResponse);
@@ -341,7 +341,7 @@ public class TwoFactorLoginEndpointTests
         var codeResponse = await browserClient.PostAsJsonAsync(TwoFactorLoginEndpoint, new { });
 
         Assert.Equal(HttpStatusCode.BadRequest, codeResponse.StatusCode);
-        Assert.Equal("Le code est obligatoire.", await ReadFieldErrorAsync(codeResponse, "Code"));
+        Assert.Equal("Le code est obligatoire.", await ReadFieldErrorAsync(codeResponse, "code"));
     }
 
     [Theory]
@@ -448,7 +448,7 @@ public class TwoFactorLoginEndpointTests
     {
         using var productionApi = new ApiFactoryInProduction();
         var activatedAccount = await AddActivatedAccountAsync(productionApi);
-        activatedAccount.UserAccount.ActivateTwoFactor(new AesGcmTotpSecretProtector(TwoFactorTestTools.CreateEncryptionKey()).Encrypt(activatedAccount.Secret, activatedAccount.UserAccount.Id));
+        activatedAccount.UserAccount.ActivateTwoFactor(new AesGcmTotpSecretProtector(TwoFactorTestTools.CreateEncryptionKey()).Encrypt(activatedAccount.Secret, activatedAccount.UserAccount.Id), TwoFactorTestTools.OldStep);
         var browserClient = CreateBrowserClient(productionApi);
         await SendLoginRequestAsync(browserClient);
 

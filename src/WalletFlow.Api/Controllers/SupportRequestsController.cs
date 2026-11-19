@@ -9,12 +9,13 @@ using WalletFlow.Application.Support;
 
 namespace WalletFlow.Api.Controllers;
 
-// Demandes de support (GR Admin). Les routes de l'utilisateur connecté n'ont aucun attribut de sécurité : toute route demande
-// par défaut une session et le jeton anti-CSRF (voir Program.cs), et elles ne touchent que les demandes du compte de la session
+// Demandes de support (GR Admin). Les routes de l'utilisateur connecté demandent une session, que [Authorize] redit, et
+// le jeton anti-CSRF, comme toute route (voir Program.cs), et elles ne touchent que les demandes du compte de la session
 // (SS §4). La route des visiteurs est appelée sans session : elle n'agit au nom de personne, et n'a donc ni besoin d'être
 // connecté, ni besoin du jeton anti-CSRF. Comme toute route, elle n'accepte que du JSON (SS §6).
 [ApiController]
 [Route("api/support-requests")]
+[Authorize]
 public class SupportRequestsController : ControllerBase
 {
     public const string VisitorRequestSentMessage = "Ta demande est envoyée. Le support te répondra par e-mail, à l'adresse donnée.";
@@ -40,10 +41,10 @@ public class SupportRequestsController : ControllerBase
     // GET api/support-requests : les demandes de l'utilisateur, la plus récente d'abord, avec leur état et leur nombre de
     // réponses. Ce sont des données personnelles : aucun navigateur ni intermédiaire ne doit les garder.
     [HttpGet]
-    [ResponseCache(NoStore = true, Location = ResponseCacheLocation.None)]
-    public async Task<IActionResult> List()
+    [ProducesResponseType<SupportRequestListResponse>(StatusCodes.Status200OK)]
+    public async Task<IActionResult> List(CancellationToken cancellationToken = default)
     {
-        var requests = await readingService.ListAsync(SessionClaims.ReadUserId(User));
+        var requests = await readingService.ListAsync(SessionClaims.ReadUserId(User), cancellationToken);
         var items = requests
             .Select(request => new SupportRequestItemResponse(request.Id, request.SentAt, WebsiteNames.Of(request.Status), request.ResponseCount))
             .ToList();
@@ -54,10 +55,11 @@ public class SupportRequestsController : ControllerBase
     // GET api/support-requests/{requestId} : une demande de l'utilisateur, avec son message et ses réponses. Celle d'un autre,
     // ou d'un visiteur, répond comme une demande qui n'existe pas (SS §4).
     [HttpGet("{requestId:guid}")]
-    [ResponseCache(NoStore = true, Location = ResponseCacheLocation.None)]
-    public async Task<IActionResult> Read(Guid requestId)
+    [ProducesResponseType<SupportRequestDetailsResponse>(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> Read(Guid requestId, CancellationToken cancellationToken = default)
     {
-        var request = await readingService.ReadAsync(SessionClaims.ReadUserId(User), requestId);
+        var request = await readingService.ReadAsync(SessionClaims.ReadUserId(User), requestId, cancellationToken);
 
         if (request == null)
         {
@@ -65,7 +67,8 @@ public class SupportRequestsController : ControllerBase
                 SessionClaims.ReadUserId(User),
                 HttpContext.Connection.RemoteIpAddress,
                 OwnedResource.SupportRequest,
-                requestId);
+                requestId,
+                cancellationToken);
             return Problem(statusCode: StatusCodes.Status404NotFound);
         }
 
@@ -75,9 +78,11 @@ public class SupportRequestsController : ControllerBase
     // POST api/support-requests : l'utilisateur connecté écrit au support, 10 demandes au plus sur les dernières 24 heures.
     [HttpPost]
     [RequestSizeLimit(RequestSizeConfiguration.MaximumSupportRequestBytes)]
-    public async Task<IActionResult> Send(SupportMessageRequest request)
+    [ProducesResponseType<SupportRequestDetailsResponse>(StatusCodes.Status201Created)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    public async Task<IActionResult> Send(SupportMessageRequest request, CancellationToken cancellationToken = default)
     {
-        var result = await sendingService.SendAsync(SessionClaims.ReadUserId(User), request.Message);
+        var result = await sendingService.SendAsync(SessionClaims.ReadUserId(User), request.Message, cancellationToken);
 
         if (result is SupportRequestSendingResult.Sent sent)
         {
@@ -93,7 +98,7 @@ public class SupportRequestsController : ControllerBase
         // Au-delà de la limite, la réponse est celle de toutes les limites de débit (SS §6).
         if (result is SupportRequestSendingResult.TooManyRequests)
         {
-            return Problem(statusCode: StatusCodes.Status429TooManyRequests);
+            return this.AnswerTooManyRequests(RetryDelays.SupportRequests);
         }
 
         return Problem(statusCode: StatusCodes.Status409Conflict, title: ErrorMessages.AccountChangedMeanwhile);
@@ -106,9 +111,11 @@ public class SupportRequestsController : ControllerBase
     [IgnoreAntiforgeryToken]
     [EnableRateLimiting(RateLimitingConfiguration.VisitorSupportPolicy)]
     [RequestSizeLimit(RequestSizeConfiguration.MaximumSupportRequestBytes)]
-    public async Task<IActionResult> SendAsVisitor(VisitorSupportMessageRequest request)
+    [ProducesResponseType<MessageResponse>(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    public async Task<IActionResult> SendAsVisitor(VisitorSupportMessageRequest request, CancellationToken cancellationToken = default)
     {
-        var result = await visitorService.SendAsync(request.ContactEmail, request.Message);
+        var result = await visitorService.SendAsync(request.ContactEmail, request.Message, cancellationToken);
 
         if (result is VisitorSupportRequestResult.Sent)
         {

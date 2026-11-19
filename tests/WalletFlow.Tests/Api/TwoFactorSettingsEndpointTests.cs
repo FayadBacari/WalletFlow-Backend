@@ -95,7 +95,7 @@ public class TwoFactorSettingsEndpointTests
         var response = await SendSettingsRequestAsync(browserClient, ActivationStartEndpoint, new { password = WrongPassword }, csrfToken);
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
-        Assert.Equal(ErrorMessages.WrongCurrentPassword, await ReadFieldErrorAsync(response, "Password"));
+        Assert.Equal(ErrorMessages.WrongCurrentPassword, await ReadFieldErrorAsync(response, "password"));
         Assert.DoesNotContain("secret", await response.Content.ReadAsStringAsync());
     }
 
@@ -152,7 +152,7 @@ public class TwoFactorSettingsEndpointTests
         var response = await SendSettingsRequestAsync(browserClient, ActivationFinishEndpoint, new { code = FindWrongCode(api, secret) }, csrfToken);
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
-        Assert.Equal(ErrorMessages.WrongTwoFactorCode, await ReadFieldErrorAsync(response, "Code"));
+        Assert.Equal(ErrorMessages.WrongTwoFactorCode, await ReadFieldErrorAsync(response, "code"));
         Assert.False(account.IsTwoFactorEnabled);
     }
 
@@ -268,10 +268,10 @@ public class TwoFactorSettingsEndpointTests
     }
 
     [Theory]
-    [InlineData(ActivationStartEndpoint, "Password", "Le mot de passe est obligatoire.")]
-    [InlineData(ActivationFinishEndpoint, "Code", "Le code est obligatoire.")]
-    [InlineData(DeactivationEndpoint, "Password", "Le mot de passe est obligatoire.")]
-    [InlineData(DeactivationEndpoint, "Code", "Le code est obligatoire.")]
+    [InlineData(ActivationStartEndpoint, "password", "Le mot de passe est obligatoire.")]
+    [InlineData(ActivationFinishEndpoint, "code", "Le code est obligatoire.")]
+    [InlineData(DeactivationEndpoint, "password", "Le mot de passe est obligatoire.")]
+    [InlineData(DeactivationEndpoint, "code", "Le code est obligatoire.")]
     public async Task MissingFieldAnswersWithItsStableFieldError(string address, string fieldName, string message)
     {
         using var api = new ApiFactoryWithFakes();

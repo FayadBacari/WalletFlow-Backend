@@ -17,9 +17,9 @@ public class AdministratorAccessService
     }
 
     // Dit si l'utilisateur peut utiliser l'administration. Un compte qui n'existe plus n'est pas administrateur.
-    public async Task<AdministratorAccess> CheckAsync(Guid userId)
+    public async Task<AdministratorAccess> CheckAsync(Guid userId, CancellationToken cancellationToken = default)
     {
-        var account = await accountRepository.FindByIdAsync(userId);
+        var account = await accountRepository.FindByIdAsync(userId, cancellationToken);
 
         if (account == null || account.Role != UserRole.Administrator)
         {

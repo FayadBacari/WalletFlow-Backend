@@ -9,28 +9,28 @@ namespace WalletFlow.Application.Bags;
 public interface IBagRepository
 {
     // Donne tous les sacs de l'utilisateur, dans aucun ordre particulier.
-    Task<List<Bag>> FindAllAsync(Guid userId);
+    Task<List<Bag>> FindAllAsync(Guid userId, CancellationToken cancellationToken = default);
 
     // Cherche ce sac parmi ceux de l'utilisateur. Renvoie null s'il n'existe pas, ou s'il est à un autre.
-    Task<Bag?> FindAsync(Guid userId, Guid bagId);
+    Task<Bag?> FindAsync(Guid userId, Guid bagId, CancellationToken cancellationToken = default);
 
     // Compte les sacs de l'utilisateur.
-    Task<int> CountAsync(Guid userId);
+    Task<int> CountAsync(Guid userId, CancellationToken cancellationToken = default);
 
     // Donne le solde de chaque sac de l'utilisateur (DD §11) : les mouvements arrivés dans le sac moins ceux qui en sont partis.
     // Chaque sac de l'utilisateur y est, avec 0 s'il n'a aucun mouvement. Le sac d'un autre n'y est jamais.
-    Task<Dictionary<Guid, long>> SumBalancesAsync(Guid userId);
+    Task<Dictionary<Guid, long>> SumBalancesAsync(Guid userId, CancellationToken cancellationToken = default);
 
     // Compte les mouvements des sacs de l'utilisateur faits depuis cette date.
-    Task<int> CountMovementsSinceAsync(Guid userId, DateTime since);
+    Task<int> CountMovementsSinceAsync(Guid userId, DateTime since, CancellationToken cancellationToken = default);
 
     // Donne une page de l'historique de ce sac de l'utilisateur, les mouvements les plus récents d'abord,
     // et le nombre de tous ses mouvements. La page est vide si le sac n'est pas à lui.
-    Task<BagHistoryPage> FindHistoryAsync(Guid userId, Guid bagId, int page, int pageSize);
+    Task<BagHistoryPage> FindHistoryAsync(Guid userId, Guid bagId, int page, int pageSize, CancellationToken cancellationToken = default);
 
     // Lit la ligne de l'utilisateur et la suit. Elle doit être lue avant tout ce que les contrôles lisent (voir PrepareUserCheck).
     // Renvoie null si son compte n'existe plus.
-    Task<User?> FindUserAsync(Guid userId);
+    Task<User?> FindUserAsync(Guid userId, CancellationToken cancellationToken = default);
 
     // La ligne de l'utilisateur sera écrite même si rien n'y a changé : l'enregistrement échoue alors si une autre requête
     // l'a écrite depuis sa lecture. Les créations de sacs et les déplacements d'argent d'un même utilisateur passent ainsi

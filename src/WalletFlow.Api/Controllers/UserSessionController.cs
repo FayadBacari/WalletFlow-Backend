@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Antiforgery;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using WalletFlow.Api.Configuration;
 using WalletFlow.Api.Contracts;
@@ -7,9 +8,10 @@ using WalletFlow.Application.UserSessions;
 namespace WalletFlow.Api.Controllers;
 
 // Routes d'un utilisateur connecté : le jeton anti-CSRF et la déconnexion (GR Auth, SS §3 et §6).
-// Elles n'ont aucun attribut de sécurité : toute route demande par défaut une session et ce jeton (voir Program.cs).
+// Elles demandent une session, que [Authorize] redit, et ce jeton, comme toute route (voir Program.cs).
 [ApiController]
 [Route("api/account")]
+[Authorize]
 public class UserSessionController : ControllerBase
 {
     public const string LoggedOutMessage = "Tu es déconnecté.";
@@ -27,6 +29,7 @@ public class UserSessionController : ControllerBase
     // GET api/account/csrf-token : donne le jeton à joindre aux requêtes qui modifient des données.
     // Il est lié à l'utilisateur : il se demande donc une fois connecté. Il répond 401 sans session.
     [HttpGet("csrf-token")]
+    [ProducesResponseType<CsrfTokenResponse>(StatusCodes.Status200OK)]
     public IActionResult GetCsrfToken()
     {
         var tokens = antiforgery.GetAndStoreTokens(HttpContext);
@@ -45,14 +48,15 @@ public class UserSessionController : ControllerBase
     // Cette route ne lit aucun corps : la limite empêche seulement qu'on lui en envoie un énorme.
     [HttpPost("logout")]
     [RequestSizeLimit(RequestSizeConfiguration.MaximumAccountRequestBytes)]
-    public async Task<IActionResult> LogOut()
+    [ProducesResponseType<MessageResponse>(StatusCodes.Status200OK)]
+    public async Task<IActionResult> LogOut(CancellationToken cancellationToken = default)
     {
         var sessionToken = Request.Cookies[SessionCookiesConfiguration.SessionCookieName];
 
         // La route demande une session : le cookie est donc là. Sans lui, il n'y aurait aucune session à détruire.
         if (sessionToken != null)
         {
-            await sessionService.CloseAsync(sessionToken);
+            await sessionService.CloseAsync(sessionToken, cancellationToken);
         }
 
         Response.Cookies.Delete(SessionCookiesConfiguration.SessionCookieName, SessionCookiesConfiguration.CreateSessionCookieOptions());

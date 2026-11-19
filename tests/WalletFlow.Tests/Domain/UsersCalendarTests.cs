@@ -1,3 +1,4 @@
+using System.Globalization;
 using WalletFlow.Domain.AccountsAndCategories;
 
 namespace WalletFlow.Tests.Domain;
@@ -19,7 +20,7 @@ public class UsersCalendarTests
     [InlineData("2026-06-30T22:00:00Z", "2026-07-01")]
     public void TodayIsTheDayInParis(string utcNow, string expectedDay)
     {
-        Assert.Equal(DateOnly.Parse(expectedDay), UsersCalendar.FindToday(DateTimeOffset.Parse(utcNow)));
+        Assert.Equal(DateOnly.Parse(expectedDay, CultureInfo.InvariantCulture), UsersCalendar.FindToday(DateTimeOffset.Parse(utcNow, CultureInfo.InvariantCulture)));
     }
 
     // L'heure d'un e-mail est celle de Paris : une heure de plus en hiver, deux en été, et le changement d'heure compte
@@ -34,6 +35,6 @@ public class UsersCalendarTests
     {
         var utcTime = new DateTime(year, month, day, hour, minute, 0, DateTimeKind.Utc);
 
-        Assert.Equal(DateTime.Parse(expectedParisTime), UsersCalendar.ConvertToUsersTime(utcTime));
+        Assert.Equal(DateTime.Parse(expectedParisTime, CultureInfo.InvariantCulture), UsersCalendar.ConvertToUsersTime(utcTime));
     }
 }

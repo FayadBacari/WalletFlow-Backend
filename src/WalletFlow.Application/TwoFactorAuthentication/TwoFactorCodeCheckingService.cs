@@ -11,7 +11,6 @@ public class TwoFactorCodeCheckingService
     private readonly IBackupCodeHasher backupCodeHasher;
     private readonly IAuthenticatorCodeTool authenticatorCodeTool;
     private readonly ITotpSecretProtector secretProtector;
-    private readonly IUsedAuthenticatorCodesRegister usedCodesRegister;
     private readonly TimeProvider clock;
 
     // Reçoit les outils dont la vérification a besoin.
@@ -20,20 +19,18 @@ public class TwoFactorCodeCheckingService
         IBackupCodeHasher backupCodeHasher,
         IAuthenticatorCodeTool authenticatorCodeTool,
         ITotpSecretProtector secretProtector,
-        IUsedAuthenticatorCodesRegister usedCodesRegister,
         TimeProvider clock)
     {
         this.twoFactorRepository = twoFactorRepository;
         this.backupCodeHasher = backupCodeHasher;
         this.authenticatorCodeTool = authenticatorCodeTool;
         this.secretProtector = secretProtector;
-        this.usedCodesRegister = usedCodesRegister;
         this.clock = clock;
     }
 
     // Vérifie un code pour un compte déjà activé. Un texte qui n'a la forme d'aucun code est refusé sans rien calculer.
     // Le secret n'est déchiffré que pour un code de l'application : si la clé est perdue, les codes de secours marchent encore.
-    public async Task<TwoFactorCodeCheckResult> CheckAsync(User account, string typedCode)
+    public async Task<TwoFactorCodeCheckResult> CheckAsync(User account, string typedCode, CancellationToken cancellationToken = default)
     {
         var cleanedCode = TwoFactorAuthenticationRules.CleanCode(typedCode);
 
@@ -46,51 +43,51 @@ public class TwoFactorCodeCheckingService
             }
 
             var secret = secretProtector.Decrypt(account.EncryptedTotpSecret, account.Id);
+            var step = FindStep(secret, cleanedCode);
 
-            return new TwoFactorCodeCheckResult
+            // Un code déjà utilisé, ou plus ancien que le dernier utilisé, reçoit la même réponse qu'un mauvais code (SS §2).
+            if (step == null || !account.CanUseAuthenticatorStep(step.Value))
             {
-                IsCodeValid = CheckAuthenticatorCode(account.Id, secret, cleanedCode)
-            };
+                return new TwoFactorCodeCheckResult { IsCodeValid = false };
+            }
+
+            return new TwoFactorCodeCheckResult { IsCodeValid = true, AuthenticatorStep = step };
         }
 
         if (TwoFactorAuthenticationRules.HasBackupCodeFormat(cleanedCode))
         {
-            return await CheckBackupCodeAsync(account.Id, cleanedCode);
+            return await CheckBackupCodeAsync(account.Id, cleanedCode, cancellationToken);
         }
 
         return new TwoFactorCodeCheckResult { IsCodeValid = false };
     }
 
-    // Vérifie le premier code, à l'activation : seul un code de l'application peut convenir, le compte n'a pas encore de code de secours.
-    public bool CheckFirstCode(Guid accountId, string secret, string typedCode)
+    // Vérifie le premier code, à l'activation : seul un code de l'application peut convenir, le compte n'a pas encore de code de
+    // secours. Renvoie le pas de temps du code, que l'activation note comme utilisé, ou null si le code est faux.
+    public long? CheckFirstCode(string secret, string typedCode)
     {
         var cleanedCode = TwoFactorAuthenticationRules.CleanCode(typedCode);
 
-        return CheckAuthenticatorCode(accountId, secret, cleanedCode);
-    }
-
-    // Compare le code au secret, puis le note comme utilisé : un code déjà utilisé reçoit la même réponse qu'un mauvais code (SS §2).
-    private bool CheckAuthenticatorCode(Guid accountId, string secret, string cleanedCode)
-    {
-        var period = authenticatorCodeTool.FindValidPeriod(
-            secret,
-            cleanedCode,
-            clock.GetUtcNow().UtcDateTime);
-
-        if (period == null)
+        if (!TwoFactorAuthenticationRules.HasAuthenticatorCodeFormat(cleanedCode))
         {
-            return false;
+            return null;
         }
 
-        return usedCodesRegister.TryRecordUse(accountId, period.Value);
+        return FindStep(secret, cleanedCode);
+    }
+
+    // Compare le code au secret, et renvoie son pas de temps s'il est valable maintenant.
+    private long? FindStep(string secret, string cleanedCode)
+    {
+        return authenticatorCodeTool.FindValidPeriod(secret, cleanedCode, clock.GetUtcNow().UtcDateTime);
     }
 
     // Hache le code une seule fois, avec le sel du compte, puis compare cette empreinte à celle de chaque code encore inutilisé (SS §2).
     // Un mauvais code ne coûte donc qu'un seul calcul Argon2id, quel que soit le nombre de codes qui restent.
-    private async Task<TwoFactorCodeCheckResult> CheckBackupCodeAsync(Guid accountId, string cleanedCode)
+    private async Task<TwoFactorCodeCheckResult> CheckBackupCodeAsync(Guid accountId, string cleanedCode, CancellationToken cancellationToken = default)
     {
-        var unusedCodes = await twoFactorRepository.FindUnusedBackupCodesAsync(accountId);
-        var codeHash = await backupCodeHasher.HashAsync(cleanedCode, accountId);
+        var unusedCodes = await twoFactorRepository.FindUnusedBackupCodesAsync(accountId, cancellationToken);
+        var codeHash = await backupCodeHasher.HashAsync(cleanedCode, accountId, cancellationToken);
 
         foreach (var backupCode in unusedCodes)
         {

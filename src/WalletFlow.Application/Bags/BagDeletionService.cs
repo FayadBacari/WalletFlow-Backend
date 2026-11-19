@@ -18,17 +18,18 @@ public class BagDeletionService
 
     // Supprime le sac s'il est à l'utilisateur. Deux suppressions simultanées de deux sacs reliés par un mouvement
     // se gênent dans la base : la seconde échoue, puis réussit au passage suivant, quand la première est enregistrée.
-    public async Task<BagDeletionResult> DeleteAsync(Guid userId, Guid bagId)
+    public async Task<BagDeletionResult> DeleteAsync(Guid userId, Guid bagId, CancellationToken cancellationToken = default)
     {
         return await savingService.SaveWithRetriesAsync(
-            () => PrepareDeletionAsync(userId, bagId),
-            new BagDeletionResult.NotSaved());
+            () => PrepareDeletionAsync(userId, bagId, cancellationToken),
+            new BagDeletionResult.NotSaved(),
+            cancellationToken);
     }
 
     // Un passage : lit le sac parmi ceux de l'utilisateur, puis prépare sa suppression.
-    private async Task<PreparedChanges<BagDeletionResult>> PrepareDeletionAsync(Guid userId, Guid bagId)
+    private async Task<PreparedChanges<BagDeletionResult>> PrepareDeletionAsync(Guid userId, Guid bagId, CancellationToken cancellationToken = default)
     {
-        var bag = await bagRepository.FindAsync(userId, bagId);
+        var bag = await bagRepository.FindAsync(userId, bagId, cancellationToken);
 
         if (bag == null)
         {

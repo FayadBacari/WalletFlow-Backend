@@ -26,13 +26,18 @@ public class SecurityHeadersMiddleware
         await next(context);
     }
 
-    // Écrit les quatre en-têtes de sécurité dans la réponse.
+    // Écrit les six en-têtes de sécurité dans la réponse. Aucune réponse n'est gardée par un navigateur ou un intermédiaire :
+    // toutes contiennent des données personnelles, des données financières, un jeton ou une erreur. Ce rappel passe après ceux
+    // des routes et du framework, et remplace donc tout autre Cache-Control. Aucun autre site ne peut charger une réponse comme
+    // une image ou un script : le site, servi par la même origine que l'API, n'est jamais gêné.
     private static void AddSecurityHeaders(HttpResponse response)
     {
+        response.Headers.CacheControl = "no-store";
         response.Headers["Content-Security-Policy"] =
             "default-src 'self'; script-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'";
         response.Headers["X-Content-Type-Options"] = "nosniff";
         response.Headers["Referrer-Policy"] = "strict-origin-when-cross-origin";
         response.Headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()";
+        response.Headers["Cross-Origin-Resource-Policy"] = "same-origin";
     }
 }

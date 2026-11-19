@@ -18,7 +18,7 @@ public class MonthlyTotalsChartService
 
     // Donne les totaux de chaque mois civil que touche la période, dans l'ordre. Un mois sans opération vaut zéro :
     // les barres ne sautent aucun mois. Le premier et le dernier mois ne comptent que les jours de la période.
-    public async Task<ChartPeriodResult<List<MonthTotals>>> ReadAsync(Guid userId, DateOnly from, DateOnly to, Guid? accountId)
+    public async Task<ChartPeriodResult<List<MonthTotals>>> ReadAsync(Guid userId, DateOnly from, DateOnly to, Guid? accountId, CancellationToken cancellationToken = default)
     {
         if (to < from)
         {
@@ -30,7 +30,7 @@ public class MonthlyTotalsChartService
             return new ChartPeriodResult<List<MonthTotals>>.PeriodTooLong();
         }
 
-        var totals = await transactionRepository.SumByCategoryAndMonthAsync(userId, from, to, accountId);
+        var totals = await transactionRepository.SumByCategoryAndMonthAsync(userId, from, to, accountId, cancellationToken);
         var firstMonth = new DateOnly(from.Year, from.Month, 1);
         var months = new List<MonthTotals>();
 

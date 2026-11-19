@@ -34,11 +34,11 @@ public class AccountIdentityCheckingService
 
     // Le mot de passe passe d'abord : un mauvais mot de passe ne consomme donc pas le code.
     // Les mauvais mots de passe saisis ici ne comptent pas pour le blocage du compte (SS §2).
-    public async Task<AccountIdentityCheckResult> CheckAsync(User account, string password, string? code)
+    public async Task<AccountIdentityCheckResult> CheckAsync(User account, string password, string? code, CancellationToken cancellationToken = default)
     {
         var normalizedPassword = PasswordRules.Normalize(password);
 
-        if (!await passwordHasher.VerifyAsync(normalizedPassword, account.PasswordHash))
+        if (!await passwordHasher.VerifyAsync(normalizedPassword, account.PasswordHash, cancellationToken))
         {
             return new AccountIdentityCheckResult { IsConfirmed = false };
         }
@@ -53,34 +53,55 @@ public class AccountIdentityCheckingService
             return new AccountIdentityCheckResult { IsConfirmed = false };
         }
 
-        var codeCheck = await codeCheckingService.CheckAsync(account, code);
+        var codeCheck = await codeCheckingService.CheckAsync(account, code, cancellationToken);
 
         return new AccountIdentityCheckResult
         {
             IsConfirmed = codeCheck.IsCodeValid,
-            BackupCodeId = codeCheck.BackupCodeId
+            BackupCodeId = codeCheck.BackupCodeId,
+            AuthenticatorStep = codeCheck.AuthenticatorStep
         };
     }
 
-    // Prépare l'usage du code de secours reconnu, s'il y en a un, avec l'alerte qui l'annonce (GR Notif). Renvoie faux s'il
-    // n'existe plus ou s'il a déjà servi : rien n'est alors préparé. L'enregistrement refusera tout si une autre requête
-    // s'en sert au même instant.
-    public async Task<bool> TryPrepareBackupCodeUseAsync(Guid? backupCodeId, IPAddress? ipAddress)
+    // Prépare l'usage du code reconnu, s'il y en a un, sur le compte relu par le passage : le pas de temps d'un code de
+    // l'application, ou le code de secours avec l'alerte qui l'annonce (GR Notif). Renvoie faux si le code ne peut plus servir :
+    // un code de l'application déjà utilisé entre-temps, un code de secours effacé ou déjà utilisé. Rien n'est alors préparé.
+    // L'enregistrement refusera tout si une autre requête se sert du même code au même instant : le compte et le code de
+    // secours sont contrôlés à l'écriture.
+    public async Task<bool> TryPrepareCodeUseAsync(
+        User account,
+        Guid? backupCodeId,
+        long? authenticatorStep,
+        IPAddress? ipAddress,
+        CancellationToken cancellationToken = default)
     {
-        if (backupCodeId == null)
-        {
-            return true;
-        }
-
-        var backupCode = await twoFactorRepository.FindBackupCodeAsync(backupCodeId.Value);
-        if (backupCode == null || backupCode.UsedAt != null)
+        if (authenticatorStep is long step && !account.CanUseAuthenticatorStep(step))
         {
             return false;
         }
 
-        var now = clock.GetUtcNow().UtcDateTime;
-        backupCode.MarkAsUsed(now);
-        emailRequests.PrepareRequest(EmailRequest.ForBackupCodeUse(backupCode.UserId, ipAddress, now));
+        BackupCode? backupCode = null;
+        if (backupCodeId != null)
+        {
+            backupCode = await twoFactorRepository.FindBackupCodeAsync(backupCodeId.Value, cancellationToken);
+            if (backupCode == null || backupCode.UsedAt != null || backupCode.UserId != account.Id)
+            {
+                return false;
+            }
+        }
+
+        if (authenticatorStep is long usedStep)
+        {
+            account.UseAuthenticatorStep(usedStep);
+        }
+
+        if (backupCode != null)
+        {
+            var now = clock.GetUtcNow().UtcDateTime;
+            backupCode.MarkAsUsed(now);
+            emailRequests.PrepareRequest(EmailRequest.ForBackupCodeUse(backupCode.UserId, ipAddress, now));
+        }
+
         return true;
     }
 }

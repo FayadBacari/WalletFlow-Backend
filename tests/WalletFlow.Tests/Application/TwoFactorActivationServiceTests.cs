@@ -244,6 +244,7 @@ public class TwoFactorActivationServiceTests
         var waitingLoginToken = await services.LogInThenGetWaitingLoginTokenAsync();
         var result = await services.FinishLoginAsync(waitingLoginToken, firstCode);
 
+        Assert.Equal(services.CurrentStep(), account.LastAuthenticatorStep);
         Assert.IsType<TwoFactorLoginResult.WrongCode>(result);
     }
 
@@ -332,7 +333,7 @@ public class TwoFactorActivationServiceTests
     {
         var account = services.AddAccountWithoutTwoFactor();
         var secret = await StartActivationThenGetSecretAsync(account);
-        account.ActivateTwoFactor("secret-de-l-autre-onglet");
+        account.ActivateTwoFactor("secret-de-l-autre-onglet", TwoFactorTestTools.OldStep);
 
         var result = await FinishActivationAsync(account, services.CalculateCurrentCode(secret));
 

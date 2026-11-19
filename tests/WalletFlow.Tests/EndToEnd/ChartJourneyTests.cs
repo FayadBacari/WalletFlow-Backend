@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
@@ -56,7 +57,7 @@ public class ChartJourneyTests
             await ReadSuccessAsync(await SendAsync(browser, "/api/bank-connections", new { bankName = FakeBankDataProvider.BankName }, csrfToken));
             var state = api.BankProvider.AuthorizationRequests.Last().State;
             await ReadSuccessAsync(await SendAsync(browser, "/api/bank-connections/finish", new { code = "code-1", state = state }, csrfToken));
-            var currentMonth = "?from=" + monthStart.ToString("yyyy-MM-dd") + "&to=" + today.ToString("yyyy-MM-dd");
+            var currentMonth = "?from=" + monthStart.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) + "&to=" + today.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
 
             // La répartition du mois en cours : les courses moins leur remboursement. Le salaire est un revenu.
             var categories = await ReadSuccessAsync(await browser.GetAsync("/api/charts/categories" + currentMonth));
@@ -65,7 +66,7 @@ public class ChartJourneyTests
             Assert.Equal(2000, food.GetProperty("expenseInCents").GetInt64());
 
             // Les trois derniers mois, celui du milieu sans opération.
-            var monthsQuery = "?from=" + monthStart.AddMonths(-2).ToString("yyyy-MM-dd") + "&to=" + today.ToString("yyyy-MM-dd");
+            var monthsQuery = "?from=" + monthStart.AddMonths(-2).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) + "&to=" + today.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
             var months = (await ReadSuccessAsync(await browser.GetAsync("/api/charts/months" + monthsQuery))).GetProperty("months").EnumerateArray().ToList();
             Assert.Equal(new List<long> { 6000, 0, 2000 }, months.Select(month => month.GetProperty("expensesInCents").GetInt64()).ToList());
             Assert.Equal(248_000, months[2].GetProperty("savingsInCents").GetInt64());

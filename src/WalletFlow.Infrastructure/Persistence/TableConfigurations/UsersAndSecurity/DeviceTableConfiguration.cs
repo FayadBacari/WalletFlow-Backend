@@ -19,6 +19,7 @@ public class DeviceTableConfiguration : IEntityTypeConfiguration<Device>
         builder.Property(nameof(Device.DeviceToken)).HasColumnName("jeton_appareil").HasColumnType("char(64)");
         builder.Property(nameof(Device.PushToken)).HasColumnName("jeton_push");
         builder.Property(nameof(Device.UserId)).HasColumnName("id_utilisateur");
+        builder.Property(nameof(Device.LastUsedAt)).HasColumnName("date_derniere_connexion_appareil");
 
         // Un appareil appartient à un utilisateur et disparaît avec lui (ON DELETE CASCADE).
         builder.HasOne<User>().WithMany()

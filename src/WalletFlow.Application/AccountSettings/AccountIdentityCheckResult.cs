@@ -7,4 +7,7 @@ public class AccountIdentityCheckResult
 
     // Le code de secours reconnu, s'il y en a un : il ne sera marqué utilisé qu'avec les autres changements.
     public Guid? BackupCodeId { get; init; }
+
+    // Le pas de temps du code de l'application reconnu, s'il y en a un : il ne sera noté utilisé qu'avec les autres changements.
+    public long? AuthenticatorStep { get; init; }
 }

@@ -1,18 +1,23 @@
+using System.Text.Json;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Infrastructure;
 using Microsoft.AspNetCore.Mvc.ModelBinding;
 using Microsoft.AspNetCore.Mvc.ModelBinding.Metadata;
+using WalletFlow.Api.Contracts;
 
 namespace WalletFlow.Api.Configuration;
 
 // Un seul format pour toutes les erreurs de l'API (SS §10) : un titre en français et, pour une requête
-// refusée, des clés stables. Aucune réponse ne recopie un nom interne du code ni un texte du visiteur.
+// refusée, des clés stables, écrites comme les champs du JSON. Aucune réponse ne recopie un nom interne du code
+// ni un texte du visiteur.
 public static class ApiErrorConfiguration
 {
     public const string RefusedRequestTitle = "La requête n'est pas valide.";
-    public const string GeneralErrorsKey = "Request";
+    // La clé d'une erreur qui ne vise aucun champ. Elle ne doit pas s'écrire comme un nom de paramètre du code, « request » par exemple.
+    public const string GeneralErrorsKey = "general";
     public const string UnreadableRequestMessage = "La requête n'est pas lisible.";
     public const string InvalidValueMessage = "Cette valeur n'est pas valide.";
+    public const string CsrfRefusalMessage = "Le jeton anti-CSRF manque ou n'est pas valide. Demande un nouveau jeton, puis réessaie.";
 
     // Remplace les messages d'ASP.NET Core pour une valeur illisible, comme un nombre écrit en lettres dans l'adresse.
     // Ceux d'origine sont en anglais, et recopient la valeur envoyée par le visiteur : chacun devient le même message en français.
@@ -31,14 +36,41 @@ public static class ApiErrorConfiguration
         messages.SetNonPropertyValueMustBeANumberAccessor(() => InvalidValueMessage);
     }
 
-    // Met en français le titre des erreurs produites par ASP.NET Core.
-    public static void TranslateTitle(ProblemDetailsContext context)
+    // Prépare toute erreur avant son envoi : un titre en français, un lien qui décrit son code, et des clés de champ écrites
+    // comme dans le JSON. Les erreurs des règles de validation et celles des contrôleurs passent toutes les deux par ici.
+    public static void PrepareProblem(ProblemDetailsContext context)
     {
-        var frenchTitle = FindFrenchTitle(context.ProblemDetails.Status);
+        TranslateTitle(context.ProblemDetails);
+        context.ProblemDetails.Type ??= FindMissingType(context.ProblemDetails.Status);
+
+        if (context.ProblemDetails is HttpValidationProblemDetails validationProblem)
+        {
+            WriteKeysLikeJson(validationProblem.Errors);
+        }
+    }
+
+    // Met en français le titre des erreurs produites par ASP.NET Core.
+    private static void TranslateTitle(ProblemDetails problemDetails)
+    {
+        var frenchTitle = FindFrenchTitle(problemDetails.Status);
 
         if (frenchTitle != null)
         {
-            context.ProblemDetails.Title = frenchTitle;
+            problemDetails.Title = frenchTitle;
+        }
+    }
+
+    // Écrit chaque clé comme le champ du JSON que le site envoie : « newEmail », et non « NewEmail ».
+    // Deux clés qui s'écrivent alors de la même façon gardent tous leurs messages.
+    private static void WriteKeysLikeJson(IDictionary<string, string[]> errors)
+    {
+        var entries = errors.ToList();
+        errors.Clear();
+
+        foreach (var (key, messages) in entries)
+        {
+            var jsonKey = JsonNamingPolicy.CamelCase.ConvertName(key);
+            errors[jsonKey] = errors.TryGetValue(jsonKey, out var earlierMessages) ? [.. earlierMessages, .. messages] : messages;
         }
     }
 
@@ -66,6 +98,18 @@ public static class ApiErrorConfiguration
         }
     }
 
+    // Donne le lien qui décrit un code d'erreur, pour le seul code de l'API qu'ASP.NET Core laisse sans lien : 429.
+    private static string? FindMissingType(int? statusCode)
+    {
+        switch (statusCode)
+        {
+            case StatusCodes.Status429TooManyRequests:
+                return "https://tools.ietf.org/html/rfc6585#section-4";
+            default:
+                return null;
+        }
+    }
+
     // Construit la réponse de toute requête refusée : celle des règles de validation, et celle des contrôleurs.
     public static IActionResult CreateRefusedRequestAnswer(ActionContext context)
     {
@@ -79,9 +123,26 @@ public static class ApiErrorConfiguration
             }
         }
 
-        var problemDetailsFactory = context.HttpContext.RequestServices.GetRequiredService<ProblemDetailsFactory>();
+        return CreateBadRequest(context.HttpContext, errors);
+    }
+
+    // Construit le refus d'une écriture sans jeton anti-CSRF valable (SS §6). Son unique erreur a pour clé le champ qui porte
+    // le jeton dans la réponse de GET api/account/csrf-token : le site sait quoi redemander. Le message est le même pour un jeton
+    // absent, inventé ou d'un autre compte : il ne dit rien de plus.
+    public static IActionResult CreateCsrfRefusalAnswer(HttpContext httpContext)
+    {
+        var errors = new ModelStateDictionary();
+        errors.AddModelError(nameof(CsrfTokenResponse.CsrfToken), CsrfRefusalMessage);
+
+        return CreateBadRequest(httpContext, errors);
+    }
+
+    // Construit une réponse 400 au format des requêtes refusées, avec ces erreurs.
+    private static BadRequestObjectResult CreateBadRequest(HttpContext httpContext, ModelStateDictionary errors)
+    {
+        var problemDetailsFactory = httpContext.RequestServices.GetRequiredService<ProblemDetailsFactory>();
         var problemDetails = problemDetailsFactory.CreateValidationProblemDetails(
-            context.HttpContext,
+            httpContext,
             errors,
             StatusCodes.Status400BadRequest,
             RefusedRequestTitle);

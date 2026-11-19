@@ -4,7 +4,7 @@ using Microsoft.Extensions.Logging;
 namespace WalletFlow.Tests.Fakes;
 
 // Garde en mémoire tous les messages du journal technique, pour qu'un test puisse les relire.
-public class MemoryLoggerProvider : ILoggerProvider
+public sealed class MemoryLoggerProvider : ILoggerProvider
 {
     public ConcurrentQueue<string> Messages { get; } = new ConcurrentQueue<string>();
 
@@ -20,7 +20,7 @@ public class MemoryLoggerProvider : ILoggerProvider
     }
 
     // Journal qui ajoute chaque message à la liste commune, avec le texte de son erreur.
-    private class MemoryLogger : ILogger
+    private sealed class MemoryLogger : ILogger
     {
         private readonly ConcurrentQueue<string> messages;
 

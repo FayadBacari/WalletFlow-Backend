@@ -1108,6 +1108,154 @@ BEGIN
 END;
 $$;
 
+
+-- 21. SS §3 : une session ne sert jamais avant son ouverture. Sans autre date, une session s'ouvre et sert maintenant, et
+--     un nouvel appareil est noté utilisé maintenant. L'application note chaque connexion depuis un appareil connu.
+DO $$
+DECLARE
+    utilisateur_id uuid;
+BEGIN
+    SELECT identifiant INTO utilisateur_id FROM donnees_communes_aux_tests_de_contraintes WHERE nom = 'utilisateur';
+
+    PERFORM pg_temp.verifier_que_la_base_refuse_cette_instruction(
+        format($sql$INSERT INTO session (id_session, date_derniere_activite, id_utilisateur, date_creation_session)
+                    VALUES (repeat('c', 64), now() - interval '1 second', %L, now())$sql$, utilisateur_id),
+        '23514', 'une session ne sert jamais avant son ouverture');
+
+    INSERT INTO session (id_session, id_utilisateur) VALUES (repeat('d', 64), utilisateur_id);
+    INSERT INTO appareil (jeton_appareil, id_utilisateur) VALUES (repeat('e', 64), utilisateur_id);
+    ASSERT (SELECT date_creation_session = now() AND date_derniere_activite = now()
+            FROM session WHERE id_session = repeat('d', 64))
+       AND (SELECT date_derniere_connexion_appareil = now() FROM appareil WHERE jeton_appareil = repeat('e', 64)),
+        'ÉCHEC : une nouvelle session et un nouvel appareil datent de maintenant';
+    RAISE NOTICE 'OK : une session s''ouvre et sert maintenant, et un nouvel appareil est noté utilisé maintenant';
+
+    UPDATE appareil SET date_derniere_connexion_appareil = now() + interval '1 day' WHERE jeton_appareil = repeat('e', 64);
+    RAISE NOTICE 'OK : l''application note la connexion depuis un appareil connu';
+END;
+$$;
+
+
+-- 22. SS §2 : un code de l'application ne sert qu'une fois. Le pas de temps du dernier code accepté n'existe qu'avec la double
+--     authentification, et il est positif. L'application le note à chaque code accepté, mais ne l'écrit pas à l'inscription.
+DO $$
+DECLARE
+    utilisateur_id uuid;
+BEGIN
+    SELECT identifiant INTO utilisateur_id FROM donnees_communes_aux_tests_de_contraintes WHERE nom = 'utilisateur';
+
+    PERFORM pg_temp.verifier_que_la_base_refuse_cette_instruction(
+        format($sql$UPDATE utilisateur SET dernier_pas_totp = 1000 WHERE id_utilisateur = %L$sql$, utilisateur_id),
+        '23514', 'un pas de code n''existe qu''avec la double authentification');
+
+    UPDATE utilisateur SET double_auth_activee = TRUE, secret_totp_chiffre = 'secret-chiffre', dernier_pas_totp = 1000
+    WHERE id_utilisateur = utilisateur_id;
+    RAISE NOTICE 'OK : l''application note le pas du dernier code accepté';
+
+    PERFORM pg_temp.verifier_que_la_base_refuse_cette_instruction(
+        format($sql$UPDATE utilisateur SET dernier_pas_totp = 0 WHERE id_utilisateur = %L$sql$, utilisateur_id),
+        '23514', 'le pas d''un code est positif');
+    PERFORM pg_temp.verifier_que_la_base_refuse_cette_instruction(
+        format($sql$UPDATE utilisateur SET double_auth_activee = FALSE, secret_totp_chiffre = NULL
+                    WHERE id_utilisateur = %L$sql$, utilisateur_id),
+        '23514', 'la désactivation oublie aussi le pas du dernier code');
+
+    UPDATE utilisateur SET double_auth_activee = FALSE, secret_totp_chiffre = NULL, dernier_pas_totp = NULL
+    WHERE id_utilisateur = utilisateur_id;
+    RAISE NOTICE 'OK : la désactivation oublie le secret et le pas du dernier code';
+
+    PERFORM pg_temp.verifier_que_la_base_refuse_cette_instruction(
+        $sql$INSERT INTO utilisateur (email_utilisateur, mot_de_passe_hash, double_auth_activee, secret_totp_chiffre, dernier_pas_totp)
+             VALUES ('test-pas-totp@exemple.test', 'empreinte', TRUE, 'secret-chiffre', 1000)$sql$,
+        '42501', 'l''application n''écrit pas le pas d''un code à l''inscription');
+END;
+$$;
+
+
+-- 23. SS §7 et MPD §3 : l'application ne crée aucun objet dans le schéma public, ni table, ni fonction, ni type : un objet
+--     à elle pourrait y cacher du code. PostgreSQL 15 retire ce droit à tous les rôles ; le script le retire aussi avec
+--     PostgreSQL 13 et 14.
+DO $$
+BEGIN
+    ASSERT NOT has_schema_privilege('walletflow_app', 'public', 'CREATE'),
+        'ÉCHEC : l''application a le droit de créer des objets dans le schéma public';
+    RAISE NOTICE 'OK : l''application n''a pas le droit de créer des objets dans le schéma public';
+    PERFORM pg_temp.verifier_que_la_base_refuse_cette_instruction(
+        $sql$CREATE TABLE public.table_de_l_application (id integer)$sql$,
+        '42501', 'l''application ne peut pas créer de table dans le schéma public');
+    PERFORM pg_temp.verifier_que_la_base_refuse_cette_instruction(
+        $sql$CREATE FUNCTION public.fonction_de_l_application() RETURNS integer LANGUAGE sql AS 'SELECT 1'$sql$,
+        '42501', 'l''application ne peut pas créer de fonction dans le schéma public');
+    PERFORM pg_temp.verifier_que_la_base_refuse_cette_instruction(
+        $sql$CREATE TYPE public.type_de_l_application AS (valeur integer)$sql$,
+        '42501', 'l''application ne peut pas créer de type dans le schéma public');
+END;
+$$;
+
+
+-- 24. SS §7 et MPD §3 : les fonctions SECURITY DEFINER cherchent les tables temporaires en dernier, et nomment le schéma
+--     de leurs tables. L'application crée ici des tables temporaires aux noms des vraies tables, avec un déclencheur
+--     piégé, puis lance les deux fonctions : le piège ne doit jamais s'exécuter, sinon le code de l'application tournerait
+--     avec les droits du propriétaire du script. Cette section est la dernière : ses tables temporaires cachent les
+--     vraies tables pour le reste de la session.
+DO $$
+BEGIN
+    ASSERT NOT EXISTS (
+        SELECT 1
+        FROM pg_proc p
+        JOIN pg_namespace n ON n.oid = p.pronamespace
+        WHERE n.nspname = 'public'
+          AND p.prosecdef
+          AND NOT ('search_path=public, pg_temp' = ANY (coalesce(p.proconfig, '{}')))),
+        'ÉCHEC : une fonction SECURITY DEFINER ne cherche pas les tables temporaires en dernier';
+    RAISE NOTICE 'OK : chaque fonction SECURITY DEFINER cherche les tables temporaires en dernier';
+END;
+$$;
+
+-- Les sections précédentes ont déjà lancé les deux fonctions : PostgreSQL garde leurs plans pour toute la session, avec
+-- les vraies tables. Un attaquant ouvre une nouvelle session : DISCARD PLANS oublie ces plans pour faire comme lui.
+DISCARD PLANS;
+
+CREATE TEMP TABLE pieges_declenches (droits_utilises text);
+CREATE FUNCTION pg_temp.declencher_le_piege() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    INSERT INTO pg_temp.pieges_declenches VALUES (current_user);
+    RETURN OLD;
+END;
+$$;
+
+CREATE TEMP TABLE evenement_securite (date_evenement timestamptz, adresse_ip_evenement inet, id_utilisateur uuid);
+CREATE TRIGGER piege BEFORE DELETE ON pg_temp.evenement_securite
+    FOR EACH ROW EXECUTE FUNCTION pg_temp.declencher_le_piege();
+INSERT INTO pg_temp.evenement_securite VALUES (now() - interval '2 years');
+
+CREATE TEMP TABLE sac (id_sac uuid, id_utilisateur uuid);
+CREATE TEMP TABLE mouvement_sac (id_sac_depart uuid, id_sac_arrivee uuid);
+CREATE TRIGGER piege BEFORE DELETE ON pg_temp.mouvement_sac
+    FOR EACH ROW EXECUTE FUNCTION pg_temp.declencher_le_piege();
+
+DO $$
+DECLARE
+    compte_piege_id UUID;
+BEGIN
+    INSERT INTO public.utilisateur (email_utilisateur, mot_de_passe_hash, email_confirme)
+    VALUES ('test-piege-temporaire@exemple.test', 'empreinte', TRUE)
+    RETURNING id_utilisateur INTO compte_piege_id;
+    INSERT INTO pg_temp.sac VALUES ('00000000-0000-0000-0000-0000000000f1', compte_piege_id);
+    INSERT INTO pg_temp.mouvement_sac VALUES ('00000000-0000-0000-0000-0000000000f1', NULL);
+
+    PERFORM public.fn_effacer_vieux_evenements();
+    DELETE FROM public.utilisateur WHERE id_utilisateur = compte_piege_id;
+
+    ASSERT NOT EXISTS (SELECT 1 FROM pg_temp.pieges_declenches),
+        'ÉCHEC : une table temporaire a pris la place d''une vraie table, et son déclencheur a tourné avec les droits de '
+        || (SELECT droits_utilises FROM pg_temp.pieges_declenches LIMIT 1);
+    RAISE NOTICE 'OK : une table temporaire de l''application ne prend jamais la place d''une vraie table';
+END;
+$$;
+
+DROP TABLE pg_temp.evenement_securite, pg_temp.sac, pg_temp.mouvement_sac, pg_temp.pieges_declenches;
+
 \echo
 \echo 'Tous les tests sont passés. La transaction est annulée : la base reste vide.'
 ROLLBACK;

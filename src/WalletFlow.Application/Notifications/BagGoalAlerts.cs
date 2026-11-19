@@ -24,33 +24,33 @@ public class BagGoalAlerts
 
     // Ce montant arrive dans ce sac de l'utilisateur, avec le mouvement que l'appelant prépare : si le sac atteint alors
     // son objectif pour la première fois, son alerte part avec le mouvement.
-    public async Task PrepareAfterArrivalAsync(Guid userId, Guid bagId, int arrivingAmountInCents, DateTime now)
+    public async Task PrepareAfterArrivalAsync(Guid userId, Guid bagId, int arrivingAmountInCents, DateTime now, CancellationToken cancellationToken = default)
     {
-        var bag = await bagRepository.FindAsync(userId, bagId);
+        var bag = await bagRepository.FindAsync(userId, bagId, cancellationToken);
 
         if (bag == null)
         {
             return;
         }
 
-        var balances = await bagRepository.SumBalancesAsync(userId);
+        var balances = await bagRepository.SumBalancesAsync(userId, cancellationToken);
         var balanceAfterInCents = balances.GetValueOrDefault(bagId) + arrivingAmountInCents;
 
         if (!AlertRules.IsBagGoalReached(balanceAfterInCents, bag.TargetAmountInCents)
-            || await alertRepository.FindBagAlertAsync(bagId) != null)
+            || await alertRepository.FindBagAlertAsync(bagId, cancellationToken) != null)
         {
             return;
         }
 
-        await alertPreparation.TryPrepareAsync(Alert.ForBagGoal(userId, bagId, now));
+        await alertPreparation.TryPrepareAsync(Alert.ForBagGoal(userId, bagId, now), cancellationToken);
     }
 
     // L'objectif de ce sac vient de changer. Un nouveau montant, ou l'objectif enlevé, efface l'alerte de l'ancien (DD §9.3) ;
     // changer seulement la date garde le même montant à atteindre, et donc son alerte. Puis l'alerte part si le sac
     // atteint déjà le nouveau montant.
-    public async Task PrepareAfterGoalChangeAsync(Bag bag, int? previousTargetInCents, long balanceInCents, DateTime now)
+    public async Task PrepareAfterGoalChangeAsync(Bag bag, int? previousTargetInCents, long balanceInCents, DateTime now, CancellationToken cancellationToken = default)
     {
-        var alert = await alertRepository.FindBagAlertAsync(bag.Id);
+        var alert = await alertRepository.FindBagAlertAsync(bag.Id, cancellationToken);
 
         if (alert != null && previousTargetInCents != bag.TargetAmountInCents)
         {
@@ -60,7 +60,7 @@ public class BagGoalAlerts
 
         if (alert == null && AlertRules.IsBagGoalReached(balanceInCents, bag.TargetAmountInCents))
         {
-            await alertPreparation.TryPrepareAsync(Alert.ForBagGoal(bag.UserId, bag.Id, now));
+            await alertPreparation.TryPrepareAsync(Alert.ForBagGoal(bag.UserId, bag.Id, now), cancellationToken);
         }
     }
 }

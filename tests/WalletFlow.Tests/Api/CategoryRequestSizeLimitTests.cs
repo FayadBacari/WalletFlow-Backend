@@ -16,7 +16,7 @@ namespace WalletFlow.Tests.Api;
 // Vérifie la limite de taille des routes des catégories avec le vrai serveur Kestrel, en HTTPS et en mode production.
 // Le serveur de test n'applique pas cette limite, et ces routes demandent une session, dont les cookies Secure
 // ne voyagent qu'en HTTPS. Le certificat est créé pour le test, et le client n'accepte que lui.
-public class CategoryRequestSizeLimitTests : IDisposable
+public sealed class CategoryRequestSizeLimitTests : IDisposable
 {
     private readonly X509Certificate2 certificate = ThrowawayHttpsCertificate.Create();
     private readonly ApiFactoryInProduction api = new ApiFactoryInProduction();

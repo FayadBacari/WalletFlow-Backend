@@ -65,6 +65,14 @@ public class AccountSettingsEndpointTests
         return api.EmailSender.SentEmails.Single(email => email.RecipientAddress == recipient);
     }
 
+    // Donne les noms des champs qui portent une erreur dans une réponse refusée.
+    private static async Task<List<string>> ReadErrorFieldsAsync(HttpResponseMessage response)
+    {
+        var errors = JsonDocument.Parse(await response.Content.ReadAsStringAsync()).RootElement.GetProperty("errors");
+
+        return errors.EnumerateObject().Select(field => field.Name).ToList();
+    }
+
     // --- Profil
 
     [Fact]
@@ -148,8 +156,8 @@ public class AccountSettingsEndpointTests
         var response = await SendSettingsRequestAsync(client, NameEndpoint, new { lastName = new string('a', 51), firstName = firstNameWithInvisibleCharacter }, csrfToken);
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
-        Assert.Equal(ErrorMessages.PersonalNameBreaksRules, await ReadFieldErrorAsync(response, "LastName"));
-        Assert.Equal(ErrorMessages.PersonalNameBreaksRules, await ReadFieldErrorAsync(response, "FirstName"));
+        Assert.Equal(ErrorMessages.PersonalNameBreaksRules, await ReadFieldErrorAsync(response, "lastName"));
+        Assert.Equal(ErrorMessages.PersonalNameBreaksRules, await ReadFieldErrorAsync(response, "firstName"));
         Assert.Null(account.LastName);
     }
 
@@ -215,7 +223,7 @@ public class AccountSettingsEndpointTests
         var response = await SendPasswordChangeAsync(client, csrfToken, WrongPassword);
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
-        Assert.Equal(ErrorMessages.WrongCurrentPassword, await ReadFieldErrorAsync(response, "CurrentPassword"));
+        Assert.Equal(ErrorMessages.WrongCurrentPassword, await ReadFieldErrorAsync(response, "currentPassword"));
         Assert.Null(FindCookie(response, SessionCookiesConfiguration.SessionCookieName));
     }
 
@@ -230,7 +238,23 @@ public class AccountSettingsEndpointTests
         var response = await SendSettingsRequestAsync(client, PasswordEndpoint, new { currentPassword = ValidPassword, newPassword = "trop-court" }, csrfToken);
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
-        Assert.Equal(ErrorMessages.PasswordBreaksRules, await ReadFieldErrorAsync(response, "NewPassword"));
+        Assert.Equal(ErrorMessages.PasswordBreaksRules, await ReadFieldErrorAsync(response, "newPassword"));
+    }
+
+    // SS §2 : un nouveau mot de passe des fuites connues est refusé sur son champ.
+    [Fact]
+    public async Task BreachedNewPasswordIsRefusedOnItsField()
+    {
+        using var api = new ApiFactoryWithFakes();
+        await AddAccountAsync(api);
+        api.BreachedPasswordChecker.AddBreachedPassword(ChangedPassword);
+        var client = CreateBrowserClient(api);
+        var csrfToken = await LogInThenGetCsrfTokenAsync(client);
+
+        var response = await SendSettingsRequestAsync(client, PasswordEndpoint, new { currentPassword = ValidPassword, newPassword = ChangedPassword }, csrfToken);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal(ErrorMessages.BreachedPassword, await ReadFieldErrorAsync(response, "newPassword"));
     }
 
     // Avec la double authentification, le refus ne dit pas si le mot de passe ou le code est faux.
@@ -289,6 +313,97 @@ public class AccountSettingsEndpointTests
         Assert.DoesNotContain("#token=", (await WaitForEmailToAsync(api, "deja-prise@exemple.test")).Body);
     }
 
+    // Une nouvelle adresse mal écrite, ou celle du compte écrite autrement, est refusée sur son champ.
+    [Fact]
+    public async Task InvalidOrSameNewEmailIsRefusedOnItsField()
+    {
+        using var api = new ApiFactoryWithFakes();
+        await AddAccountAsync(api);
+        var client = CreateBrowserClient(api);
+        var csrfToken = await LogInThenGetCsrfTokenAsync(client);
+
+        var invalidResponse = await SendEmailChangeAsync(client, csrfToken, "pas-une-adresse");
+        var sameResponse = await SendEmailChangeAsync(client, csrfToken, " " + Email.ToUpperInvariant() + " ");
+
+        Assert.Equal(HttpStatusCode.BadRequest, invalidResponse.StatusCode);
+        Assert.Equal(ErrorMessages.InvalidEmailAddress, await ReadFieldErrorAsync(invalidResponse, "newEmail"));
+        Assert.Equal(HttpStatusCode.BadRequest, sameResponse.StatusCode);
+        Assert.Equal(ErrorMessages.SameEmailAddress, await ReadFieldErrorAsync(sameResponse, "newEmail"));
+    }
+
+    // Sans double authentification, un mauvais mot de passe est refusé sur son champ.
+    [Fact]
+    public async Task WrongPasswordOfTheEmailChangeIsRefusedOnItsField()
+    {
+        using var api = new ApiFactoryWithFakes();
+        await AddAccountAsync(api);
+        var client = CreateBrowserClient(api);
+        var csrfToken = await LogInThenGetCsrfTokenAsync(client);
+
+        var response = await SendSettingsRequestAsync(client, EmailEndpoint, new { password = WrongPassword, newEmail = NewEmail }, csrfToken);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal(ErrorMessages.WrongCurrentPassword, await ReadFieldErrorAsync(response, "password"));
+    }
+
+    // Avec la double authentification, un mauvais code et un mauvais mot de passe reçoivent le même refus, sur aucun champ : il ne
+    // dit pas lequel est faux.
+    [Fact]
+    public async Task TwoFactorAccountGetsOneSharedRefusalForTheEmailChange()
+    {
+        using var api = new ApiFactoryWithFakes();
+        var activatedAccount = await AddActivatedAccountAsync(api);
+        var client = CreateBrowserClient(api);
+        var csrfToken = await LogInWithCodeThenGetCsrfTokenAsync(api, client, activatedAccount.Secret);
+        WaitForNextCode(api);
+
+        var wrongCodeResponse = await SendSettingsRequestAsync(
+            client,
+            EmailEndpoint,
+            new { password = ValidPassword, newEmail = NewEmail, code = FindWrongCode(api, activatedAccount.Secret) },
+            csrfToken);
+        var wrongPasswordResponse = await SendSettingsRequestAsync(
+            client,
+            EmailEndpoint,
+            new { password = WrongPassword, newEmail = NewEmail, code = CalculateCurrentCode(api, activatedAccount.Secret) },
+            csrfToken);
+
+        foreach (var response in new[] { wrongCodeResponse, wrongPasswordResponse })
+        {
+            Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+            Assert.Equal(new[] { ApiErrorConfiguration.GeneralErrorsKey }, await ReadErrorFieldsAsync(response));
+            Assert.Equal(ErrorMessages.WrongPasswordOrCode, await ReadFieldErrorAsync(response, ApiErrorConfiguration.GeneralErrorsKey));
+        }
+    }
+
+    // SS §6 : 3 demandes par heure et par nouvelle adresse, même avec le bon mot de passe. Une autre adresse reste possible, et
+    // une fois l'heure passée, la même aussi.
+    [Fact]
+    public async Task EmailChangeIsLimitedToThreePerHourAndPerNewAddress()
+    {
+        using var api = new ApiFactoryWithFakes();
+        await AddAccountAsync(api);
+        var client = CreateBrowserClient(api);
+        var csrfToken = await LogInThenGetCsrfTokenAsync(client);
+
+        for (var requestNumber = 1; requestNumber <= 3; requestNumber++)
+        {
+            Assert.Equal(HttpStatusCode.OK, (await SendEmailChangeAsync(client, csrfToken, NewEmail)).StatusCode);
+        }
+
+        await TooManyRequestsAssertions.AssertTooManyRequestsAsync(await SendEmailChangeAsync(client, csrfToken, NewEmail), 3600);
+        Assert.Equal(HttpStatusCode.OK, (await SendEmailChangeAsync(client, csrfToken, "autre-nouvelle@exemple.test")).StatusCode);
+
+        // Une heure passe, avec de l'activité toutes les 25 minutes : la session, fermée après 30 minutes d'inactivité, reste ouverte.
+        foreach (var minutes in new[] { 25, 25, 11 })
+        {
+            api.Clock.Advance(TimeSpan.FromMinutes(minutes));
+            Assert.Equal(HttpStatusCode.OK, (await client.GetAsync(ProfileEndpoint)).StatusCode);
+        }
+
+        Assert.Equal(HttpStatusCode.OK, (await SendEmailChangeAsync(client, csrfToken, NewEmail)).StatusCode);
+    }
+
     // GR Compte : le lien et le mot de passe changent l'adresse, la nouvelle sert à se connecter, et l'ancienne est prévenue.
     [Fact]
     public async Task ConfirmedEmailChangeLetsTheUserLogInWithTheNewAddressAndWarnsTheOldOne()
@@ -324,8 +439,8 @@ public class AccountSettingsEndpointTests
         var wrongPasswordResponse = await visitor.PostAsJsonAsync(EmailChangeConfirmationEndpoint, new { token = linkToken, password = WrongPassword });
         var unknownLinkResponse = await visitor.PostAsJsonAsync(EmailChangeConfirmationEndpoint, new { token = "jeton-inconnu", password = ValidPassword });
 
-        Assert.Equal(ErrorMessages.WrongCurrentPassword, await ReadFieldErrorAsync(wrongPasswordResponse, "Password"));
-        Assert.Equal(ErrorMessages.EmailChangeLinkNoLongerValid, await ReadFieldErrorAsync(unknownLinkResponse, "Token"));
+        Assert.Equal(ErrorMessages.WrongCurrentPassword, await ReadFieldErrorAsync(wrongPasswordResponse, "password"));
+        Assert.Equal(ErrorMessages.EmailChangeLinkNoLongerValid, await ReadFieldErrorAsync(unknownLinkResponse, "token"));
         Assert.Equal(Email, (await ReadProfileAsync(client)).GetProperty("email").GetString());
     }
 
@@ -420,5 +535,21 @@ public class AccountSettingsEndpointTests
 
         Assert.Empty(routesWithoutLimit);
         Assert.True(writeRouteCount >= 19, "L'inventaire n'a trouvé que " + writeRouteCount + " routes : il ne regarde plus les bonnes.");
+    }
+
+    // Un compte effacé pendant la requête ne reçoit pas son nouveau nom : 409, sans rien écrire.
+    [Fact]
+    public async Task NameOfAnAccountErasedMeanwhileIsNotSaved()
+    {
+        using var api = new ApiFactoryWithFakes();
+        var account = await AddAccountAsync(api);
+        var client = CreateBrowserClient(api);
+        var csrfToken = await LogInThenGetCsrfTokenAsync(client);
+        api.AccountRepository.SavedUsers.Remove(account);
+
+        var response = await SendSettingsRequestAsync(client, NameEndpoint, new { lastName = "Dupont", firstName = "Élise" }, csrfToken);
+
+        await AssertProblemTitleAsync(response, HttpStatusCode.Conflict, ErrorMessages.AccountChangedMeanwhile);
+        Assert.Null(account.LastName);
     }
 }

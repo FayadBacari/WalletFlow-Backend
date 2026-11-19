@@ -21,28 +21,28 @@ public class DataExportRepository : IDataExportRepository
     // Toutes les lectures se font dans une transaction REPEATABLE READ en lecture seule : PostgreSQL leur montre la base telle
     // qu'elle était à la première, et une opération, un sac ou un déplacement enregistré entre deux lectures n'apparaît dans
     // aucune. Une transaction déjà ouverte par l'appelant est gardée : EF Core refuse d'en ouvrir une seconde.
-    public async Task<AccountData?> ReadAsync(Guid userId)
+    public async Task<AccountData?> ReadAsync(Guid userId, CancellationToken cancellationToken = default)
     {
         if (databaseContext.Database.CurrentTransaction != null)
         {
-            return await ReadAllAsync(userId);
+            return await ReadAllAsync(userId, cancellationToken);
         }
 
-        await using var transaction = await databaseContext.Database.BeginTransactionAsync(IsolationLevel.RepeatableRead);
-        await databaseContext.Database.ExecuteSqlRawAsync("SET TRANSACTION READ ONLY");
-        var data = await ReadAllAsync(userId);
-        await transaction.CommitAsync();
+        await using var transaction = await databaseContext.Database.BeginTransactionAsync(IsolationLevel.RepeatableRead, cancellationToken);
+        await databaseContext.Database.ExecuteSqlRawAsync("SET TRANSACTION READ ONLY", cancellationToken);
+        var data = await ReadAllAsync(userId, cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
 
         return data;
     }
 
     // Lit chaque liste du compte, dans un ordre fixe.
-    private async Task<AccountData?> ReadAllAsync(Guid userId)
+    private async Task<AccountData?> ReadAllAsync(Guid userId, CancellationToken cancellationToken = default)
     {
         var profile = await databaseContext.Users.AsNoTracking()
             .Where(user => user.Id == userId)
             .Select(user => new ExportedProfile(user.Email, user.LastName, user.FirstName, user.IsTwoFactorEnabled, user.NotificationChannel))
-            .SingleOrDefaultAsync();
+            .SingleOrDefaultAsync(cancellationToken);
 
         if (profile == null)
         {
@@ -61,11 +61,11 @@ public class DataExportRepository : IDataExportRepository
             await connections
                 .OrderBy(connection => connection.BankName).ThenBy(connection => connection.Id)
                 .Select(connection => new ExportedBankConnection(connection.Id, connection.BankName, connection.Status, connection.AuthorizationExpiresAt))
-                .ToListAsync(),
+                .ToListAsync(cancellationToken),
             await accounts
                 .OrderBy(account => account.Name).ThenBy(account => account.Id)
                 .Select(account => new ExportedBankAccount(account.Id, account.BankConnectionId, account.Name, account.BalanceInCents, account.BalanceUpdatedAt))
-                .ToListAsync(),
+                .ToListAsync(cancellationToken),
             await databaseContext.BankTransactions.AsNoTracking()
                 .Where(operation => accounts.Any(account => account.Id == operation.BankAccountId))
                 .OrderBy(operation => operation.TransactionDate).ThenBy(operation => operation.Id)
@@ -77,20 +77,20 @@ public class DataExportRepository : IDataExportRepository
                     operation.AmountInCents,
                     operation.CategoryId,
                     operation.IsInternalTransfer))
-                .ToListAsync(),
+                .ToListAsync(cancellationToken),
             await categories
                 .OrderBy(category => category.Name).ThenBy(category => category.Id)
                 .Select(category => new ExportedCategory(category.Id, category.Name, category.MonthlyBudgetInCents, category.IsOtherCategory))
-                .ToListAsync(),
+                .ToListAsync(cancellationToken),
             await databaseContext.CategorizationRules.AsNoTracking()
                 .Where(rule => categories.Any(category => category.Id == rule.CategoryId))
                 .OrderBy(rule => rule.Label).ThenBy(rule => rule.Id)
                 .Select(rule => new ExportedCategorizationRule(rule.Label, rule.CategoryId))
-                .ToListAsync(),
+                .ToListAsync(cancellationToken),
             await bags
                 .OrderBy(bag => bag.Name).ThenBy(bag => bag.Id)
                 .Select(bag => new ExportedBag(bag.Id, bag.Name, bag.TargetAmountInCents, bag.TargetDate))
-                .ToListAsync(),
+                .ToListAsync(cancellationToken),
             await databaseContext.BagMovements.AsNoTracking()
                 .Where(movement =>
                     bags.Any(bag => bag.Id == movement.SourceBagId)
@@ -103,7 +103,7 @@ public class DataExportRepository : IDataExportRepository
                     movement.SourceBagId,
                     movement.DestinationBagId,
                     movement.SavingsSuggestionId))
-                .ToListAsync(),
+                .ToListAsync(cancellationToken),
             await databaseContext.SavingsSuggestions.AsNoTracking()
                 .Where(suggestion => suggestion.UserId == userId)
                 .OrderBy(suggestion => suggestion.Month).ThenBy(suggestion => suggestion.Id)
@@ -115,8 +115,8 @@ public class DataExportRepository : IDataExportRepository
                     suggestion.MonthlySavingsInCents,
                     suggestion.Status,
                     suggestion.StatusChangedAt))
-                .ToListAsync(),
-            await ReadAlertSettingsAsync(userId),
+                .ToListAsync(cancellationToken),
+            await ReadAlertSettingsAsync(userId, cancellationToken),
             await databaseContext.Alerts.AsNoTracking()
                 .Where(alert => alert.UserId == userId)
                 .OrderBy(alert => alert.CreatedAt).ThenBy(alert => alert.Id)
@@ -129,17 +129,17 @@ public class DataExportRepository : IDataExportRepository
                     alert.CategoryId,
                     alert.BagId,
                     alert.ConnectionId))
-                .ToListAsync(),
-            await ReadSupportRequestsAsync(requests));
+                .ToListAsync(cancellationToken),
+            await ReadSupportRequestsAsync(requests, cancellationToken));
     }
 
     // Chaque type d'alerte avec le choix de l'utilisateur : activé tant qu'il ne l'a pas désactivé, comme dans ses réglages.
-    private async Task<List<ExportedAlertSetting>> ReadAlertSettingsAsync(Guid userId)
+    private async Task<List<ExportedAlertSetting>> ReadAlertSettingsAsync(Guid userId, CancellationToken cancellationToken = default)
     {
-        var kinds = await databaseContext.AlertTypes.AsNoTracking().Select(type => type.Kind).ToListAsync();
+        var kinds = await databaseContext.AlertTypes.AsNoTracking().Select(type => type.Kind).ToListAsync(cancellationToken);
         var preferences = await databaseContext.AlertPreferences.AsNoTracking()
             .Where(preference => preference.UserId == userId)
-            .ToListAsync();
+            .ToListAsync(cancellationToken);
 
         return kinds
             .Order()
@@ -150,18 +150,18 @@ public class DataExportRepository : IDataExportRepository
     }
 
     // Les demandes de support du compte, chacune avec ses réponses de la plus ancienne à la plus récente.
-    private async Task<List<ExportedSupportRequest>> ReadSupportRequestsAsync(IQueryable<SupportRequest> requests)
+    private async Task<List<ExportedSupportRequest>> ReadSupportRequestsAsync(IQueryable<SupportRequest> requests, CancellationToken cancellationToken = default)
     {
         var responses = await databaseContext.SupportResponses.AsNoTracking()
             .Where(response => requests.Any(request => request.Id == response.SupportRequestId))
             .OrderBy(response => response.SentAt).ThenBy(response => response.Id)
             .Select(response => new { response.SupportRequestId, Response = new ExportedSupportResponse(response.SentAt, response.Content) })
-            .ToListAsync();
+            .ToListAsync(cancellationToken);
 
         var savedRequests = await requests
             .OrderBy(request => request.SentAt).ThenBy(request => request.Id)
             .Select(request => new { request.Id, request.SentAt, request.Status, request.Message })
-            .ToListAsync();
+            .ToListAsync(cancellationToken);
 
         return savedRequests
             .Select(request => new ExportedSupportRequest(

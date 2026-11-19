@@ -16,18 +16,18 @@ public class BagHistoryService
     }
 
     // Donne la page demandée de l'historique du sac, s'il est à l'utilisateur.
-    public async Task<BagHistoryResult> ReadAsync(Guid userId, Guid bagId, int page)
+    public async Task<BagHistoryResult> ReadAsync(Guid userId, Guid bagId, int page, CancellationToken cancellationToken = default)
     {
         if (page < 1 || page > MaximumPage)
         {
             return new BagHistoryResult.PageBreaksRules();
         }
 
-        if (await bagRepository.FindAsync(userId, bagId) == null)
+        if (await bagRepository.FindAsync(userId, bagId, cancellationToken) == null)
         {
             return new BagHistoryResult.NotFound();
         }
 
-        return new BagHistoryResult.Found { Page = await bagRepository.FindHistoryAsync(userId, bagId, page, PageSize) };
+        return new BagHistoryResult.Found { Page = await bagRepository.FindHistoryAsync(userId, bagId, page, PageSize, cancellationToken) };
     }
 }

@@ -18,7 +18,7 @@ using static WalletFlow.Tests.Api.RecoveryRequestTestValues;
 namespace WalletFlow.Tests.Api;
 
 // Vérifie la tâche de fond qui envoie les e-mails de la file (SS §9).
-public class EmailRequestsBackgroundServiceTests
+public sealed class EmailRequestsBackgroundServiceTests : IDisposable
 {
     private const string AccountEmail = "utilisateur@exemple.test";
 
@@ -33,6 +33,7 @@ public class EmailRequestsBackgroundServiceTests
     private readonly FakeDatabaseUnitOfWork unitOfWork;
     private readonly FakeEmailSender emailSender = new FakeEmailSender();
     private readonly FakeTimeProvider clock = new FakeTimeProvider();
+    private readonly BackgroundTaskHealth tasksHealth = new BackgroundTaskHealth();
     private readonly MemoryLoggerProvider loggerProvider = new MemoryLoggerProvider();
 
     // Relie les faux accès à la fausse unité de travail, et la fausse file au réveil de la tâche.
@@ -60,6 +61,9 @@ public class EmailRequestsBackgroundServiceTests
         services.AddSingleton(new PublicWebsiteSettings("https://walletflow.test"));
         services.AddSingleton<TimeProvider>(clock);
         services.AddScoped<SecurityJournalService>();
+        services.AddScoped<LinkEmailPreparation>();
+        services.AddScoped<NoticeEmailPreparation>();
+        services.AddScoped<AlertAndSupportEmailPreparation>();
         services.AddScoped<EmailRequestProcessingService>();
         var serviceProvider = services.BuildServiceProvider();
         var loggerFactory = new LoggerFactory(new ILoggerProvider[] { loggerProvider });
@@ -67,6 +71,8 @@ public class EmailRequestsBackgroundServiceTests
         return new EmailRequestsBackgroundService(
             wakeUp,
             serviceProvider.GetRequiredService<IServiceScopeFactory>(),
+            clock,
+            tasksHealth,
             new Logger<EmailRequestsBackgroundService>(loggerFactory));
     }
 
@@ -82,7 +88,7 @@ public class EmailRequestsBackgroundServiceTests
     // Les messages du journal technique de ce niveau.
     private List<string> ReadMessages(LogLevel level)
     {
-        return loggerProvider.Messages.Where(message => message.StartsWith(level + " : ")).ToList();
+        return loggerProvider.Messages.Where(message => message.StartsWith(level + " : ", StringComparison.Ordinal)).ToList();
     }
 
     [Fact]
@@ -93,11 +99,24 @@ public class EmailRequestsBackgroundServiceTests
         emailRequests.SavedRequests.Add(EmailRequest.ForNewDevice(account.Id, IpAddress, Now));
         emailRequests.SavedRequests.Add(EmailRequest.ForPasswordChange(account.Id, IpAddress, Now));
 
-        await CreateBackgroundTask().ProcessDueRequestsAsync();
+        await CreateBackgroundTask().RunPassAsync();
 
         Assert.Equal(3, emailSender.SentEmails.Count);
         Assert.Empty(emailRequests.SavedRequests);
         Assert.Empty(ReadMessages(LogLevel.Warning));
+        Assert.Empty(ReadMessages(LogLevel.Error));
+    }
+
+    // À l'arrêt de l'API, la demande reste due, sans essai raté compté : elle partira au redémarrage.
+    [Fact]
+    public async Task ShutdownLeavesTheRequestDueWithoutAFailedTry()
+    {
+        emailRequests.SavedRequests.Add(EmailRequest.ForPasswordRecovery(AccountEmail, IpAddress, Now));
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => CreateBackgroundTask().RunPassAsync(new CancellationToken(true)));
+
+        Assert.Empty(emailSender.SentEmails);
+        Assert.Equal(0, Assert.Single(emailRequests.SavedRequests).FailedTryCount);
         Assert.Empty(ReadMessages(LogLevel.Error));
     }
 
@@ -107,7 +126,7 @@ public class EmailRequestsBackgroundServiceTests
         var account = AddAccount();
         emailRequests.SavedRequests.Add(EmailRequest.ForNewDevice(account.Id, IpAddress, Now + TimeSpan.FromSeconds(1)));
 
-        await CreateBackgroundTask().ProcessDueRequestsAsync();
+        await CreateBackgroundTask().RunPassAsync();
 
         Assert.Empty(emailSender.SentEmails);
         Assert.Single(emailRequests.SavedRequests);
@@ -121,7 +140,7 @@ public class EmailRequestsBackgroundServiceTests
         emailSender.AlwaysFails = true;
         emailRequests.SavedRequests.Add(EmailRequest.ForPasswordRecovery(AccountEmail, IpAddress, Now));
 
-        await CreateBackgroundTask().ProcessDueRequestsAsync();
+        await CreateBackgroundTask().RunPassAsync();
 
         var message = Assert.Single(ReadMessages(LogLevel.Warning));
         Assert.Contains("n'a pas pu partir", message);
@@ -148,7 +167,7 @@ public class EmailRequestsBackgroundServiceTests
             FailedTryCount = EmailRequestRules.MaximumTries - 1
         });
 
-        await CreateBackgroundTask().ProcessDueRequestsAsync();
+        await CreateBackgroundTask().RunPassAsync();
 
         var message = Assert.Single(ReadMessages(LogLevel.Error));
         Assert.Contains("abandonné", message);
@@ -170,7 +189,7 @@ public class EmailRequestsBackgroundServiceTests
         emailRequests.SavedRequests.Add(EmailRequest.ForEmailChangedNotice(account.Id, "ancienne@exemple.test", IpAddress, Now));
         var backgroundTask = CreateBackgroundTask();
 
-        await backgroundTask.ProcessDueRequestsAsync();
+        await backgroundTask.RunPassAsync();
 
         Assert.Contains(ReadMessages(LogLevel.Error), message => message.Contains("a échoué"));
         Assert.Equal("ancienne@exemple.test", Assert.Single(emailSender.SentEmails).RecipientAddress);
@@ -179,7 +198,7 @@ public class EmailRequestsBackgroundServiceTests
 
         accountRepository.IsDown = false;
         clock.Advance(TimeSpan.FromMinutes(1));
-        await backgroundTask.ProcessDueRequestsAsync();
+        await backgroundTask.RunPassAsync();
 
         Assert.Equal(2, emailSender.SentEmails.Count);
         Assert.Empty(emailRequests.SavedRequests);
@@ -194,15 +213,50 @@ public class EmailRequestsBackgroundServiceTests
         emailRequests.IsDown = true;
         var backgroundTask = CreateBackgroundTask();
 
-        await backgroundTask.ProcessDueRequestsAsync();
+        await backgroundTask.RunPassAsync();
 
         Assert.Contains(ReadMessages(LogLevel.Error), message => message.Contains("ne peut pas être lue"));
         Assert.Empty(emailSender.SentEmails);
 
         emailRequests.IsDown = false;
-        await backgroundTask.ProcessDueRequestsAsync();
+        await backgroundTask.RunPassAsync();
 
         Assert.Single(emailSender.SentEmails);
+    }
+
+    // Un serveur d'e-mails en panne fait échouer chaque passage qui essaie d'envoyer. Les passages à vide entre deux essais ne
+    // cachent rien : au troisième essai raté, la tâche est en panne sur son point de santé.
+    [Fact]
+    public async Task MailServerDownMakesTheTaskFailingDespiteIdlePasses()
+    {
+        AddAccount();
+        emailSender.AlwaysFails = true;
+        var backgroundTask = CreateBackgroundTask();
+        await backgroundTask.StartAsync(CancellationToken.None);
+
+        try
+        {
+            emailRequests.PrepareRequest(EmailRequest.ForPasswordRecovery(AccountEmail, IpAddress, Now));
+            Assert.True(await unitOfWork.TrySaveChangesAsync());
+            await WaitUntilAsync(() => emailSender.FailedSendCount == 1);
+
+            for (var attempt = 2; attempt <= BackgroundTaskHealth.FailedPassesBeforeAlert; attempt++)
+            {
+                wakeUp.Signal();
+                await Task.Delay(TimeSpan.FromMilliseconds(100));
+                clock.Advance(TimeSpan.FromDays(1));
+                wakeUp.Signal();
+                await WaitUntilAsync(() => emailSender.FailedSendCount == attempt);
+            }
+
+            await WaitUntilAsync(() => tasksHealth.FindFailingTasks(clock.GetUtcNow()).Count == 1);
+        }
+        finally
+        {
+            await backgroundTask.StopAsync(CancellationToken.None);
+        }
+
+        Assert.EndsWith("3 passages de suite en échec.", Assert.Single(tasksHealth.FindFailingTasks(clock.GetUtcNow())));
     }
 
     // La tâche n'attend pas son passage de secours : une demande enregistrée la réveille, et l'e-mail part aussitôt.
@@ -227,5 +281,12 @@ public class EmailRequestsBackgroundServiceTests
         }
 
         Assert.True(EmailRequestsBackgroundService.MaximumWait >= TimeSpan.FromSeconds(30));
+    }
+
+    // Libère le journal technique et le réveil de la file à la fin du test.
+    public void Dispose()
+    {
+        loggerProvider.Dispose();
+        wakeUp.Dispose();
     }
 }

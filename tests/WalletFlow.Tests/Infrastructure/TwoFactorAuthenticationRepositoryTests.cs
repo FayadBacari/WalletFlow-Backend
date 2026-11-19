@@ -3,6 +3,7 @@ using Microsoft.EntityFrameworkCore;
 using WalletFlow.Domain.UsersAndSecurity;
 using WalletFlow.Infrastructure.Persistence;
 using WalletFlow.Infrastructure.Persistence.Repositories;
+using WalletFlow.Tests.Fakes;
 using static WalletFlow.Tests.Infrastructure.LocalTestDatabase;
 
 namespace WalletFlow.Tests.Infrastructure;
@@ -64,7 +65,7 @@ public class TwoFactorAuthenticationRepositoryTests
         List<BackupCode> backupCodes,
         SecurityEvent securityEvent)
     {
-        account.ActivateTwoFactor(Secret);
+        account.ActivateTwoFactor(Secret, TwoFactorTestTools.OldStep);
         new TwoFactorAuthenticationRepository(databaseContext).PrepareBackupCodes(backupCodes);
         new SecurityEventRepository(databaseContext).PrepareEvent(securityEvent);
     }
@@ -287,7 +288,7 @@ public class TwoFactorAuthenticationRepositoryTests
         PrepareBackupCodeLogin(
             databaseContext,
             account,
-            new UserSession { Id = new string('c', 64), LastActivityAt = Now, UserId = savedAccount.Id },
+            new UserSession { CreatedAt = Now, Id = new string('c', 64), LastActivityAt = Now, UserId = savedAccount.Id },
             backupCode,
             CreateSecurityEvent(savedAccount.Id, SecurityEventType.Login));
         var saved = await TrySaveChangesAsync(databaseContext);
@@ -319,7 +320,7 @@ public class TwoFactorAuthenticationRepositoryTests
         PrepareBackupCodeLogin(
             databaseContext,
             account,
-            new UserSession { Id = new string('d', 64), LastActivityAt = Now.AddSeconds(1), UserId = savedAccount.Id },
+            new UserSession { CreatedAt = Now.AddSeconds(1), Id = new string('d', 64), LastActivityAt = Now.AddSeconds(1), UserId = savedAccount.Id },
             backupCode,
             CreateSecurityEvent(savedAccount.Id, SecurityEventType.Login));
         var saved = await TrySaveChangesAsync(databaseContext);
@@ -341,7 +342,7 @@ public class TwoFactorAuthenticationRepositoryTests
         PrepareBackupCodeLogin(
             databaseContext,
             account,
-            new UserSession { Id = new string('e', 64), LastActivityAt = Now, UserId = savedAccount.Id },
+            new UserSession { CreatedAt = Now, Id = new string('e', 64), LastActivityAt = Now, UserId = savedAccount.Id },
             null,
             CreateSecurityEvent(savedAccount.Id, SecurityEventType.Login));
         var saved = await TrySaveChangesAsync(databaseContext);

@@ -20,11 +20,11 @@ public class BankConnectionListService
     }
 
     // Donne les connexions de l'utilisateur, triées par banque, chacune avec ses comptes triés par nom.
-    public async Task<List<BankConnectionView>> ListAsync(Guid userId)
+    public async Task<List<BankConnectionView>> ListAsync(Guid userId, CancellationToken cancellationToken = default)
     {
         var now = clock.GetUtcNow().UtcDateTime;
-        var connections = await connectionRepository.FindConnectionsAsync(userId);
-        var accounts = await connectionRepository.FindAccountsAsync(connections.Select(connection => connection.Id).ToList());
+        var connections = await connectionRepository.FindConnectionsAsync(userId, cancellationToken);
+        var accounts = await connectionRepository.FindAccountsAsync(connections.Select(connection => connection.Id).ToList(), cancellationToken);
         var views = new List<BankConnectionView>();
 
         connections.Sort((first, second) => FrenchOrder.Compare(first.BankName, second.BankName));

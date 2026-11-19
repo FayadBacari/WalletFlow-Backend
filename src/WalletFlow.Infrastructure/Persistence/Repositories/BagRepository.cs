@@ -18,30 +18,31 @@ public class BagRepository : IBagRepository
     }
 
     // Donne tous les sacs de l'utilisateur.
-    public async Task<List<Bag>> FindAllAsync(Guid userId)
+    public async Task<List<Bag>> FindAllAsync(Guid userId, CancellationToken cancellationToken = default)
     {
         return await databaseContext.Bags
             .Where(bag => bag.UserId == userId)
-            .ToListAsync();
+            .ToListAsync(cancellationToken);
     }
 
     // Cherche le sac par son identifiant et par son utilisateur : celui d'un autre n'est jamais trouvé.
-    public async Task<Bag?> FindAsync(Guid userId, Guid bagId)
+    public async Task<Bag?> FindAsync(Guid userId, Guid bagId, CancellationToken cancellationToken = default)
     {
         return await databaseContext.Bags.SingleOrDefaultAsync(bag =>
             bag.Id == bagId
-            && bag.UserId == userId);
+            && bag.UserId == userId,
+            cancellationToken);
     }
 
     // Compte les sacs de l'utilisateur.
-    public async Task<int> CountAsync(Guid userId)
+    public async Task<int> CountAsync(Guid userId, CancellationToken cancellationToken = default)
     {
-        return await databaseContext.Bags.CountAsync(bag => bag.UserId == userId);
+        return await databaseContext.Bags.CountAsync(bag => bag.UserId == userId, cancellationToken);
     }
 
     // Additionne en SQL, pour chaque sac de l'utilisateur, les mouvements arrivés et les mouvements partis.
     // Les montants sont additionnés en bigint : beaucoup de mouvements ne débordent jamais.
-    public async Task<Dictionary<Guid, long>> SumBalancesAsync(Guid userId)
+    public async Task<Dictionary<Guid, long>> SumBalancesAsync(Guid userId, CancellationToken cancellationToken = default)
     {
         var rows = await databaseContext.Bags
             .AsNoTracking()
@@ -56,7 +57,7 @@ public class BagRepository : IBagRepository
                     .Where(movement => movement.SourceBagId == bag.Id)
                     .Sum(movement => (long)movement.AmountInCents)
             })
-            .ToListAsync();
+            .ToListAsync(cancellationToken);
 
         var balances = new Dictionary<Guid, long>();
 
@@ -72,20 +73,21 @@ public class BagRepository : IBagRepository
     // Un mouvement dont l'autre sac a été supprimé reste compté avec le sac qui reste.
     // Les sacs sont lus d'abord : la recherche passe alors par les index des deux côtés d'un mouvement (ix_mouvement_depart
     // et ix_mouvement_arrivee), sans parcourir les mouvements de tous les utilisateurs à chaque déplacement.
-    public async Task<int> CountMovementsSinceAsync(Guid userId, DateTime since)
+    public async Task<int> CountMovementsSinceAsync(Guid userId, DateTime since, CancellationToken cancellationToken = default)
     {
-        var bagIds = await UserBagIds(userId).ToListAsync();
+        var bagIds = await UserBagIds(userId).ToListAsync(cancellationToken);
 
         return await databaseContext.BagMovements.CountAsync(movement =>
             movement.MovedAt >= since
             && ((movement.SourceBagId != null && bagIds.Contains(movement.SourceBagId.Value))
-                || (movement.DestinationBagId != null && bagIds.Contains(movement.DestinationBagId.Value))));
+                || (movement.DestinationBagId != null && bagIds.Contains(movement.DestinationBagId.Value))),
+                cancellationToken);
     }
 
     // Lit en SQL la page demandée, avec le nom de l'autre sac de chaque mouvement. L'autre côté d'un mouvement est
     // le départ quand l'argent arrive dans ce sac, et l'arrivée quand il en part : null veut dire l'argent disponible.
     // Le sac doit être à l'utilisateur, sinon rien n'est trouvé.
-    public async Task<BagHistoryPage> FindHistoryAsync(Guid userId, Guid bagId, int page, int pageSize)
+    public async Task<BagHistoryPage> FindHistoryAsync(Guid userId, Guid bagId, int page, int pageSize, CancellationToken cancellationToken = default)
     {
         var query = databaseContext.BagMovements
             .AsNoTracking()
@@ -93,7 +95,7 @@ public class BagRepository : IBagRepository
                 (movement.SourceBagId == bagId || movement.DestinationBagId == bagId)
                 && UserBagIds(userId).Contains(bagId));
 
-        var totalCount = await query.CountAsync();
+        var totalCount = await query.CountAsync(cancellationToken);
         var rows = await query
             .OrderByDescending(movement => movement.MovedAt)
             .ThenByDescending(movement => movement.Id)
@@ -112,7 +114,7 @@ public class BagRepository : IBagRepository
                     .Select(otherBag => otherBag.Name)
                     .FirstOrDefault()
             })
-            .ToListAsync();
+            .ToListAsync(cancellationToken);
 
         var items = new List<BagHistoryItem>();
 
@@ -126,9 +128,9 @@ public class BagRepository : IBagRepository
     }
 
     // Lit la ligne de l'utilisateur et la suit : sa version (xmin) est gardée dès cette lecture.
-    public async Task<User?> FindUserAsync(Guid userId)
+    public async Task<User?> FindUserAsync(Guid userId, CancellationToken cancellationToken = default)
     {
-        return await databaseContext.Users.SingleOrDefaultAsync(user => user.Id == userId);
+        return await databaseContext.Users.SingleOrDefaultAsync(user => user.Id == userId, cancellationToken);
     }
 
     // La ligne de l'utilisateur sera écrite même si rien n'y a changé : cette écriture contrôle en base sa version,
@@ -167,7 +169,7 @@ public class BagRepository : IBagRepository
     }
 
     // Une ligne lue en SQL : les deux sommes d'un sac.
-    private class BagBalanceRow
+    private sealed class BagBalanceRow
     {
         public Guid BagId { get; init; }
         public long IncomingInCents { get; init; }
@@ -175,7 +177,7 @@ public class BagRepository : IBagRepository
     }
 
     // Une ligne lue en SQL : un mouvement de l'historique, avant de recevoir son signe.
-    private class BagHistoryRow
+    private sealed class BagHistoryRow
     {
         public Guid Id { get; init; }
         public DateTime MovedAt { get; init; }

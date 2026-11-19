@@ -15,8 +15,8 @@ public class AdminStatisticsService
     }
 
     // Compte tout, à ce moment.
-    public async Task<AdministrationStatistics> ReadAsync()
+    public async Task<AdministrationStatistics> ReadAsync(CancellationToken cancellationToken = default)
     {
-        return await administrationRepository.CountStatisticsAsync(clock.GetUtcNow().UtcDateTime);
+        return await administrationRepository.CountStatisticsAsync(clock.GetUtcNow().UtcDateTime, cancellationToken);
     }
 }

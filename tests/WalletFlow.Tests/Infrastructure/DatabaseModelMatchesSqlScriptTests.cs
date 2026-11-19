@@ -35,7 +35,7 @@ public class DatabaseModelMatchesSqlScriptTests
 
             foreach (Match columnDeclaration in
                      Regex.Matches(statementBody,
-                         @"^    ([a-z0-9_]+) +(UUID|VARCHAR|CHAR|INTEGER|SMALLINT|DATE|TIMESTAMPTZ|BOOLEAN|INET)",
+                         @"^    ([a-z0-9_]+) +(UUID|VARCHAR|CHAR|INTEGER|SMALLINT|BIGINT|DATE|TIMESTAMPTZ|BOOLEAN|INET)",
                          RegexOptions.Multiline))
             {
                 columnsByTable.Add(

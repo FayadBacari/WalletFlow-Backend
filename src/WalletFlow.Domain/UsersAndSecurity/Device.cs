@@ -4,6 +4,8 @@ namespace WalletFlow.Domain.UsersAndSecurity;
 // Correspond à la table appareil du MPD (DD §4.3).
 public class Device
 {
+    private DateTime lastUsedAt;
+
     // id_appareil
     public Guid Id { get; init; } = Guid.NewGuid();
 
@@ -15,4 +17,20 @@ public class Device
 
     // id_utilisateur
     public Guid UserId { get; init; }
+
+    // date_derniere_connexion_appareil : la dernière connexion depuis cet appareil. Un appareil inutilisé depuis un an est oublié.
+    public required DateTime LastUsedAt
+    {
+        get => lastUsedAt;
+        init => lastUsedAt = value;
+    }
+
+    // Note une connexion depuis cet appareil. La date ne recule jamais.
+    public void RecordUse(DateTime now)
+    {
+        if (now > lastUsedAt)
+        {
+            lastUsedAt = now;
+        }
+    }
 }

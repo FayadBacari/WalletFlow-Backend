@@ -34,11 +34,13 @@ public class PasswordRecoveryController : ControllerBase
     [HttpPost("forgot-password")]
     [EnableRateLimiting(RateLimitingConfiguration.PasswordRecoveryPolicy)]
     [RequestSizeLimit(RequestSizeConfiguration.MaximumAccountRequestBytes)]
-    public async Task<IActionResult> RequestRecovery(ForgotPasswordRequest request)
+    [ProducesResponseType<MessageResponse>(StatusCodes.Status200OK)]
+    public async Task<IActionResult> RequestRecovery(ForgotPasswordRequest request, CancellationToken cancellationToken = default)
     {
         var result = await recoveryRequestService.RequestAsync(
             request.Email,
-            HttpContext.Connection.RemoteIpAddress);
+            HttpContext.Connection.RemoteIpAddress,
+            cancellationToken);
 
         if (result is PasswordRecoveryRequestResult.RequestAccepted)
         {
@@ -47,7 +49,7 @@ public class PasswordRecoveryController : ControllerBase
 
         if (result is PasswordRecoveryRequestResult.TooManyRequests)
         {
-            return StatusCode(StatusCodes.Status429TooManyRequests);
+            return this.AnswerTooManyRequests(RetryDelays.PerEmailAddress);
         }
 
         ModelState.AddModelError(nameof(ForgotPasswordRequest.Email), ErrorMessages.InvalidEmailAddress);
@@ -58,12 +60,15 @@ public class PasswordRecoveryController : ControllerBase
     [HttpPost("reset-password")]
     [EnableRateLimiting(RateLimitingConfiguration.PasswordResetPolicy)]
     [RequestSizeLimit(RequestSizeConfiguration.MaximumAccountRequestBytes)]
-    public async Task<IActionResult> ResetPassword(ResetPasswordRequest request)
+    [ProducesResponseType<MessageResponse>(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status503ServiceUnavailable, Description = OpenApiConfiguration.ServerBusyDescription)]
+    public async Task<IActionResult> ResetPassword(ResetPasswordRequest request, CancellationToken cancellationToken = default)
     {
         var result = await passwordResetService.ResetAsync(
             request.Token,
             request.NewPassword,
-            HttpContext.Connection.RemoteIpAddress);
+            HttpContext.Connection.RemoteIpAddress,
+            cancellationToken);
 
         if (result is PasswordResetResult.PasswordChanged)
         {
@@ -73,6 +78,12 @@ public class PasswordRecoveryController : ControllerBase
         if (result is PasswordResetResult.PasswordBreaksRules)
         {
             ModelState.AddModelError(nameof(ResetPasswordRequest.NewPassword), ErrorMessages.PasswordBreaksRules);
+            return ValidationProblem();
+        }
+
+        if (result is PasswordResetResult.PasswordBreached)
+        {
+            ModelState.AddModelError(nameof(ResetPasswordRequest.NewPassword), ErrorMessages.BreachedPassword);
             return ValidationProblem();
         }
 

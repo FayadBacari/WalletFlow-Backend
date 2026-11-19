@@ -28,7 +28,8 @@ public class TransactionSearchService
         DateOnly? to,
         Guid? accountId,
         Guid? categoryId,
-        int page)
+        int page,
+        CancellationToken cancellationToken = default)
     {
         var text = NormalizeText(typedText);
 
@@ -54,7 +55,7 @@ public class TransactionSearchService
 
         var search = new TransactionSearch(text, amountInCents, from, to, accountId, categoryId, page, PageSize);
 
-        return new TransactionSearchResult.Found { Page = await transactionRepository.SearchAsync(userId, search) };
+        return new TransactionSearchResult.Found { Page = await transactionRepository.SearchAsync(userId, search, cancellationToken) };
     }
 
     // Met le texte en Unicode NFC, comme les libellés enregistrés, et retire ses espaces autour. Un texte vide ne filtre rien.

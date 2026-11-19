@@ -21,11 +21,11 @@ public class BagListService
     }
 
     // Donne les sacs dans l'ordre alphabétique. Le solde total est celui de tous les comptes, le même que GET api/balance.
-    public async Task<BagSummary> ListAsync(Guid userId)
+    public async Task<BagSummary> ListAsync(Guid userId, CancellationToken cancellationToken = default)
     {
-        var bags = await bagRepository.FindAllAsync(userId);
-        var balances = await bagRepository.SumBalancesAsync(userId);
-        var total = await balanceTotalService.ReadAsync(userId);
+        var bags = await bagRepository.FindAllAsync(userId, cancellationToken);
+        var balances = await bagRepository.SumBalancesAsync(userId, cancellationToken);
+        var total = await balanceTotalService.ReadAsync(userId, cancellationToken);
         var views = new List<BagView>();
         long bagsTotalInCents = 0;
 

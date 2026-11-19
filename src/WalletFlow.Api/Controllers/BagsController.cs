@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
 using WalletFlow.Api.Authentication;
@@ -10,11 +11,12 @@ using WalletFlow.Domain.BagsAndSuggestions;
 namespace WalletFlow.Api.Controllers;
 
 // Sacs de l'utilisateur connecté : la liste, la création, le nom, l'objectif, la suppression, les déplacements d'argent
-// et l'historique (GR Sacs). Ces routes n'ont aucun attribut de sécurité : toute route demande par défaut une session
-// et le jeton anti-CSRF (voir Program.cs). Le sac d'un autre utilisateur répond 404, comme une adresse qui n'existe pas :
-// rien ne dit qu'il existe (SS §4).
+// et l'historique (GR Sacs). Ces routes demandent une session, que [Authorize] redit, et le jeton anti-CSRF, comme toute
+// route (voir Program.cs). Le sac d'un autre utilisateur répond 404, comme une adresse qui n'existe pas : rien ne dit qu'il
+// existe (SS §4).
 [ApiController]
 [Route("api/bags")]
+[Authorize]
 public class BagsController : ControllerBase
 {
     public const string BagDeletedMessage = "Le sac est supprimé. Son argent est revenu dans l'argent disponible.";
@@ -53,10 +55,10 @@ public class BagsController : ControllerBase
     // Ce sont des données financières : aucun navigateur ni intermédiaire ne doit les garder.
     [HttpGet]
     [EnableRateLimiting(RateLimitingConfiguration.CostlyReadPolicy)]
-    [ResponseCache(NoStore = true, Location = ResponseCacheLocation.None)]
-    public async Task<IActionResult> List()
+    [ProducesResponseType<BagListResponse>(StatusCodes.Status200OK)]
+    public async Task<IActionResult> List(CancellationToken cancellationToken = default)
     {
-        var summary = await listService.ListAsync(SessionClaims.ReadUserId(User));
+        var summary = await listService.ListAsync(SessionClaims.ReadUserId(User), cancellationToken);
         var bags = summary.Bags.Select(CreateResponse).ToList();
 
         return Ok(new BagListResponse(
@@ -70,13 +72,16 @@ public class BagsController : ControllerBase
     // POST api/bags : crée un sac vide avec ce nom, et cet objectif s'il y en a un.
     [HttpPost]
     [RequestSizeLimit(RequestSizeConfiguration.MaximumBagRequestBytes)]
-    public async Task<IActionResult> Create(BagCreationRequest request)
+    [ProducesResponseType<BagResponse>(StatusCodes.Status201Created)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    public async Task<IActionResult> Create(BagCreationRequest request, CancellationToken cancellationToken = default)
     {
         var result = await creationService.CreateAsync(
             SessionClaims.ReadUserId(User),
             request.Name,
             request.TargetAmountInCents,
-            request.TargetDate);
+            request.TargetDate,
+            cancellationToken);
 
         if (result is BagCreationResult.Created created)
         {
@@ -104,9 +109,12 @@ public class BagsController : ControllerBase
     // PUT api/bags/{id}/name : donne un nouveau nom au sac.
     [HttpPut("{bagId:guid}/name")]
     [RequestSizeLimit(RequestSizeConfiguration.MaximumBagRequestBytes)]
-    public async Task<IActionResult> Rename(Guid bagId, BagNameRequest request)
+    [ProducesResponseType<BagResponse>(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    public async Task<IActionResult> Rename(Guid bagId, BagNameRequest request, CancellationToken cancellationToken = default)
     {
-        var result = await renameService.RenameAsync(SessionClaims.ReadUserId(User), bagId, request.Name);
+        var result = await renameService.RenameAsync(SessionClaims.ReadUserId(User), bagId, request.Name, cancellationToken);
 
         if (result is BagRenameResult.Renamed renamed)
         {
@@ -115,7 +123,7 @@ public class BagsController : ControllerBase
 
         if (result is BagRenameResult.NotFound)
         {
-            await RecordForeignAccessAsync(OwnedResource.Bag, bagId);
+            await RecordForeignAccessAsync(OwnedResource.Bag, bagId, cancellationToken);
             return Problem(statusCode: StatusCodes.Status404NotFound);
         }
 
@@ -130,13 +138,17 @@ public class BagsController : ControllerBase
     // PUT api/bags/{id}/goal : fixe l'objectif du sac, ou l'enlève avec deux null.
     [HttpPut("{bagId:guid}/goal")]
     [RequestSizeLimit(RequestSizeConfiguration.MaximumBagRequestBytes)]
-    public async Task<IActionResult> ReplaceGoal(Guid bagId, BagGoalRequest request)
+    [ProducesResponseType<BagResponse>(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    public async Task<IActionResult> ReplaceGoal(Guid bagId, BagGoalRequest request, CancellationToken cancellationToken = default)
     {
         var result = await goalService.ReplaceAsync(
             SessionClaims.ReadUserId(User),
             bagId,
             request.TargetAmountInCents,
-            request.TargetDate);
+            request.TargetDate,
+            cancellationToken);
 
         if (result is BagGoalResult.Changed changed)
         {
@@ -145,7 +157,7 @@ public class BagsController : ControllerBase
 
         if (result is BagGoalResult.NotFound)
         {
-            await RecordForeignAccessAsync(OwnedResource.Bag, bagId);
+            await RecordForeignAccessAsync(OwnedResource.Bag, bagId, cancellationToken);
             return Problem(statusCode: StatusCodes.Status404NotFound);
         }
 
@@ -161,9 +173,12 @@ public class BagsController : ControllerBase
     // Cette route ne lit aucun corps : la limite empêche seulement qu'on lui en envoie un énorme.
     [HttpDelete("{bagId:guid}")]
     [RequestSizeLimit(RequestSizeConfiguration.MaximumBagRequestBytes)]
-    public async Task<IActionResult> Delete(Guid bagId)
+    [ProducesResponseType<MessageResponse>(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    public async Task<IActionResult> Delete(Guid bagId, CancellationToken cancellationToken = default)
     {
-        var result = await deletionService.DeleteAsync(SessionClaims.ReadUserId(User), bagId);
+        var result = await deletionService.DeleteAsync(SessionClaims.ReadUserId(User), bagId, cancellationToken);
 
         if (result is BagDeletionResult.Deleted)
         {
@@ -172,7 +187,7 @@ public class BagsController : ControllerBase
 
         if (result is BagDeletionResult.NotFound)
         {
-            await RecordForeignAccessAsync(OwnedResource.Bag, bagId);
+            await RecordForeignAccessAsync(OwnedResource.Bag, bagId, cancellationToken);
             return Problem(statusCode: StatusCodes.Status404NotFound);
         }
 
@@ -183,13 +198,17 @@ public class BagsController : ControllerBase
     // Au-delà de 1 000 déplacements sur les dernières 24 heures, la réponse est « trop de requêtes » (SS §6).
     [HttpPost("movements")]
     [RequestSizeLimit(RequestSizeConfiguration.MaximumBagRequestBytes)]
-    public async Task<IActionResult> Move(BagMovementRequest request)
+    [ProducesResponseType<BagMovementResponse>(StatusCodes.Status201Created)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    public async Task<IActionResult> Move(BagMovementRequest request, CancellationToken cancellationToken = default)
     {
         var result = await movementService.MoveAsync(
             SessionClaims.ReadUserId(User),
             request.SourceBagId,
             request.DestinationBagId,
-            request.AmountInCents);
+            request.AmountInCents,
+            cancellationToken);
 
         if (result is BagMovementResult.Moved moved)
         {
@@ -221,14 +240,14 @@ public class BagsController : ControllerBase
 
         if (result is BagMovementResult.NotFound)
         {
-            await RecordForeignAccessAsync(OwnedResource.Bag, request.SourceBagId);
-            await RecordForeignAccessAsync(OwnedResource.Bag, request.DestinationBagId);
+            await RecordForeignAccessAsync(OwnedResource.Bag, request.SourceBagId, cancellationToken);
+            await RecordForeignAccessAsync(OwnedResource.Bag, request.DestinationBagId, cancellationToken);
             return Problem(statusCode: StatusCodes.Status404NotFound);
         }
 
         if (result is BagMovementResult.TooManyMovements)
         {
-            return Problem(statusCode: StatusCodes.Status429TooManyRequests);
+            return this.AnswerTooManyRequests(RetryDelays.BagMovements);
         }
 
         if (result is BagMovementResult.SourceBagTooLow)
@@ -248,11 +267,12 @@ public class BagsController : ControllerBase
     // Ce sont des données financières : aucun navigateur ni intermédiaire ne doit les garder.
     [HttpGet("{bagId:guid}/movements")]
     [EnableRateLimiting(RateLimitingConfiguration.CostlyReadPolicy)]
-    [ResponseCache(NoStore = true, Location = ResponseCacheLocation.None)]
-    public async Task<IActionResult> History(Guid bagId, [FromQuery] BagHistoryRequest request)
+    [ProducesResponseType<BagHistoryPageResponse>(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> History(Guid bagId, [FromQuery] BagHistoryRequest request, CancellationToken cancellationToken = default)
     {
         var page = request.Page ?? 1;
-        var result = await historyService.ReadAsync(SessionClaims.ReadUserId(User), bagId, page);
+        var result = await historyService.ReadAsync(SessionClaims.ReadUserId(User), bagId, page, cancellationToken);
 
         if (result is BagHistoryResult.Found found)
         {
@@ -268,7 +288,7 @@ public class BagsController : ControllerBase
 
         if (result is BagHistoryResult.NotFound)
         {
-            await RecordForeignAccessAsync(OwnedResource.Bag, bagId);
+            await RecordForeignAccessAsync(OwnedResource.Bag, bagId, cancellationToken);
             return Problem(statusCode: StatusCodes.Status404NotFound);
         }
 
@@ -276,13 +296,14 @@ public class BagsController : ControllerBase
     }
 
     // Note au journal si la ressource visée est à un autre utilisateur (SS §11). La réponse reste la même dans tous les cas.
-    private async Task RecordForeignAccessAsync(OwnedResource resource, Guid? resourceId)
+    private async Task RecordForeignAccessAsync(OwnedResource resource, Guid? resourceId, CancellationToken cancellationToken = default)
     {
         await foreignAccessJournal.RecordIfForeignAsync(
             SessionClaims.ReadUserId(User),
             HttpContext.Connection.RemoteIpAddress,
             resource,
-            resourceId);
+            resourceId,
+            cancellationToken);
     }
 
     // Donne le message d'un champ refusé.

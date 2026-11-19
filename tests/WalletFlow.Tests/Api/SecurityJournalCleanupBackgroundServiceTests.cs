@@ -24,6 +24,7 @@ public class SecurityJournalCleanupBackgroundServiceTests
         return new SecurityJournalCleanupBackgroundService(
             serviceProvider.GetRequiredService<IServiceScopeFactory>(),
             clock,
+            new BackgroundTaskHealth(),
             logger ?? NullLogger<SecurityJournalCleanupBackgroundService>.Instance);
     }
 
@@ -33,7 +34,7 @@ public class SecurityJournalCleanupBackgroundServiceTests
         var journal = new FakeSecurityEventRepository();
         var cleanupTask = CreateCleanupTask(journal);
 
-        await cleanupTask.RunCleanupAsync();
+        await cleanupTask.RunPassAsync();
 
         Assert.Equal(1, journal.CleanupCount);
     }
@@ -47,13 +48,13 @@ public class SecurityJournalCleanupBackgroundServiceTests
         using var loggerFactory = new LoggerFactory(new ILoggerProvider[] { loggerProvider });
         var cleanupTask = CreateCleanupTask(journal, new Logger<SecurityJournalCleanupBackgroundService>(loggerFactory));
 
-        await cleanupTask.RunCleanupAsync();
+        await cleanupTask.RunPassAsync();
 
         Assert.Contains(loggerProvider.Messages, message =>
-            message.StartsWith("Error") && message.Contains("a échoué"));
+            message.StartsWith("Error", StringComparison.Ordinal) && message.Contains("a échoué"));
 
         journal.IsDown = false;
-        await cleanupTask.RunCleanupAsync();
+        await cleanupTask.RunPassAsync();
 
         Assert.Equal(1, journal.CleanupCount);
     }

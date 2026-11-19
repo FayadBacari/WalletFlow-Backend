@@ -21,10 +21,14 @@ public class UserSession
     // id_utilisateur
     public Guid UserId { get; init; }
 
-    // Renvoie vrai si la session a servi il y a moins de 30 minutes (GR Auth, SS §3).
+    // date_creation_session : la session ne dure jamais plus de 12 heures après sa création.
+    public required DateTime CreatedAt { get; init; }
+
+    // Renvoie vrai si la session a servi il y a moins de 30 minutes, et qu'elle a été ouverte il y a moins de 12 heures (GR Auth, SS §3).
     public bool IsActiveAt(DateTime now)
     {
-        return lastActivityAt + UserSessionRules.IdleTimeout > now;
+        return lastActivityAt + UserSessionRules.IdleTimeout > now
+            && CreatedAt + UserSessionRules.AbsoluteLifetime > now;
     }
 
     // Renvoie vrai si la dernière activité enregistrée date d'au moins une minute : il faut alors l'écrire de nouveau.

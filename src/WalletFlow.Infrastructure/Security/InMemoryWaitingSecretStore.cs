@@ -92,7 +92,7 @@ public class InMemoryWaitingSecretStore : IWaitingSecretStore
     }
 
     // Un secret en attente, avec la fin de son attente.
-    private class StoredSecret
+    private sealed class StoredSecret
     {
         public required string Secret { get; init; }
         public required DateTimeOffset ExpiresAt { get; init; }

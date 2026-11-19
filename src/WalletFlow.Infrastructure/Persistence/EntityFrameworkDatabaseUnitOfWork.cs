@@ -18,11 +18,11 @@ public class EntityFrameworkDatabaseUnitOfWork : IDatabaseUnitOfWork
     // Enregistre tout. La version de chaque ligne (xmin, voir RowVersionConfiguration) fait échouer l'écriture si une autre requête
     // a changé ou effacé la ligne depuis sa lecture : EF Core annule alors toute la transaction,
     // et les objets sont oubliés pour pouvoir tout relire.
-    public async Task<bool> TrySaveChangesAsync()
+    public async Task<bool> TrySaveChangesAsync(CancellationToken cancellationToken = default)
     {
         try
         {
-            await databaseContext.SaveChangesAsync();
+            await databaseContext.SaveChangesAsync(cancellationToken);
             return true;
         }
         catch (DbUpdateConcurrencyException)

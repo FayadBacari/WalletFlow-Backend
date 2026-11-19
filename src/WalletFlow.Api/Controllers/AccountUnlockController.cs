@@ -29,11 +29,13 @@ public class AccountUnlockController : ControllerBase
     [HttpPost("unlock")]
     [EnableRateLimiting(RateLimitingConfiguration.AccountUnlockPolicy)]
     [RequestSizeLimit(RequestSizeConfiguration.MaximumAccountRequestBytes)]
-    public async Task<IActionResult> Unlock(UnlockAccountRequest request)
+    [ProducesResponseType<MessageResponse>(StatusCodes.Status200OK)]
+    public async Task<IActionResult> Unlock(UnlockAccountRequest request, CancellationToken cancellationToken = default)
     {
         var result = await unlockService.UnlockAsync(
             request.Token,
-            HttpContext.Connection.RemoteIpAddress);
+            HttpContext.Connection.RemoteIpAddress,
+            cancellationToken);
 
         if (result is AccountUnlockResult.AccountUnlocked)
         {

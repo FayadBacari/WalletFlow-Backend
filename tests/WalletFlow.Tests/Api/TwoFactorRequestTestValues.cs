@@ -27,7 +27,7 @@ public static class TwoFactorRequestTestValues
         var secret = new OtpNetAuthenticatorCodeTool().GenerateSecret();
         var cleanedCode = new RandomSecureTokenGenerator().GenerateBackupCode();
 
-        account.ActivateTwoFactor(new AesGcmTotpSecretProtector(api.TotpEncryptionKey).Encrypt(secret, account.Id));
+        account.ActivateTwoFactor(new AesGcmTotpSecretProtector(api.TotpEncryptionKey).Encrypt(secret, account.Id), TwoFactorTestTools.OldStep);
         api.TwoFactorRepository.SavedBackupCodes.Add(new BackupCode
         {
             CodeHash = await RealArgonHashers.CreateBackupCodeHasher().HashAsync(cleanedCode, account.Id),

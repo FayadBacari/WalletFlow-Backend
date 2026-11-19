@@ -7,6 +7,9 @@ public static class ErrorMessages
     // Le même message quelle que soit la raison du refus : il ne dit jamais si le compte existe (GR Auth).
     public const string WrongCredentials = "Identifiants incorrects";
 
+    // Le serveur refuse un calcul coûteux qu'il ne peut pas faire tout de suite : la requête n'a rien changé, et peut être refaite.
+    public const string ServerBusy = "Le serveur est très demandé. Réessaie dans quelques secondes.";
+
     public const string EmailNotConfirmed =
         "Ton adresse e-mail n'est pas encore confirmée. Ouvre le lien reçu par e-mail, ou inscris-toi à nouveau pour en recevoir un autre.";
 
@@ -14,6 +17,10 @@ public static class ErrorMessages
 
     public const string PasswordBreaksRules =
         "Le mot de passe doit contenir de 12 à 128 caractères, dont une majuscule, une minuscule, un chiffre et un caractère spécial, sans caractère invisible.";
+
+    // Un mot de passe des fuites connues : les attaquants l'essaient en premier, sur tous les sites (SS §2).
+    public const string BreachedPassword =
+        "Ce mot de passe apparaît dans une fuite de données connue : il serait parmi les premiers essayés. Choisis-en un autre.";
 
     public const string ConfirmationLinkNoLongerValid = "Ce lien n'est plus valable. Inscris-toi à nouveau pour en recevoir un autre.";
 

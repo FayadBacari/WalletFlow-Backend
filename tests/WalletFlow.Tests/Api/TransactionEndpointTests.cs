@@ -1,3 +1,5 @@
+using System.Globalization;
+using WalletFlow.Application.Persistence;
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
@@ -181,7 +183,7 @@ public class TransactionEndpointTests
 
         Assert.Single(await SearchAsync(user.Client, "?text=carrefour"));
         Assert.Equal(2, (await SearchAsync(user.Client, "?amountInCents=4520")).Count);
-        Assert.Equal(2, (await SearchAsync(user.Client, "?from=" + today.AddDays(-2).ToString("yyyy-MM-dd") + "&to=" + today.ToString("yyyy-MM-dd"))).Count);
+        Assert.Equal(2, (await SearchAsync(user.Client, "?from=" + today.AddDays(-2).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) + "&to=" + today.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture))).Count);
         Assert.Empty(await SearchAsync(user.Client, "?page=2"));
     }
 
@@ -196,10 +198,10 @@ public class TransactionEndpointTests
         var date = await user.Client.GetAsync(TransactionsEndpoint + "?from=pas-une-date");
 
         Assert.Equal(HttpStatusCode.BadRequest, amount.StatusCode);
-        Assert.Equal(ApiErrorConfiguration.InvalidValueMessage, await ReadFieldErrorAsync(amount, "AmountInCents"));
+        Assert.Equal(ApiErrorConfiguration.InvalidValueMessage, await ReadFieldErrorAsync(amount, "amountInCents"));
         Assert.DoesNotContain("script", await amount.Content.ReadAsStringAsync());
         Assert.Equal(HttpStatusCode.BadRequest, date.StatusCode);
-        Assert.Equal(ApiErrorConfiguration.InvalidValueMessage, await ReadFieldErrorAsync(date, "From"));
+        Assert.Equal(ApiErrorConfiguration.InvalidValueMessage, await ReadFieldErrorAsync(date, "from"));
     }
 
     // Les critères hors limites sont refusés sur leur champ, avec leur message.
@@ -214,10 +216,10 @@ public class TransactionEndpointTests
         var page = await user.Client.GetAsync(TransactionsEndpoint + "?page=0");
         var text = await user.Client.GetAsync(TransactionsEndpoint + "?text=" + new string('a', 256));
 
-        Assert.Equal(ErrorMessages.TransactionSearchAmountBreaksRules, await ReadFieldErrorAsync(amount, "AmountInCents"));
-        Assert.Equal(ErrorMessages.DatesReversed, await ReadFieldErrorAsync(dates, "To"));
-        Assert.Equal(ErrorMessages.TransactionSearchPageBreaksRules, await ReadFieldErrorAsync(page, "Page"));
-        Assert.Equal(ErrorMessages.TransactionSearchTextTooLong, await ReadFieldErrorAsync(text, "Text"));
+        Assert.Equal(ErrorMessages.TransactionSearchAmountBreaksRules, await ReadFieldErrorAsync(amount, "amountInCents"));
+        Assert.Equal(ErrorMessages.DatesReversed, await ReadFieldErrorAsync(dates, "to"));
+        Assert.Equal(ErrorMessages.TransactionSearchPageBreaksRules, await ReadFieldErrorAsync(page, "page"));
+        Assert.Equal(ErrorMessages.TransactionSearchTextTooLong, await ReadFieldErrorAsync(text, "text"));
     }
 
     // GR Dépenses : l'opération change de catégorie, la règle est créée, et la réponse montre l'opération telle qu'elle est.
@@ -311,7 +313,7 @@ public class TransactionEndpointTests
             new { categoryId = CategoryOf(api, user, "Loisirs").Id, applyToFutureTransactions = true }, user.CsrfToken);
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
-        Assert.Equal(ErrorMessages.TransactionLabelWithoutLetter, await ReadFieldErrorAsync(response, nameof(TransactionCategoryRequest.ApplyToFutureTransactions)));
+        Assert.Equal(ErrorMessages.TransactionLabelWithoutLetter, await ReadFieldErrorAsync(response, "applyToFutureTransactions"));
     }
 
     // GR Comptes : l'opération est marquée comme transfert, puis la marque est retirée. Le champ doit être écrit.
@@ -365,5 +367,30 @@ public class TransactionEndpointTests
         Assert.Contains("1 à 10 000", ErrorMessages.TransactionSearchPageBreaksRules);
         Assert.Equal(1_000_000_000, TransactionRules.MaximumAmountInCents);
         Assert.Contains("10 000 000 €", ErrorMessages.TransactionSearchAmountBreaksRules);
+    }
+
+    // Une opération que d'autres requêtes changent à chaque essai répond 409, pour sa catégorie comme pour son statut de
+    // virement : rien ne change, l'utilisateur peut réessayer.
+    [Fact]
+    public async Task ChangesThatNeverSaveAskToRetry()
+    {
+        using var api = new ApiFactoryWithFakes();
+        var user = await LogInAsync(api);
+        await ConnectAsync(api, user, "stable-1", (2, -4520, "CB CARREFOUR"));
+        var operationId = IdOf(await SearchAsync(user.Client), "CB CARREFOUR");
+        var leisure = CategoryOf(api, user, "Loisirs");
+        api.TransactionRepository.Conflicts = DatabaseChangesSavingService.MaximumTries * 2;
+
+        var category = await SendAsync(user.Client, HttpMethod.Put, TransactionsEndpoint + "/" + operationId + "/category",
+            new { categoryId = leisure.Id, applyToFutureTransactions = false }, user.CsrfToken);
+        var transfer = await SendAsync(user.Client, HttpMethod.Put, TransactionsEndpoint + "/" + operationId + "/transfer",
+            new { isInternalTransfer = true }, user.CsrfToken);
+
+        await AssertProblemTitleAsync(category, HttpStatusCode.Conflict, ErrorMessages.TransactionsChangedMeanwhile);
+        await AssertProblemTitleAsync(transfer, HttpStatusCode.Conflict, ErrorMessages.TransactionsChangedMeanwhile);
+        api.TransactionRepository.Conflicts = 0;
+        var operation = Assert.Single(await SearchAsync(user.Client));
+        Assert.NotEqual(leisure.Id, operation.GetProperty("categoryId").GetGuid());
+        Assert.False(operation.GetProperty("isInternalTransfer").GetBoolean());
     }
 }

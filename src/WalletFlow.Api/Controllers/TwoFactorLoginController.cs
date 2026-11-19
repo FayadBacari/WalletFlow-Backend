@@ -28,7 +28,10 @@ public class TwoFactorLoginController : ControllerBase
     [HttpPost("login/two-factor")]
     [EnableRateLimiting(RateLimitingConfiguration.TwoFactorCodePolicy)]
     [RequestSizeLimit(RequestSizeConfiguration.MaximumAccountRequestBytes)]
-    public async Task<IActionResult> FinishLogin(TwoFactorCodeRequest request)
+    [ProducesResponseType<LoginResponse>(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized, Description = OpenApiConfiguration.LoginMustRestartDescription)]
+    [ProducesResponseType(StatusCodes.Status503ServiceUnavailable, Description = OpenApiConfiguration.ServerBusyDescription)]
+    public async Task<IActionResult> FinishLogin(TwoFactorCodeRequest request, CancellationToken cancellationToken = default)
     {
         var result = await twoFactorLoginService.FinishAsync(new TwoFactorCodeAttempt
         {
@@ -37,7 +40,8 @@ public class TwoFactorLoginController : ControllerBase
             WaitingLoginToken = Request.Cookies[SessionCookiesConfiguration.WaitingLoginCookieName],
             DeviceToken = Request.Cookies[SessionCookiesConfiguration.DeviceCookieName],
             SessionToken = Request.Cookies[SessionCookiesConfiguration.SessionCookieName]
-        });
+        },
+        cancellationToken);
 
         if (result is TwoFactorLoginResult.WrongCode)
         {

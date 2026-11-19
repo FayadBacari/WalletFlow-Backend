@@ -41,7 +41,7 @@ public class FakeSuggestionRepository : ISuggestionRepository, ITransactionalFak
     }
 
     // Donne les suggestions gardées pour cet utilisateur.
-    public Task<List<SavingsSuggestion>> FindAllAsync(Guid userId)
+    public Task<List<SavingsSuggestion>> FindAllAsync(Guid userId, CancellationToken cancellationToken = default)
     {
         if (userId == FailingUserId)
         {
@@ -62,7 +62,7 @@ public class FakeSuggestionRepository : ISuggestionRepository, ITransactionalFak
     }
 
     // Cherche la suggestion parmi celles de l'utilisateur.
-    public Task<SavingsSuggestion?> FindAsync(Guid userId, Guid suggestionId)
+    public Task<SavingsSuggestion?> FindAsync(Guid userId, Guid suggestionId, CancellationToken cancellationToken = default)
     {
         lock (pendingChangesLock)
         {
@@ -79,7 +79,7 @@ public class FakeSuggestionRepository : ISuggestionRepository, ITransactionalFak
 
     // Donne les utilisateurs gardés dont ce mois attend son calcul, dans l'ordre de leur identifiant comme la vraie base :
     // PostgreSQL range les uuid octet par octet, comme cette comparaison de leur texte.
-    public async Task<List<Guid>> FindUsersToCalculateAsync(DateOnly month, Guid? afterUserId, int count)
+    public async Task<List<Guid>> FindUsersToCalculateAsync(DateOnly month, Guid? afterUserId, int count, CancellationToken cancellationToken = default)
     {
         if (FailsWhenListingUsers)
         {
@@ -90,7 +90,7 @@ public class FakeSuggestionRepository : ISuggestionRepository, ITransactionalFak
 
         foreach (var user in bagRepository.SavedUsers.ToList())
         {
-            var hasTransaction = Transactions != null && await Transactions.FindEarliestDateAsync(user.Id, null) != null;
+            var hasTransaction = Transactions != null && await Transactions.FindEarliestDateAsync(user.Id, null, cancellationToken) != null;
             var isDue = user.IsEmailConfirmed
                 && (user.LastSuggestionMonth == null || user.LastSuggestionMonth < month)
                 && hasTransaction
@@ -109,7 +109,7 @@ public class FakeSuggestionRepository : ISuggestionRepository, ITransactionalFak
     }
 
     // Additionne les mouvements gardés qui viennent des suggestions acceptées de l'utilisateur.
-    public Task<long> SumSavedAsync(Guid userId)
+    public Task<long> SumSavedAsync(Guid userId, CancellationToken cancellationToken = default)
     {
         lock (pendingChangesLock)
         {

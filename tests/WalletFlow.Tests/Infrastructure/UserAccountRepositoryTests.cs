@@ -441,4 +441,47 @@ public class UserAccountRepositoryTests
 
         Assert.False(await databaseContext.Users.AnyAsync(row => row.Id == expiredAccount.Id));
     }
+
+    // Enregistre directement un compte confirmé, avec ce secret chiffré s'il en a un.
+    private static async Task<User> SaveAccountWithSecretAsync(WalletFlowDatabaseContext databaseContext, string emailAddress, string? encryptedSecret)
+    {
+        var account = new User { Email = emailAddress, PasswordHash = "empreinte-de-test", IsEmailConfirmed = true };
+        if (encryptedSecret != null)
+        {
+            account.ActivateTwoFactor(encryptedSecret, 1000);
+        }
+
+        databaseContext.Users.Add(account);
+        await databaseContext.SaveChangesAsync();
+        databaseContext.ChangeTracker.Clear();
+
+        return account;
+    }
+
+    // SS §7 : la recherche donne les secrets d'une ancienne clé, ceux d'avant les numéros compris, jamais ceux de la clé
+    // actuelle ni les comptes sans double authentification. Elle reprend après le dernier compte donné, par paquets.
+    [Fact]
+    public async Task SecretsOfOtherKeysAreFoundByBatches()
+    {
+        await using var databaseContext = CreateDatabaseContext();
+        await using var transaction = await databaseContext.Database.BeginTransactionAsync();
+        var repository = new UserAccountRepository(databaseContext);
+        var oldKey = await SaveAccountWithSecretAsync(databaseContext, "test-cle-ancienne@exemple.test", "k1$ancien-secret");
+        var withoutNumber = await SaveAccountWithSecretAsync(databaseContext, "test-cle-sans-numero@exemple.test", "secret-d-avant-les-numeros");
+        var currentKey = await SaveAccountWithSecretAsync(databaseContext, "test-cle-actuelle@exemple.test", "k2$secret-actuel");
+        var withoutTwoFactor = await SaveAccountWithSecretAsync(databaseContext, "test-cle-aucune@exemple.test", null);
+        var twelfthKey = await SaveAccountWithSecretAsync(databaseContext, "test-cle-douze@exemple.test", "k12$secret-de-la-cle-12");
+
+        var found = await repository.FindAccountsWithOtherTotpKeyAsync("k2$", null, 1000);
+        var firstOnly = await repository.FindAccountsWithOtherTotpKeyAsync("k2$", null, 1);
+        var afterFirst = await repository.FindAccountsWithOtherTotpKeyAsync("k2$", firstOnly.Single(), 1000);
+
+        Assert.Contains(oldKey.Id, found);
+        Assert.Contains(withoutNumber.Id, found);
+        Assert.Contains(twelfthKey.Id, found);
+        Assert.DoesNotContain(currentKey.Id, found);
+        Assert.DoesNotContain(withoutTwoFactor.Id, found);
+        Assert.Equal(found[0], firstOnly.Single());
+        Assert.Equal(found.Skip(1), afterFirst);
+    }
 }

@@ -4,6 +4,7 @@ using WalletFlow.Application.UserSessions;
 using WalletFlow.Domain.AccountsAndCategories;
 using WalletFlow.Domain.NotificationsAndSupport;
 using WalletFlow.Domain.UsersAndSecurity;
+using WalletFlow.Tests.Fakes;
 using static WalletFlow.Tests.Application.TwoFactorServicesWithFakeTools;
 
 namespace WalletFlow.Tests.Application;
@@ -56,9 +57,9 @@ public class AccountDeletionServiceTests
     {
         var account = tools.AddAccountWithoutTwoFactor();
         var other = tools.AddAccountWithoutTwoFactor("autre@exemple.test");
-        tools.SessionRepository.SavedSessions.Add(new UserSession { Id = "session-1", LastActivityAt = Now, UserId = account.Id });
-        tools.SessionRepository.SavedSessions.Add(new UserSession { Id = "session-2", LastActivityAt = Now, UserId = account.Id });
-        tools.SessionRepository.SavedSessions.Add(new UserSession { Id = "session-autre", LastActivityAt = Now, UserId = other.Id });
+        tools.SessionRepository.SavedSessions.Add(new UserSession { CreatedAt = Now, Id = "session-1", LastActivityAt = Now, UserId = account.Id });
+        tools.SessionRepository.SavedSessions.Add(new UserSession { CreatedAt = Now, Id = "session-2", LastActivityAt = Now, UserId = account.Id });
+        tools.SessionRepository.SavedSessions.Add(new UserSession { CreatedAt = Now, Id = "session-autre", LastActivityAt = Now, UserId = other.Id });
         tools.AccountRepository.SavedEmailTokens.Add(new EmailToken { Type = EmailTokenType.PasswordRecovery, TokenHash = "lien-1", ExpiresAt = Now.AddMinutes(30), UserId = account.Id });
         tools.AccountRepository.SavedEmailTokens.Add(new EmailToken
         {
@@ -94,7 +95,7 @@ public class AccountDeletionServiceTests
     public async Task AuthenticatorSecretChangedMeanwhileStopsTheRequest()
     {
         var activatedAccount = tools.AddActivatedAccount();
-        tools.PasswordHasher.OnPasswordVerified = () => activatedAccount.UserAccount.ActivateTwoFactor("autre-secret-chiffre");
+        tools.PasswordHasher.OnPasswordVerified = () => activatedAccount.UserAccount.ActivateTwoFactor("autre-secret-chiffre", TwoFactorTestTools.OldStep);
 
         var result = await RequestAsync(activatedAccount.UserAccount.Id, AccountPassword, activatedAccount.BackupCodes[0]);
 
@@ -109,7 +110,7 @@ public class AccountDeletionServiceTests
     public async Task WrongPasswordChangesNothingAndIsJournaled()
     {
         var account = tools.AddAccountWithoutTwoFactor();
-        tools.SessionRepository.SavedSessions.Add(new UserSession { Id = "session-1", LastActivityAt = Now, UserId = account.Id });
+        tools.SessionRepository.SavedSessions.Add(new UserSession { CreatedAt = Now, Id = "session-1", LastActivityAt = Now, UserId = account.Id });
         var connection = AddConnection(account.Id, "session-banque");
 
         var result = await RequestAsync(account.Id, WrongPassword);
@@ -347,5 +348,31 @@ public class AccountDeletionServiceTests
         Assert.False(await erasure.EraseAsync(account.Id));
         Assert.False(await erasure.EraseAsync(Guid.NewGuid()));
         Assert.Contains(account, tools.AccountRepository.SavedUsers);
+    }
+
+    // SS §2 : le code de l'application qui autorise la demande est noté avec elle : il ne resservira plus.
+    [Fact]
+    public async Task AuthenticatorCodeIsNotedWithTheRequest()
+    {
+        var activatedAccount = tools.AddActivatedAccount();
+
+        var result = await RequestAsync(activatedAccount.UserAccount.Id, AccountPassword, tools.CalculateCurrentCode(activatedAccount.Secret));
+
+        Assert.IsType<AccountDeletionResult.Requested>(result);
+        Assert.Equal(tools.CurrentStep(), activatedAccount.UserAccount.LastAuthenticatorStep);
+    }
+
+    // Une autre requête se sert du même code juste avant l'enregistrement : la suppression n'est pas demandée (SS §2).
+    [Fact]
+    public async Task CodeUsedByAnotherRequestMeanwhileRefusesTheRequest()
+    {
+        var activatedAccount = tools.AddActivatedAccount();
+        tools.AccountRepository.AuthenticatorStepUsedBeforeSave = tools.CurrentStep();
+
+        var result = await RequestAsync(activatedAccount.UserAccount.Id, AccountPassword, tools.CalculateCurrentCode(activatedAccount.Secret));
+
+        Assert.IsType<AccountDeletionResult.WrongPasswordOrCode>(result);
+        Assert.Null(activatedAccount.UserAccount.DeletionRequestedAt);
+        Assert.Null(tools.AccountRepository.AuthenticatorStepUsedBeforeSave);
     }
 }

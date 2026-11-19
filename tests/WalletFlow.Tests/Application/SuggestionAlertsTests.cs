@@ -31,7 +31,7 @@ public class SuggestionAlertsTests
     {
         GiveUnallocatedMoney();
 
-        await services.CreateList().ListAsync(services.UserId);
+        await services.CalculateThenListAsync();
 
         var alert = Assert.Single(services.Alerts.AlertsOf(services.UserId));
         var email = Assert.Single(QueuedAlertEmails());
@@ -42,14 +42,14 @@ public class SuggestionAlertsTests
         Assert.Single(services.SavedSuggestionsOfUser());
     }
 
-    // Le mois n'est calculé qu'une fois : relire la liste n'envoie aucune autre alerte.
+    // Le mois n'est calculé qu'une fois : un second passage de la tâche, puis la lecture, n'envoient aucune autre alerte.
     [Fact]
-    public async Task ReadingTheListAgainSendsNoOtherAlert()
+    public async Task SecondPassSendsNoOtherAlert()
     {
         GiveUnallocatedMoney();
-        await services.CreateList().ListAsync(services.UserId);
+        await services.CalculateThenListAsync();
 
-        await services.CreateList().ListAsync(services.UserId);
+        await services.CalculateThenListAsync();
 
         Assert.Single(services.Alerts.SavedAlerts);
         Assert.Single(QueuedAlertEmails());
@@ -68,7 +68,7 @@ public class SuggestionAlertsTests
             services.Alerts.SavedAlerts.Add(otherAlert);
         };
 
-        await services.CreateList().ListAsync(services.UserId);
+        await services.CalculateThenListAsync();
 
         Assert.Equal(otherAlert, Assert.Single(services.Alerts.SavedAlerts));
         Assert.Empty(QueuedAlertEmails());
@@ -88,7 +88,7 @@ public class SuggestionAlertsTests
             DestinationBagId = services.SaveBag("Épargne").Id
         });
 
-        await services.CreateList().ListAsync(services.UserId);
+        await services.CalculateThenListAsync();
 
         Assert.Equal(October, services.User.LastSuggestionMonth);
         Assert.Empty(services.SavedSuggestionsOfUser());
@@ -108,7 +108,7 @@ public class SuggestionAlertsTests
             SuggestionStatus.Ignored,
             statusChangedAt: services.Now.AddDays(-3));
 
-        await services.CreateList().ListAsync(services.UserId);
+        await services.CalculateThenListAsync();
 
         Assert.Empty(services.Alerts.SavedAlerts);
     }
@@ -121,7 +121,7 @@ public class SuggestionAlertsTests
         var suggestionType = services.Alerts.SavedTypes.Single(type => type.Kind == AlertKind.NewSuggestion);
         services.Alerts.SavedPreferences.Add(AlertPreference.Create(services.UserId, suggestionType, false));
 
-        await services.CreateList().ListAsync(services.UserId);
+        await services.CalculateThenListAsync();
 
         Assert.Single(services.SavedSuggestionsOfUser());
         Assert.Empty(services.Alerts.SavedAlerts);

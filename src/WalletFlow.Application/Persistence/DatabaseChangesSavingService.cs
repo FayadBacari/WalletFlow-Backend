@@ -22,7 +22,8 @@ public class DatabaseChangesSavingService
     // Si les autres requêtes ne laissent jamais passer l'enregistrement, donne la réponse de refus fournie.
     public async Task<TResult> SaveWithRetriesAsync<TResult>(
         Func<Task<PreparedChanges<TResult>>> prepareChanges,
-        TResult resultIfNeverSaved)
+        TResult resultIfNeverSaved,
+        CancellationToken cancellationToken = default)
     {
         for (var tryNumber = 1; tryNumber <= MaximumTries; tryNumber++)
         {
@@ -33,7 +34,7 @@ public class DatabaseChangesSavingService
                 return changes.Result;
             }
 
-            if (await unitOfWork.TrySaveChangesAsync())
+            if (await unitOfWork.TrySaveChangesAsync(cancellationToken))
             {
                 return changes.Result;
             }

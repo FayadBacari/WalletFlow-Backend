@@ -1,3 +1,4 @@
+using System.Globalization;
 using WalletFlow.Domain.BagsAndSuggestions;
 
 namespace WalletFlow.Tests.Domain;
@@ -24,7 +25,7 @@ public class SuggestionRulesTests
     [InlineData("2026-03-31", "2026-02-01")]
     public void EvaluatedMonthStartsOnTheFifth(string today, string expectedMonth)
     {
-        Assert.Equal(DateOnly.Parse(expectedMonth), SuggestionRules.FindEvaluatedMonth(DateOnly.Parse(today)));
+        Assert.Equal(DateOnly.Parse(expectedMonth, CultureInfo.InvariantCulture), SuggestionRules.FindEvaluatedMonth(DateOnly.Parse(today, CultureInfo.InvariantCulture)));
     }
 
     // Moyenne de 100 € sur juillet, août et septembre : le seuil est 120 €. À 120 € pile, rien ; un centime de plus,

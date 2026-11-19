@@ -40,20 +40,29 @@ public class AccountRegistrationController : ControllerBase
     [ServiceFilter(typeof(MinimumAnswerDurationFilter))]
     [EnableRateLimiting(RateLimitingConfiguration.SignupPolicy)]
     [RequestSizeLimit(RequestSizeConfiguration.MaximumAccountRequestBytes)]
-    public async Task<IActionResult> Register(RegisterAccountRequest request)
+    [ProducesResponseType<MessageResponse>(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status503ServiceUnavailable, Description = OpenApiConfiguration.RegistrationUnavailableDescription)]
+    public async Task<IActionResult> Register(RegisterAccountRequest request, CancellationToken cancellationToken = default)
     {
         var result = await registrationService.RegisterAsync(
             request.Email,
-            request.Password);
+            request.Password,
+            cancellationToken);
 
         if (result is AccountRegistrationResult.RefusedByRules refusal)
         {
             return AnswerRefusedByRules(refusal);
         }
 
+        if (result is AccountRegistrationResult.PasswordBreached)
+        {
+            ModelState.AddModelError(nameof(RegisterAccountRequest.Password), ErrorMessages.BreachedPassword);
+            return ValidationProblem();
+        }
+
         if (result is AccountRegistrationResult.TooManyRequests)
         {
-            return StatusCode(StatusCodes.Status429TooManyRequests);
+            return this.AnswerTooManyRequests(RetryDelays.PerEmailAddress);
         }
 
         if (result is AccountRegistrationResult.EmailCouldNotBeSent emailNotSent)

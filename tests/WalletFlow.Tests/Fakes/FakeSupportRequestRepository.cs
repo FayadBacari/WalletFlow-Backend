@@ -54,7 +54,7 @@ public class FakeSupportRequestRepository : ISupportRequestRepository, ITransact
     }
 
     // Lit la ligne de l'utilisateur, et note sa version.
-    public Task<User?> FindUserAsync(Guid userId)
+    public Task<User?> FindUserAsync(Guid userId, CancellationToken cancellationToken = default)
     {
         ThrowIfDown();
 
@@ -82,7 +82,7 @@ public class FakeSupportRequestRepository : ISupportRequestRepository, ITransact
     }
 
     // Compte les demandes gardées de l'utilisateur depuis ce moment, ce moment compris.
-    public Task<int> CountSentSinceAsync(Guid userId, DateTime since)
+    public Task<int> CountSentSinceAsync(Guid userId, DateTime since, CancellationToken cancellationToken = default)
     {
         ThrowIfDown();
 
@@ -112,7 +112,7 @@ public class FakeSupportRequestRepository : ISupportRequestRepository, ITransact
     }
 
     // Donne les demandes gardées de l'utilisateur, la plus récente d'abord, comme la vraie requête.
-    public Task<List<SupportRequestSummary>> FindUserRequestsAsync(Guid userId)
+    public Task<List<SupportRequestSummary>> FindUserRequestsAsync(Guid userId, CancellationToken cancellationToken = default)
     {
         ThrowIfDown();
 
@@ -134,7 +134,7 @@ public class FakeSupportRequestRepository : ISupportRequestRepository, ITransact
     }
 
     // Donne la demande gardée de l'utilisateur, avec ses réponses de la plus ancienne à la plus récente, comme la vraie requête.
-    public Task<SupportRequestDetails?> FindUserRequestAsync(Guid userId, Guid requestId)
+    public Task<SupportRequestDetails?> FindUserRequestAsync(Guid userId, Guid requestId, CancellationToken cancellationToken = default)
     {
         ThrowIfDown();
 
@@ -161,7 +161,7 @@ public class FakeSupportRequestRepository : ISupportRequestRepository, ITransact
 
     // Lit ce que dit l'e-mail d'une réponse : l'adresse du compte de la demande, gardée dans la fausse base des comptes, ou celle
     // du visiteur, comme la vraie requête.
-    public Task<SupportResponseEmailContent?> ReadResponseEmailAsync(Guid responseId)
+    public Task<SupportResponseEmailContent?> ReadResponseEmailAsync(Guid responseId, CancellationToken cancellationToken = default)
     {
         ThrowIfDown();
 
@@ -184,7 +184,7 @@ public class FakeSupportRequestRepository : ISupportRequestRepository, ITransact
     }
 
     // Efface tout de suite les demandes envoyées avant ce moment, avec leurs réponses, comme la vraie base.
-    public Task<int> DeleteSentBeforeAsync(DateTime limit)
+    public Task<int> DeleteSentBeforeAsync(DateTime limit, CancellationToken cancellationToken = default)
     {
         ThrowIfDown();
 

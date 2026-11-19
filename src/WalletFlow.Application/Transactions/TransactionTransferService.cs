@@ -25,20 +25,21 @@ public class TransactionTransferService
     }
 
     // Donne à l'opération la marque demandée, transfert ou non, puis la relit telle que l'utilisateur la voit maintenant.
-    public async Task<TransactionTransferResult> MarkAsync(Guid userId, Guid transactionId, bool isInternalTransfer)
+    public async Task<TransactionTransferResult> MarkAsync(Guid userId, Guid transactionId, bool isInternalTransfer, CancellationToken cancellationToken = default)
     {
         var refusal = await savingService.SaveWithRetriesAsync(
-            () => PrepareMarkAsync(userId, transactionId, isInternalTransfer),
-            (TransactionTransferResult?)new TransactionTransferResult.NotSaved());
+            () => PrepareMarkAsync(userId, transactionId, isInternalTransfer, cancellationToken),
+            (TransactionTransferResult?)new TransactionTransferResult.NotSaved(),
+            cancellationToken);
 
         if (refusal != null)
         {
             return refusal;
         }
 
-        await budgetAlerts.CheckAsync(userId);
+        await budgetAlerts.CheckAsync(userId, cancellationToken);
 
-        var view = await transactionRepository.ReadViewAsync(userId, transactionId);
+        var view = await transactionRepository.ReadViewAsync(userId, transactionId, cancellationToken);
 
         // La banque vient d'être déconnectée, avec ses opérations.
         if (view == null)
@@ -50,9 +51,9 @@ public class TransactionTransferService
     }
 
     // Un passage : vérifie l'opération, puis prépare sa marque. Renvoie le refus, ou null quand la marque est prête.
-    private async Task<PreparedChanges<TransactionTransferResult?>> PrepareMarkAsync(Guid userId, Guid transactionId, bool isInternalTransfer)
+    private async Task<PreparedChanges<TransactionTransferResult?>> PrepareMarkAsync(Guid userId, Guid transactionId, bool isInternalTransfer, CancellationToken cancellationToken = default)
     {
-        var transaction = await transactionRepository.FindAsync(userId, transactionId);
+        var transaction = await transactionRepository.FindAsync(userId, transactionId, cancellationToken);
 
         if (transaction == null)
         {

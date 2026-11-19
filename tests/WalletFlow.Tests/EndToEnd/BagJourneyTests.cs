@@ -187,7 +187,7 @@ public class BagJourneyTests
             Assert.Equal(HttpStatusCode.Created, (await MoveAsync(browser, savingsId, null, 5000, csrfToken)).StatusCode);
             var tooMuch = await MoveAsync(browser, null, savingsId, 65_001, csrfToken);
             Assert.Equal(HttpStatusCode.BadRequest, tooMuch.StatusCode);
-            Assert.Equal(ErrorMessages.AvailableMoneyTooLow, (await ReadJsonAsync(tooMuch)).GetProperty("errors").GetProperty("AmountInCents")[0].GetString());
+            Assert.Equal(ErrorMessages.AvailableMoneyTooLow, (await ReadJsonAsync(tooMuch)).GetProperty("errors").GetProperty("amountInCents")[0].GetString());
 
             var list = await ListAsync(browser);
             Assert.Equal(100_000, list.GetProperty("totalBalanceInCents").GetInt64());

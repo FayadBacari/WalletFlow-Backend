@@ -18,10 +18,10 @@ public class AlertCleanupService
     }
 
     // Efface les alertes concernées, et renvoie leur nombre. Le mois en cours est celui de Paris.
-    public async Task<int> DeleteOldAlertsAsync()
+    public async Task<int> DeleteOldAlertsAsync(CancellationToken cancellationToken = default)
     {
         var firstKeptMonth = AlertRules.FindFirstKeptMonth(UsersCalendar.FindToday(clock.GetUtcNow()));
 
-        return await alertRepository.DeleteMonthAlertsBeforeAsync(firstKeptMonth);
+        return await alertRepository.DeleteMonthAlertsBeforeAsync(firstKeptMonth, cancellationToken);
     }
 }

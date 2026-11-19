@@ -18,25 +18,28 @@ public class UserAccountRepository : IUserAccountRepository
     }
 
     // Cherche le compte qui utilise cette adresse e-mail. Renvoie null s'il n'y en a pas.
-    public async Task<User?> FindByEmailAsync(string email)
+    public async Task<User?> FindByEmailAsync(string email, CancellationToken cancellationToken = default)
     {
         return await databaseContext.Users.SingleOrDefaultAsync(user =>
-            user.Email == email);
+            user.Email == email,
+            cancellationToken);
     }
 
     // Cherche un compte par son identifiant. Renvoie null s'il n'existe plus.
-    public async Task<User?> FindByIdAsync(Guid accountId)
+    public async Task<User?> FindByIdAsync(Guid accountId, CancellationToken cancellationToken = default)
     {
         return await databaseContext.Users.SingleOrDefaultAsync(user =>
-            user.Id == accountId);
+            user.Id == accountId,
+            cancellationToken);
     }
 
     // Cherche un jeton de ce type par son empreinte. Renvoie null s'il n'existe pas : un lien ne sert jamais à un autre usage.
-    public async Task<EmailToken?> FindTokenAsync(string tokenHash, EmailTokenType tokenType)
+    public async Task<EmailToken?> FindTokenAsync(string tokenHash, EmailTokenType tokenType, CancellationToken cancellationToken = default)
     {
         return await databaseContext.EmailTokens.SingleOrDefaultAsync(token =>
             token.TokenHash == tokenHash
-            && token.Type == tokenType);
+            && token.Type == tokenType,
+            cancellationToken);
     }
 
     // Efface l'ancien jeton du même type et du même compte, puis enregistre le nouveau : l'ancien lien ne marche plus (SS §2),
@@ -44,34 +47,34 @@ public class UserAccountRepository : IUserAccountRepository
     // ne peut pas le faire échouer. Les deux écritures forment une seule transaction SQL : si l'enregistrement du nouveau jeton
     // échoue, l'ancien n'est pas effacé, et le compte n'est jamais laissé sans lien. Cette écriture est immédiate :
     // elle refuse de partir si des changements attendent l'unité de travail, pour ne jamais les emporter avec elle.
-    public async Task ReplaceTokenAsync(EmailToken newToken)
+    public async Task ReplaceTokenAsync(EmailToken newToken, CancellationToken cancellationToken = default)
     {
         databaseContext.ThrowIfChangesArePending();
 
         // Une transaction déjà ouverte par l'appelant couvre les deux écritures : EF Core refuse d'en ouvrir une seconde.
         if (databaseContext.Database.CurrentTransaction != null)
         {
-            await DeleteOldThenAddTokenAsync(newToken);
+            await DeleteOldThenAddTokenAsync(newToken, cancellationToken);
             return;
         }
 
-        await using var transaction = await databaseContext.Database.BeginTransactionAsync();
-        await DeleteOldThenAddTokenAsync(newToken);
-        await transaction.CommitAsync();
+        await using var transaction = await databaseContext.Database.BeginTransactionAsync(cancellationToken);
+        await DeleteOldThenAddTokenAsync(newToken, cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
     }
 
     // Efface l'ancien jeton du même type et du même compte, puis enregistre le nouveau, dans la transaction en cours.
-    private async Task DeleteOldThenAddTokenAsync(EmailToken newToken)
+    private async Task DeleteOldThenAddTokenAsync(EmailToken newToken, CancellationToken cancellationToken = default)
     {
         await databaseContext.EmailTokens
             .Where(token =>
                 token.UserId == newToken.UserId
                 && token.Type == newToken.Type)
-            .ExecuteDeleteAsync();
+            .ExecuteDeleteAsync(cancellationToken);
 
         databaseContext.EmailTokens.Add(newToken);
 
-        await databaseContext.SaveChangesAsync();
+        await databaseContext.SaveChangesAsync(cancellationToken);
     }
 
     // Enregistre le nouvel utilisateur, ses catégories et son jeton en une seule transaction SQL :
@@ -80,7 +83,8 @@ public class UserAccountRepository : IUserAccountRepository
     public async Task<bool> TryAddAccountAsync(
         User newAccount,
         List<Category> categories,
-        EmailToken confirmationToken)
+        EmailToken confirmationToken,
+        CancellationToken cancellationToken = default)
     {
         databaseContext.Users.Add(newAccount);
         databaseContext.Categories.AddRange(categories);
@@ -88,7 +92,7 @@ public class UserAccountRepository : IUserAccountRepository
 
         try
         {
-            await databaseContext.SaveChangesAsync();
+            await databaseContext.SaveChangesAsync(cancellationToken);
             return true;
         }
         catch (DbUpdateException exception)
@@ -105,13 +109,13 @@ public class UserAccountRepository : IUserAccountRepository
 
     // Prépare le remplacement du lien de confirmation d'un compte : ses anciens liens de confirmation seront effacés, et le nouveau enregistré.
     // EF Core suit les anciens liens : si l'un d'eux vient de servir à confirmer le compte, l'enregistrement échoue.
-    public async Task PrepareConfirmationTokenReplacementAsync(EmailToken newToken)
+    public async Task PrepareConfirmationTokenReplacementAsync(EmailToken newToken, CancellationToken cancellationToken = default)
     {
         var oldTokens = await databaseContext.EmailTokens
             .Where(token =>
                 token.UserId == newToken.UserId
                 && token.Type == EmailTokenType.SignupConfirmation)
-            .ToListAsync();
+            .ToListAsync(cancellationToken);
 
         databaseContext.EmailTokens.RemoveRange(oldTokens);
         databaseContext.EmailTokens.Add(newToken);
@@ -120,7 +124,7 @@ public class UserAccountRepository : IUserAccountRepository
     // Prépare l'effacement des liens de récupération, de déblocage et de désactivation de la double authentification du compte :
     // ils sont partis vers l'ancienne adresse (SS §2).
     // EF Core suit ces liens : si l'un d'eux vient de servir ou d'être remplacé, l'enregistrement échoue et le passage recommence.
-    public async Task PrepareOldAddressLinksRemovalAsync(Guid accountId)
+    public async Task PrepareOldAddressLinksRemovalAsync(Guid accountId, CancellationToken cancellationToken = default)
     {
         var links = await databaseContext.EmailTokens
             .Where(token =>
@@ -128,7 +132,7 @@ public class UserAccountRepository : IUserAccountRepository
                 && (token.Type == EmailTokenType.PasswordRecovery
                     || token.Type == EmailTokenType.AccountUnlock
                     || token.Type == EmailTokenType.TwoFactorDeactivation))
-            .ToListAsync();
+            .ToListAsync(cancellationToken);
 
         databaseContext.EmailTokens.RemoveRange(links);
     }
@@ -143,7 +147,7 @@ public class UserAccountRepository : IUserAccountRepository
 
     // Efface les comptes non confirmés qui n'ont plus aucun lien valable, et renvoie leur nombre.
     // Leurs catégories et leurs jetons partent avec eux (ON DELETE CASCADE).
-    public async Task<int> DeleteExpiredUnconfirmedAccountsAsync(DateTime now)
+    public async Task<int> DeleteExpiredUnconfirmedAccountsAsync(DateTime now, CancellationToken cancellationToken = default)
     {
         return await databaseContext.Users
             .Where(user =>
@@ -152,22 +156,22 @@ public class UserAccountRepository : IUserAccountRepository
                     token.UserId == user.Id
                     && token.Type == EmailTokenType.SignupConfirmation
                     && token.ExpiresAt > now))
-            .ExecuteDeleteAsync();
+            .ExecuteDeleteAsync(cancellationToken);
     }
 
     // Prépare l'effacement de tous les liens du compte. EF Core les suit : si l'un d'eux vient de servir ou d'être remplacé,
     // l'enregistrement échoue et le passage recommence.
-    public async Task PrepareAllLinksRemovalAsync(Guid accountId)
+    public async Task PrepareAllLinksRemovalAsync(Guid accountId, CancellationToken cancellationToken = default)
     {
         var links = await databaseContext.EmailTokens
             .Where(token => token.UserId == accountId)
-            .ToListAsync();
+            .ToListAsync(cancellationToken);
 
         databaseContext.EmailTokens.RemoveRange(links);
     }
 
     // Lit les comptes dont la suppression est demandée à cette date ou avant.
-    public async Task<List<Guid>> FindAccountsToEraseAsync(DateTime requestedAtOrBefore)
+    public async Task<List<Guid>> FindAccountsToEraseAsync(DateTime requestedAtOrBefore, CancellationToken cancellationToken = default)
     {
         return await databaseContext.Users
             .AsNoTracking()
@@ -175,7 +179,30 @@ public class UserAccountRepository : IUserAccountRepository
             .OrderBy(user => user.DeletionRequestedAt)
             .ThenBy(user => user.Id)
             .Select(user => user.Id)
-            .ToListAsync();
+            .ToListAsync(cancellationToken);
+    }
+
+    // Lit seulement les identifiants : chaque compte est ensuite relu et rechiffré dans son propre passage.
+    public async Task<List<Guid>> FindAccountsWithOtherTotpKeyAsync(
+        string currentKeyPrefix,
+        Guid? afterUserId,
+        int count,
+        CancellationToken cancellationToken = default)
+    {
+        var users = databaseContext.Users
+            .AsNoTracking()
+            .Where(user => user.EncryptedTotpSecret != null && !user.EncryptedTotpSecret.StartsWith(currentKeyPrefix));
+
+        if (afterUserId is Guid lastUserId)
+        {
+            users = users.Where(user => user.Id.CompareTo(lastUserId) > 0);
+        }
+
+        return await users
+            .OrderBy(user => user.Id)
+            .Select(user => user.Id)
+            .Take(count)
+            .ToListAsync(cancellationToken);
     }
 
     // EF Core efface la ligne du compte en vérifiant sa version (xmin) : une connexion qui vient d'annuler la suppression fait

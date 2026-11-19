@@ -46,21 +46,17 @@ public class EmailRequestProcessingServiceTests
     // Crée le service à tester, avec ses faux outils.
     private EmailRequestProcessingService CreateProcessingService()
     {
+        var websiteSettings = new PublicWebsiteSettings("https://walletflow.test");
+
         return new EmailRequestProcessingService(
             emailRequests,
-            accountRepository,
-            alertRepository,
-            supportRepository,
             unitOfWork,
             new SecurityJournalService(securityEventRepository, clock),
-            tokenGenerator,
             emailSender,
-            new FrenchAccountRecoveryEmails(),
-            changeEmails,
-            new FrenchSecurityAlertEmails(),
-            new FrenchAlertEmails(),
-            new FrenchSupportEmails(),
-            new PublicWebsiteSettings("https://walletflow.test"),
+            new LinkEmailPreparation(accountRepository, tokenGenerator, new FrenchAccountRecoveryEmails(), changeEmails, websiteSettings, clock),
+            new NoticeEmailPreparation(accountRepository, new FrenchSecurityAlertEmails(), changeEmails, websiteSettings),
+            new AlertAndSupportEmailPreparation(
+                accountRepository, alertRepository, new FrenchAlertEmails(), supportRepository, new FrenchSupportEmails(), websiteSettings),
             clock);
     }
 
@@ -815,7 +811,7 @@ public class EmailRequestProcessingServiceTests
     public async Task SupportLinkGoesToTheAccountWithItsHashKeptForTwentyFourHours()
     {
         var account = AddAccount();
-        account.ActivateTwoFactor("secret-chiffre");
+        account.ActivateTwoFactor("secret-chiffre", TwoFactorTestTools.OldStep);
         accountRepository.SavedEmailTokens.Add(new EmailToken
         {
             Type = EmailTokenType.TwoFactorDeactivation,

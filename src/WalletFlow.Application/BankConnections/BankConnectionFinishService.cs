@@ -47,7 +47,7 @@ public class BankConnectionFinishService
     }
 
     // Termine l'autorisation avec le code et le state renvoyés par la banque.
-    public async Task<BankConnectionFinishResult> FinishAsync(Guid userId, string? code, string? state, UserPresence presence)
+    public async Task<BankConnectionFinishResult> FinishAsync(Guid userId, string? code, string? state, UserPresence presence, CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(code) || string.IsNullOrWhiteSpace(state))
         {
@@ -66,7 +66,7 @@ public class BankConnectionFinishService
         ProvidedSession session;
         try
         {
-            session = await bankProvider.CreateSessionAsync(code);
+            session = await bankProvider.CreateSessionAsync(code, cancellationToken);
         }
         catch (BankProviderException exception) when (exception.Failure == BankProviderFailure.AuthorizationRefused)
         {
@@ -78,22 +78,23 @@ public class BankConnectionFinishService
             return new BankConnectionFinishResult.ProviderUnavailable();
         }
 
-        var result = await KeepSessionAsync(userId, authorization, session, presence);
+        // La session existe déjà chez le prestataire : la suite ne s'annule plus, sinon elle y resterait sans connexion dans WalletFlow.
+        var result = await KeepSessionAsync(userId, authorization, session, presence, CancellationToken.None);
 
         if (result is BankConnectionFinishResult.Connected connected)
         {
-            await firstTransactionsReading.ReadAsync(userId, connected.ConnectionId, session, presence);
+            await firstTransactionsReading.ReadAsync(userId, connected.ConnectionId, session, presence, cancellationToken);
             return result;
         }
 
         if (result is BankConnectionFinishResult.Renewed renewed)
         {
-            await firstTransactionsReading.ReadAsync(userId, renewed.ConnectionId, session, presence);
+            await firstTransactionsReading.ReadAsync(userId, renewed.ConnectionId, session, presence, cancellationToken);
             return result;
         }
 
         // Une session qui n'a rien donné est révoquée tout de suite : WalletFlow ne garde aucun accès inutile.
-        await RevokeQuietlyAsync(session.SessionId);
+        await RevokeQuietlyAsync(session.SessionId, cancellationToken);
         return result;
     }
 
@@ -102,7 +103,8 @@ public class BankConnectionFinishService
         Guid userId,
         PendingBankAuthorization authorization,
         ProvidedSession session,
-        UserPresence presence)
+        UserPresence presence,
+        CancellationToken cancellationToken = default)
     {
         var now = clock.GetUtcNow().UtcDateTime;
         var authorizationEnd = CapAuthorizationEnd(session.ValidUntil, now);
@@ -115,7 +117,7 @@ public class BankConnectionFinishService
         }
 
         var skippedAccountNames = new List<string>();
-        var receivedAccounts = await ReadAccountsAsync(session, presence, skippedAccountNames);
+        var receivedAccounts = await ReadAccountsAsync(session, presence, skippedAccountNames, cancellationToken);
 
         if (receivedAccounts == null)
         {
@@ -129,33 +131,34 @@ public class BankConnectionFinishService
             {
                 if (authorization.RenewedConnectionId is not Guid renewedConnectionId)
                 {
-                    return await PrepareNewConnectionAsync(keptSession, authorization.BankName);
+                    return await PrepareNewConnectionAsync(keptSession, authorization.BankName, cancellationToken);
                 }
 
-                var renewal = await PrepareRenewalAsync(keptSession, renewedConnectionId);
+                var renewal = await PrepareRenewalAsync(keptSession, renewedConnectionId, cancellationToken);
                 replacedSessionId = renewal.ReplacedSessionId;
                 return renewal.Changes;
             },
-            new BankConnectionFinishResult.NotSaved());
+            new BankConnectionFinishResult.NotSaved(),
+            cancellationToken);
 
         // L'ancienne session d'une connexion renouvelée ne sert plus : elle est révoquée.
         if (result is BankConnectionFinishResult.Renewed && replacedSessionId != null && replacedSessionId != session.SessionId)
         {
-            await RevokeQuietlyAsync(replacedSessionId);
+            await RevokeQuietlyAsync(replacedSessionId, cancellationToken);
         }
 
         return result;
     }
 
     // Un passage : ajoute la connexion et ses comptes, sauf ceux déjà présents dans une autre connexion de l'utilisateur.
-    private async Task<PreparedChanges<BankConnectionFinishResult>> PrepareNewConnectionAsync(KeptSession kept, string bankName)
+    private async Task<PreparedChanges<BankConnectionFinishResult>> PrepareNewConnectionAsync(KeptSession kept, string bankName, CancellationToken cancellationToken = default)
     {
         var skippedNames = new List<string>(kept.SkippedAccountNames);
         var accountsToAdd = new List<ReceivedAccount>();
 
         foreach (var account in kept.Accounts)
         {
-            if (await connectionRepository.IsAccountConnectedElsewhereAsync(kept.UserId, account.StableId, null))
+            if (await connectionRepository.IsAccountConnectedElsewhereAsync(kept.UserId, account.StableId, null, cancellationToken))
             {
                 skippedNames.Add(account.Name);
                 continue;
@@ -196,9 +199,9 @@ public class BankConnectionFinishService
 
     // Un passage : renouvelle la connexion, met à jour ses comptes, ajoute ceux qui sont nouveaux, et efface l'alerte de
     // l'ancienne autorisation. Les comptes que la banque ne donne plus restent, avec leurs transactions.
-    private async Task<RenewalChanges> PrepareRenewalAsync(KeptSession kept, Guid connectionId)
+    private async Task<RenewalChanges> PrepareRenewalAsync(KeptSession kept, Guid connectionId, CancellationToken cancellationToken = default)
     {
-        var connection = await connectionRepository.FindConnectionAsync(kept.UserId, connectionId);
+        var connection = await connectionRepository.FindConnectionAsync(kept.UserId, connectionId, cancellationToken);
 
         if (connection == null)
         {
@@ -208,7 +211,7 @@ public class BankConnectionFinishService
         }
 
         var replacedSessionId = connection.ExternalConnectionId;
-        var storedAccounts = await connectionRepository.FindAccountsAsync(new List<Guid> { connection.Id });
+        var storedAccounts = await connectionRepository.FindAccountsAsync(new List<Guid> { connection.Id }, cancellationToken);
         var skippedNames = new List<string>(kept.SkippedAccountNames);
         var addedCount = 0;
 
@@ -223,7 +226,7 @@ public class BankConnectionFinishService
                 continue;
             }
 
-            if (await connectionRepository.IsAccountConnectedElsewhereAsync(kept.UserId, account.StableId, connection.Id))
+            if (await connectionRepository.IsAccountConnectedElsewhereAsync(kept.UserId, account.StableId, connection.Id, cancellationToken))
             {
                 skippedNames.Add(account.Name);
                 continue;
@@ -233,7 +236,7 @@ public class BankConnectionFinishService
             addedCount = addedCount + 1;
         }
 
-        var alert = await alertRepository.FindConnectionAlertAsync(connection.Id);
+        var alert = await alertRepository.FindConnectionAlertAsync(connection.Id, cancellationToken);
 
         if (alert != null)
         {
@@ -255,7 +258,7 @@ public class BankConnectionFinishService
 
     // Lit le solde de chaque compte en euros, l'utilisateur étant là. Les autres comptes sont nommés dans la liste des comptes laissés.
     // Renvoie null si le prestataire ou la banque ne répond pas.
-    private async Task<List<ReceivedAccount>?> ReadAccountsAsync(ProvidedSession session, UserPresence presence, List<string> skippedAccountNames)
+    private async Task<List<ReceivedAccount>?> ReadAccountsAsync(ProvidedSession session, UserPresence presence, List<string> skippedAccountNames, CancellationToken cancellationToken = default)
     {
         var receivedAccounts = new List<ReceivedAccount>();
 
@@ -273,7 +276,7 @@ public class BankConnectionFinishService
                     continue;
                 }
 
-                var balance = ProvidedBalanceChoice.Choose(await bankProvider.ReadBalancesAsync(account.Uid, presence));
+                var balance = ProvidedBalanceChoice.Choose(await bankProvider.ReadBalancesAsync(account.Uid, presence, cancellationToken));
 
                 if (balance == null)
                 {
@@ -319,11 +322,11 @@ public class BankConnectionFinishService
     }
 
     // Révoque une session sans faire échouer la requête : si le prestataire ne répond pas, elle finira seule à sa date.
-    private async Task RevokeQuietlyAsync(string sessionId)
+    private async Task RevokeQuietlyAsync(string sessionId, CancellationToken cancellationToken = default)
     {
         try
         {
-            await bankProvider.RevokeSessionAsync(sessionId);
+            await bankProvider.RevokeSessionAsync(sessionId, cancellationToken);
         }
         catch (BankProviderException)
         {

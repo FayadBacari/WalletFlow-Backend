@@ -49,6 +49,8 @@ L'objectif est de fermer tous les axes d'attaque réalistes pour une application
 - 128 caractères au maximum, pour éviter qu'un mot de passe géant ne surcharge le serveur au moment du hachage.
 - Le mot de passe est stocké haché avec **Argon2id**, ou **bcrypt** (coût d'au moins 12) si Argon2id n'est pas disponible. Il n'est jamais stocké en clair ni chiffré de façon réversible.
 - Le mot de passe est normalisé en Unicode NFC avant les règles et le hachage : tapé sur deux appareils différents, il donne le même résultat.
+- Un mot de passe qui figure dans une fuite de données connue est refusé, à l'inscription, au changement et à la récupération, comme le demande le NIST (SP 800-63B) : les attaquants essaient ces mots de passe en premier, sur tous les sites. La recherche passe par Pwned Passwords sans que le mot de passe quitte le serveur : seuls les 5 premiers caractères de son empreinte SHA-1 partent (k-anonymat), et le service complète sa réponse de fausses lignes, pour que sa taille ne trahisse rien. S'il ne répond pas dans les 3 secondes, le mot de passe est accepté, et la panne est notée dans le journal technique.
+- Les calculs Argon2id passent par une file d'attente bornée : quand elle est pleine, ou après 5 secondes d'attente, le serveur répond « très demandé » (503, avec `Retry-After`), sans rien calculer ni compter d'essai. Une rafale de requêtes ne peut ni saturer le serveur, ni bloquer de vrais comptes.
 
 ### Ne pas révéler quels comptes existent
 - Connexion : « Identifiants incorrects », que l'adresse existe ou non (règle de gestion). Le message qui invite à confirmer l'adresse n'apparaît qu'avec le bon mot de passe.
@@ -69,9 +71,9 @@ L'objectif est de fermer tous les axes d'attaque réalistes pour une application
 - La double authentification se fait avec une **application d'authentification** (codes TOTP). Le code par e-mail n'est pas proposé : si la boîte mail était piratée, l'attaquant recevrait à la fois le lien de récupération et le code.
 - À l'activation, l'utilisateur reçoit **10 codes de secours** à usage unique. Sans eux, la perte du téléphone bloque le compte. Ils sont stockés hachés, comme les mots de passe.
 - Le secret TOTP de chaque utilisateur est chiffré dans la base de données.
-- Un code vaut pour la période de 30 secondes en cours, la précédente et la suivante, et ne sert qu'une seule fois.
+- Un code vaut pour la période de 30 secondes en cours, la précédente et la suivante, et ne sert qu'une seule fois : le pas de temps du dernier code accepté est gardé en base, et noté dans la même transaction que l'action qu'il autorise. Un code déjà utilisé, ou plus ancien, est refusé, même après un redémarrage ou sur un autre serveur ; de deux requêtes avec le même code, une seule passe. Le code de l'activation compte comme déjà utilisé.
 - Après le bon mot de passe, la connexion attend le code 5 minutes au plus, sans ouvrir de session. 5 mauvais codes obligent à recommencer la connexion.
-- Le secret est chiffré en AES-256-GCM. Sa clé est rangée avec les autres secrets (§7).
+- Le secret est chiffré en AES-256-GCM. Sa clé est rangée avec les autres secrets, et peut être changée sans perdre les comptes (§7).
 - Si l'utilisateur a perdu son téléphone et ses codes de secours, seul l'administrateur peut faire envoyer à l'adresse du compte un lien qui désactive la double authentification (règle de gestion). Ce lien demande le mot de passe, et ne marche que si celui-ci n'a pas changé depuis au moins 7 jours, d'après le journal (§11) : un voleur de la boîte mail qui vient de réinitialiser le mot de passe ne peut pas s'en servir. Chaque essai du mot de passe compte avant sa vérification : après 5 mauvais mots de passe, le lien est annulé, et il faut en redemander un au support. Un voleur de la boîte mail ne peut donc pas essayer plus de 5 mots de passe par lien, même depuis plusieurs adresses IP à la fois. La désactivation ferme toutes les sessions du compte, et une alerte de sécurité part (§9).
 
 ### Liens envoyés par e-mail (jetons)
@@ -114,10 +116,13 @@ Les mauvais mots de passe saisis ici ne comptent pas pour le blocage du compte :
 - Un nouvel identifiant de session est généré à chaque connexion, pour empêcher qu'un attaquant n'impose le sien à la victime.
 - Les identifiants de session et les jetons d'appareil ne sont stockés en base que sous forme d'empreinte (SHA-256).
 - La session expire après 30 minutes d'inactivité (règle de gestion).
+- Elle expire aussi 12 heures après la connexion, même active (OWASP ASVS, niveau 2) : un cookie volé ne sert pas indéfiniment.
+- Un compte garde au plus 10 sessions : la connexion de trop ferme la moins récemment active. Chaque jour, une tâche efface les sessions expirées.
 - La déconnexion détruit la session côté serveur, pas seulement le cookie.
 - Après un changement **ou une récupération** de mot de passe, toutes les autres sessions sont fermées.
 - Après un changement de mot de passe, la session en cours reçoit aussi un nouvel identifiant : une copie volée de son cookie ne sert plus.
 - « Nouvel appareil » : un jeton d'appareil aléatoire et durable est enregistré à la première connexion, dans un cookie sur le web et dans le stockage sécurisé du téléphone dans l'application mobile. Une connexion sans ce jeton déclenche l'alerte de sécurité.
+- Un compte garde au plus 20 appareils : un nouvel appareil de trop fait oublier le moins récemment utilisé. Chaque jour, les appareils inutilisés depuis un an, dont le cookie a expiré, sont oubliés, sauf le plus récent de chaque compte : sans lui, la connexion suivante passerait pour la première, et l'alerte ne partirait pas.
 
 
 ## 4. Contrôle d'accès
@@ -173,28 +178,34 @@ Toute donnée est validée **côté serveur**, même si l'interface la valide d�
 ### Limitation de débit
 Les valeurs ci-dessous sont des points de départ, à ajuster selon l'usage réel.
 
-| Point d'entrée                             | Limite                                                                                   |
-|--------------------------------------------|------------------------------------------------------------------------------------------|
-| Connexion                                  | 10 essais par minute et par adresse IP, en plus des 5 tentatives par compte              |
-| Inscription                                | 5 par heure et par adresse IP, 3 par heure et par adresse e-mail                         |
-| Confirmation de l'inscription              | 10 essais par heure et par adresse IP                                                    |
-| Mot de passe oublié                        | 3 par heure et par adresse e-mail, 10 par heure et par adresse IP                        |
-| Lien de récupération                       | 10 essais par heure et par adresse IP                                                    |
-| Lien de déblocage                          | 10 essais par heure et par adresse IP                                                    |
-| Code de double authentification            | 5 essais, puis il faut recommencer la connexion ; 10 essais par minute et par adresse IP |
-| Réglage de la double auth.                 | 10 par heure et par adresse IP                                                           |
-| Changement de mot de passe                 | 10 par heure et par adresse IP                                                           |
-| Changement d'adresse e-mail                | 3 par heure et par nouvelle adresse, 10 par heure et par adresse IP                      |
-| Suppression du compte                      | 10 par heure et par adresse IP                                                           |
-| Lien de changement d'adresse               | 10 essais par heure et par adresse IP                                                    |
-| Lien de désactivation de la double auth.   | 10 essais par heure et par adresse IP                                                    |
-| Formulaire de support (visiteur)           | 3 par heure et par adresse IP                                                            |
-| Demande de support (utilisateur)           | 10 sur 24 heures glissantes, par utilisateur                                             |
-| Téléchargement des données                 | 3 essais par heure et par utilisateur, bons ou mauvais                                   |
-| Mise à jour des comptes                    | 1 par minute et par utilisateur                                                          |
-| Recherche, graphiques, sacs et suggestions | 60 par minute et par session, toutes ces lectures ensemble                               |
+| Point d'entrée                                         | Limite                                                                                   |
+|--------------------------------------------------------|------------------------------------------------------------------------------------------|
+| Connexion                                              | 10 essais par minute et par adresse IP, en plus des 5 tentatives par compte              |
+| Inscription                                            | 5 par heure et par adresse IP, 3 par heure et par adresse e-mail                         |
+| Confirmation de l'inscription                          | 10 essais par heure et par adresse IP                                                    |
+| Mot de passe oublié                                    | 3 par heure et par adresse e-mail, 10 par heure et par adresse IP                        |
+| Lien de récupération                                   | 10 essais par heure et par adresse IP                                                    |
+| Lien de déblocage                                      | 10 essais par heure et par adresse IP                                                    |
+| Code de double authentification                        | 5 essais, puis il faut recommencer la connexion ; 10 essais par minute et par adresse IP |
+| Réglage de la double auth.                             | 10 par heure et par adresse IP                                                           |
+| Changement de mot de passe                             | 10 par heure et par adresse IP                                                           |
+| Changement d'adresse e-mail                            | 3 par heure et par nouvelle adresse, 10 par heure et par adresse IP                      |
+| Suppression du compte                                  | 10 par heure et par adresse IP                                                           |
+| Lien de changement d'adresse                           | 10 essais par heure et par adresse IP                                                    |
+| Lien de désactivation de la double auth.               | 10 essais par heure et par adresse IP                                                    |
+| Formulaire de support (visiteur)                       | 3 par heure et par adresse IP                                                            |
+| Demande de support (utilisateur)                       | 10 sur 24 heures glissantes, par utilisateur                                             |
+| Téléchargement des données                             | 3 essais par heure et par utilisateur, bons ou mauvais                                   |
+| Mise à jour des comptes                                | 1 par minute et par utilisateur                                                          |
+| Recherche, graphiques, sacs et suggestions             | 60 par minute et par session, toutes ces lectures ensemble                               |
+| Banque : liste, connexion, renouvellement, déconnexion | 20 par heure et par session, toutes ensemble                                             |
+| Toutes les requêtes                                    | 600 par minute et par adresse IP, en plus des limites ci-dessus                          |
 
 Au-delà de la limite, le serveur répond « trop de requêtes » (429).
+
+Une adresse IPv6 compte pour tout son bloc /64 : un abonné en reçoit un entier, et pourrait changer d'adresse à chaque requête pour échapper aux limites. Une adresse IPv4 vue en IPv6 redevient une adresse IPv4.
+
+Derrière un proxy inverse, l'adresse du client et le protocole d'origine ne sont lus dans les en-têtes `X-Forwarded-For` et `X-Forwarded-Proto` que si la requête vient d'un proxy déclaré (réglage `ReverseProxy` : des adresses ou des réseaux) ou de la même machine. Sinon, n'importe qui choisirait l'adresse sous laquelle il est compté par les limites et noté au journal. Une déclaration illisible empêche le serveur de démarrer.
 
 Un utilisateur a au plus 100 catégories, les 8 par défaut comprises : un script ne peut pas remplir la base en créant des catégories sans fin.
 
@@ -202,11 +213,15 @@ Un utilisateur a au plus 100 sacs, et fait au plus 1 000 déplacements d'argent 
 
 Une période de graphique couvre au plus 10 ans : une requête ne peut pas faire calculer des milliers de mois.
 
+### Requêtes abandonnées
+Une requête abandonnée par son client, ou interrompue par l'arrêt du serveur, arrête son travail : lectures en base, calculs et appels aux prestataires. Seules vont jusqu'au bout les écritures qui ne doivent pas se perdre : le journal de sécurité, les essais comptés contre le blocage, et ce qui suit un effet déjà produit chez un prestataire ou un e-mail déjà parti. L'arrêt du serveur n'est pas noté comme une panne des tâches de fond.
+
 ### Actions forcées (CSRF)
 - Les cookies en `SameSite=Lax`, plus un jeton anti-CSRF sur toutes les requêtes qui modifient des données. Les frameworks le fournissent.
+- Les clés qui signent ce jeton sont gardées dans un dossier qui survit aux redéploiements (réglage `DataProtection:KeysFolder`), sur le disque chiffré du serveur, lisible seulement par l'API. Elles y sont aussi chiffrées avec un certificat X.509 (réglages `DataProtection:CertificatePath` et `DataProtection:CertificateKeyPath`) : un fichier de clés copié ne sert à rien sans la clé privée du certificat, gardée à part. Sans ces réglages, l'API refuse de démarrer hors du développement : chaque redéploiement perdrait les clés, et refuserait tous les jetons en cours.
 - Sur les routes d'administration, le jeton anti-CSRF est vérifié avant le rôle : une écriture sans jeton est refusée sans lire le compte ni rien noter au journal. L'adresse d'un compte cherché passe dans le corps de la requête, jamais dans son adresse (§7).
 - Les routes appelées sans session (inscription, confirmation, connexion) n'ont pas besoin de ce jeton : elles n'agissent au nom de personne, et n'acceptent que du JSON, qu'un site piégé ne peut pas envoyer sans autorisation.
-- Aucune requête `GET` ne modifie de données.
+- Aucune requête `GET` ne modifie de données. Les suggestions, par exemple, sont calculées par la tâche horaire, jamais par leur lecture.
 
 ### Origines (CORS)
 - Si l'interface et le serveur sont sur le même domaine, aucune règle CORS n'est nécessaire.
@@ -215,13 +230,17 @@ Une période de graphique couvre au plus 10 ans : une requête ne peut pas faire
 
 ### En-têtes de sécurité
 
-| En-tête                     | Valeur                                                                                                                  |
-|-----------------------------|-------------------------------------------------------------------------------------------------------------------------|
-| `Strict-Transport-Security` | `max-age=31536000; includeSubDomains`                                                                                   |
-| `Content-Security-Policy`   | `default-src 'self'; script-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'` |
-| `X-Content-Type-Options`    | `nosniff`                                                                                                               |
-| `Referrer-Policy`           | `strict-origin-when-cross-origin`                                                                                       |
-| `Permissions-Policy`        | `camera=(), microphone=(), geolocation=()`                                                                              |
+| En-tête                        | Valeur                                                                                                                  |
+|--------------------------------|-------------------------------------------------------------------------------------------------------------------------|
+| `Strict-Transport-Security`    | `max-age=31536000; includeSubDomains`                                                                                   |
+| `Content-Security-Policy`      | `default-src 'self'; script-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'` |
+| `X-Content-Type-Options`       | `nosniff`                                                                                                               |
+| `Referrer-Policy`              | `strict-origin-when-cross-origin`                                                                                       |
+| `Permissions-Policy`           | `camera=(), microphone=(), geolocation=()`                                                                              |
+| `Cross-Origin-Resource-Policy` | `same-origin`                                                                                                           |
+| `Cache-Control`                | `no-store`                                                                                                              |
+
+Aucune réponse n'est gardée par un navigateur ou un intermédiaire : toutes contiennent des données personnelles, des données financières, un jeton ou une erreur. Les réponses ne nomment pas non plus le serveur web : aucun en-tête `Server`.
 
 Si une bibliothèque (de graphiques, par exemple) a besoin de styles en ligne, on peut ajouter `style-src 'self' 'unsafe-inline'`. C'est acceptable pour les styles, mais jamais pour les scripts.
 
@@ -239,12 +258,12 @@ Aucun script tiers (publicité, traceur, outil d'analyse externe) sur les pages 
 - Une demande de support est effacée un an après son envoi, avec ses réponses (règle de gestion).
 
 ### Connexion bancaire
-- Le prestataire est agréé pour lire les comptes (DSP2), hébergé dans l'Union européenne, et lié à WalletFlow par un contrat de sous-traitance (article 28 du RGPD).
+- Le prestataire, Enable Banking, est enregistré auprès de l'autorité financière finlandaise pour lire les comptes (DSP2), et établi dans l'Union européenne. Il est responsable de ses propres traitements, et non sous-traitant : l'utilisateur accepte ses conditions et lui donne son consentement (registre des traitements, §2). Ses conditions gratuites ne couvrent que l'usage personnel du titulaire du compte développeur : ouvrir WalletFlow au public demande un contrat écrit avec lui.
 - Seul l'accès en lecture est demandé : WalletFlow ne peut lancer ni virement ni paiement (règle de gestion).
 - La connexion se lance toujours depuis WalletFlow. Au retour de la banque, un paramètre `state` aléatoire, à usage unique et lié au compte qui a lancé la connexion, est vérifié, et l'adresse de retour est fixe.
 - La clé d'API du prestataire reste sur le serveur, avec les autres secrets. Elle n'est jamais intégrée à l'application mobile.
 - Si le prestataire fournit un jeton d'accès pour chaque utilisateur, ce jeton est chiffré en base, comme le secret de double authentification.
-- Les notifications du prestataire (webhooks) ne sont acceptées qu'en HTTPS, avec une signature valide.
+- Le prestataire n'appelle jamais WalletFlow (aucun webhook) : WalletFlow lit lui-même les comptes. Aucune route publique ne lui est ouverte.
 - Les données reçues sont validées comme des données saisies (§5).
 - Déconnecter une banque supprime ses comptes et leurs transactions, et révoque l'autorisation chez le prestataire (règle de gestion).
 
@@ -252,6 +271,7 @@ Aucun script tiers (publicité, traceur, outil d'analyse externe) sur les pages 
 - **En transit** : HTTPS partout (TLS 1.2 minimum), avec redirection automatique de HTTP vers HTTPS.
 - **Au repos** : base de données et sauvegardes sur des disques chiffrés par l'hébergeur. Les sauvegardes sont en plus chiffrées avant d'être envoyées.
 - **Champ par champ** : seuls les secrets de double authentification, et le jeton d'accès du prestataire s'il y en a un, sont chiffrés individuellement. Chiffrer chaque montant ou chaque libellé compliquerait beaucoup l'application pour un gain faible.
+- **Changement de clé** : chaque secret de double authentification chiffré porte le numéro de sa clé. La nouvelle clé devient la clé actuelle ; l'ancienne reste dans la configuration, pour déchiffrer seulement. Au démarrage puis chaque jour, une tâche rechiffre les secrets avec la clé actuelle. Quand le journal technique ne compte plus d'échec, l'ancienne clé est retirée : volée, elle ne déchiffre alors plus rien.
 
 ### Hébergement et base de données
 - Hébergement dans l'Union européenne.
@@ -267,6 +287,11 @@ Aucun script tiers (publicité, traceur, outil d'analyse externe) sur les pages 
 ### Sauvegardes
 - Une sauvegarde par jour, conservée 30 jours.
 - La restauration est testée avant la mise en production, puis une fois par trimestre. Une sauvegarde jamais testée n'est pas une sauvegarde.
+- La sauvegarde est chiffrée au fil de sa lecture, avec le certificat public des sauvegardes (CMS, AES-256-GCM) : elle n'existe jamais en clair sur le disque. Le serveur n'a que ce certificat : il chiffre, mais ne peut pas déchiffrer. La clé privée reste hors du serveur, protégée par une phrase secrète, et n'est apportée que le temps d'une restauration (scripts de `database/backup`).
+- La clé du secret de double authentification et la clé privée du prestataire bancaire sont gardées à part, dans le gestionnaire de secrets, jamais avec les sauvegardes : une base restaurée sans la première ne permet plus d'utiliser la double authentification.
+- Une restauration se fait toujours dans une base neuve, jamais par-dessus la base en service, et en une seule transaction. Un fichier modifié, même d'un seul bit, est refusé avant toute restauration.
+- Restaurer une sauvegarde ancienne ne ressuscite pas durablement un compte effacé depuis : sa demande de suppression y figure, et la tâche horaire de l'API l'efface de nouveau.
+- L'intégration continue fait l'aller-retour complet à chaque envoi : sauvegarde, restauration dans une base neuve, comparaison avec la source et tests SQL, puis chaque refus de la restauration.
 
 ### Suppression de compte
 - Pendant les 30 jours de délai (règle de gestion), le compte est inaccessible, sauf pour annuler la suppression : la demande ferme toutes ses sessions et annule ses liens en attente, et seule une connexion réussie le rouvre, en annulant la suppression. La récupération du mot de passe et le déblocage restent possibles, pour pouvoir revenir. Les tâches de fond ne touchent plus au compte.
@@ -307,6 +332,8 @@ Les journaux techniques ne contiennent jamais de mot de passe, de jeton, de code
 - Le contenu des notifications sur téléphone reste général (par exemple « Ton budget Loisirs est presque atteint ») : il peut s'afficher sur un écran verrouillé.
 - Une alerte ne cite aucun montant, par e-mail comme sur le téléphone (règle de gestion).
 - Tant que l'application mobile n'existe pas, toutes les alertes partent par e-mail (règle de gestion).
+- En développement seulement, les e-mails sont écrits dans un dossier local, ignoré par Git, même si un serveur SMTP est configuré. Ailleurs, aucun e-mail n'est jamais écrit sur le disque : leurs liens ouvrent un compte. Ils partent par le serveur SMTP d'un prestataire hébergé dans l'Union européenne, lié à WalletFlow par un contrat de sous-traitance. Sans réglages SMTP complets, le serveur refuse de démarrer hors du développement.
+- La connexion au serveur SMTP est toujours chiffrée, en TLS 1.2 au moins : dès la connexion sur le port 465, par STARTTLS sur les autres. Un serveur qui ne propose pas STARTTLS, ou dont le certificat n'est pas reconnu, est refusé avant que le mot de passe du compte d'envoi parte. Ce mot de passe est un secret, comme les autres (§7).
 - La file d'e-mails est gardée en base, pour qu'un redémarrage du serveur ne perde rien. Elle ne contient aucun secret : chaque lien est créé au moment de l'envoi. Un e-mail part en 5 essais au plus : après un échec, l'essai suivant attend 1 min, 5 min, 30 min, puis 2 h. Le dernier échec est noté dans le journal technique. Les limites du §6 bornent ce qu'un visiteur peut y mettre.
 
 
@@ -315,6 +342,8 @@ Les journaux techniques ne contiennent jamais de mot de passe, de jeton, de code
 - Le fichier de verrouillage des dépendances (`package-lock.json`, `composer.lock`…) est versionné.
 - Les dépendances sont analysées automatiquement (Dependabot, Renovate ou l'audit du gestionnaire de paquets). Une faille critique est corrigée dans la semaine.
 - Un outil de détection de secrets (par exemple gitleaks) tourne avant chaque commit ou dans l'intégration continue.
+- Un outil d'analyse du code (par exemple CodeQL) cherche les failles à chaque envoi, dans l'intégration continue. Une alerte est corrigée, ou expliquée si c'est une fausse alerte, avant la mise en production.
+- L'image Docker est scannée par Trivy, et l'API en marche attaquée par OWASP ZAP, à chaque envoi dans l'intégration continue. Une alerte est corrigée, ou écartée avec sa raison si c'est une fausse alerte, avant la mise en production.
 - Les données de production ne sont jamais copiées en développement : on utilise de fausses données.
 - En production, le mode débogage est désactivé. Les erreurs affichées à l'utilisateur restent génériques ; le détail ne va que dans les journaux.
 - Chaque modification de l'authentification ou du contrôle d'accès est relue en vérifiant les §2 à §4.
@@ -339,6 +368,8 @@ Les journaux techniques ne contiennent jamais de mot de passe, de jeton, de code
 Pour chaque événement, le journal note la date, l'identifiant de l'utilisateur, l'adresse IP, l'événement et son résultat ; pour une action d'un administrateur, aussi le compte qu'elle vise.
 
 **Conservation** : 1 an, dans la fourchette de 6 mois à 1 an que recommande la CNIL. Chaque jour, les événements plus anciens sont effacés par une fonction de la base, la seule à pouvoir effacer le journal. Quand un compte est supprimé, ses événements restent, mais sans son identifiant ni son adresse IP, et les actions qui le visaient ne le désignent plus (§7).
+
+**Santé** : trois points de santé, ouverts sans session. `/health/live` dit seulement que l'API tourne ; `/health/ready` dit aussi que la base répond, en 5 secondes au plus : l'hébergeur s'en sert pour surveiller l'API et la redémarrer si besoin. `/health/tasks` dit si les tâches de fond vont bien : un service de surveillance qui l'interroge alerte quand l'une échoue 3 passages de suite, ou ne termine plus aucun passage. Ils répondent juste « Healthy » ou « Unhealthy » (503), sans aucun détail technique (§10). Hors du développement, ils ne répondent qu'aux noms du site, comme toutes les routes (§6) : la sonde de l'hébergeur envoie l'un de ces noms.
 
 
 ## 12. En cas d'incident
@@ -365,21 +396,31 @@ Pour rester proportionné à la taille du projet :
 
 ## 14. Liste de contrôle avant la mise en production
 
-- [ ] HTTPS et HSTS actifs, HTTP redirigé vers HTTPS
-- [ ] En-têtes de sécurité vérifiés (par exemple avec Mozilla Observatory)
-- [ ] Mots de passe et codes de secours hachés avec Argon2id (ou bcrypt)
-- [ ] Limitation de débit active sur la connexion, l'inscription et sa confirmation, la récupération du mot de passe et le support
-- [ ] Test d'accès croisé (utilisateur B vers les données de A) sur chaque route
-- [ ] Aucune requête SQL construite par concaténation de texte
-- [ ] Mode débogage désactivé, messages d'erreur génériques
-- [ ] Aucun secret dans le code, `.env` ignoré par Git, détection de secrets passée
-- [ ] Clé d'API du prestataire bancaire sur le serveur seulement, absente de l'application mobile
-- [ ] Paramètre `state` vérifié au retour de la banque, signature des webhooks vérifiée
-- [ ] Révocation chez le prestataire testée (déconnexion d'une banque, suppression d'un compte)
-- [ ] Aucune dépendance avec une faille critique connue
-- [ ] Base de données inaccessible depuis internet, utilisateur de base aux droits limités
-- [ ] Sauvegardes chiffrées et restauration testée
-- [ ] SPF, DKIM et DMARC configurés
-- [ ] Journalisation des événements de sécurité active
-- [ ] Aucun moyen de devenir administrateur depuis l'application
-- [ ] Comptes et données de test absents de la production
+Chaque point porte son état et sa preuve : le test ou le travail de l'intégration continue qui le démontre à chaque envoi. Un point « Fait » reste prouvé tant que l'intégration continue passe. Un point « Code prêt : à confirmer au déploiement » est prêt dans le code, mais dépend aussi du serveur : il se vérifie pendant la répétition de la mise en production. Un point « Au déploiement » ne dépend pas du code : il se règle avec l'hébergement ou un prestataire.
+
+| Point                                                                                                                                                | État                                   | Preuve                                                                                                                                                                                |
+|------------------------------------------------------------------------------------------------------------------------------------------------------|----------------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| HTTPS et HSTS actifs, HTTP redirigé vers HTTPS                                                                                                       | Code prêt : à confirmer au déploiement | HSTS et redirection : `ApiInProductionModeTests`. Derrière le proxy, la redirection se fait au proxy, ou avec le réglage `https_port`                                                 |
+| En-têtes de sécurité vérifiés (par exemple avec Mozilla Observatory)                                                                                 | Code prêt : à confirmer au déploiement | `SecurityHeadersAssertions` dans les tests des routes, et `AnswersOfTheRealServerNeverNameItAndAreNeverStored` sur le vrai serveur ; reste Mozilla Observatory sur l'adresse publique |
+| Mots de passe et codes de secours hachés avec Argon2id                                                                                               | Fait                                   | `LibsodiumPasswordHasherTests`, `LibsodiumBackupCodeHasherTests`                                                                                                                      |
+| Limitation de débit active sur la connexion, l'inscription et sa confirmation, la récupération du mot de passe et le support                         | Fait                                   | Les tests « …IsLimitedTo… » de chaque route, `GlobalRateLimitTests`, `CostlyReadRateLimitTests`, `BankRateLimitTests`                                                                 |
+| Proxy inverse déclaré dans le réglage `ReverseProxy` : sinon, toutes les limites par adresse IP compteraient l'adresse du proxy                      | Code prêt : à confirmer au déploiement | `ReverseProxyTests` ; l'adresse du proxy se déclare au déploiement                                                                                                                    |
+| Envoi réel des e-mails branché : hors du développement, le serveur refuse de démarrer sans lui                                                       | Code prêt : à confirmer au déploiement | `SmtpEmailSenderTests`, `EmailSenderChoiceTests` ; restent le prestataire et un premier envoi réel                                                                                    |
+| Accès sortant en HTTPS vers `api.pwnedpasswords.com` ouvert : sinon, les mots de passe divulgués passent, avec un avertissement au journal technique | Code prêt : à confirmer au déploiement | `PwnedPasswordsCheckerTests` ; le pare-feu du serveur doit l'ouvrir                                                                                                                   |
+| Test d'accès croisé (utilisateur B vers les données de A) sur chaque route                                                                           | Fait                                   | `ForeignIdRequestTests`, et les tests « …OfAnotherUser… » de chaque route                                                                                                             |
+| Aucune requête SQL construite par concaténation de texte                                                                                             | Fait                                   | Requêtes d'EF Core, et `SqlQuery` paramétrées ; CodeQL dans l'intégration continue                                                                                                    |
+| Mode débogage désactivé, messages d'erreur génériques                                                                                                | Fait                                   | `ApiInProductionModeTests` : erreur générique, description OpenAPI non publiée ; l'image démarre en mode `Production`                                                                 |
+| Aucun secret dans le code, `.env` ignoré par Git, détection de secrets passée                                                                        | Fait                                   | Travail « Recherche de secrets » (gitleaks) de l'intégration continue ; `.env` dans `.gitignore`                                                                                      |
+| Clé d'API du prestataire bancaire sur le serveur seulement, absente de l'application mobile                                                          | Fait                                   | Clé privée lue dans un fichier des secrets (`BankProviderSettings`) ; l'application mobile n'existe pas encore                                                                        |
+| Paramètre `state` vérifié au retour de la banque                                                                                                     | Fait                                   | `StateOfAnotherUserIsRefusedWithoutUsingTheCode`, `UnknownOrMissingStateIsRefused`, `StateServesOnlyOnce`, `StateExpiresAfterFifteenMinutes`                                          |
+| Révocation chez le prestataire testée (déconnexion d'une banque, suppression d'un compte)                                                            | Code prêt : à confirmer au déploiement | Avec le faux prestataire : `DisconnectionRevokesThenDeletesTheBank`, `PassRevokesLateBanksThenErasesDueAccounts` ; reste une révocation réelle dans le bac à sable d'Enable Banking   |
+| Contrat écrit avec Enable Banking, qui permet de lire les comptes d'autres personnes que le titulaire du compte développeur                          | Au déploiement                         | Ses conditions gratuites ne couvrent que l'usage personnel de ce titulaire ; le contrat confirme aussi son rôle de responsable distinct et le lieu de ses traitements                 |
+| Aucune dépendance avec une faille critique connue                                                                                                    | Fait                                   | Étape « Refuser les paquets qui ont une faille connue » de l'intégration continue ; Dependabot                                                                                        |
+| Base de données inaccessible depuis internet, utilisateur de base aux droits limités                                                                 | Code prêt : à confirmer au déploiement | Droits : sections 10, 19 et 23 des tests SQL ; l'isolement du réseau relève de l'hébergement                                                                                          |
+| Sauvegardes chiffrées et restauration testée                                                                                                         | Code prêt : à confirmer au déploiement | Travail « Sauvegarde et restauration » de l'intégration continue ; restent la sauvegarde quotidienne planifiée, son stockage hors du serveur et la première restauration réelle       |
+| SPF, DKIM et DMARC configurés                                                                                                                        | Au déploiement                         | Enregistrements DNS du domaine d'envoi                                                                                                                                                |
+| Journalisation des événements de sécurité active                                                                                                     | Fait                                   | Les 15 types d'événement sont écrits par les cas d'utilisation et vérifiés par leurs tests ; `ForeignAccessJournalServiceTests`, `SecurityJournalCleanupBackgroundServiceTests`       |
+| Aucun moyen de devenir administrateur depuis l'application                                                                                           | Fait                                   | Sections 10 et 19 des tests SQL : l'application ne peut ni écrire le rôle, ni lancer `fn_changer_role`                                                                                |
+| Comptes et données de test absents de la production                                                                                                  | Au déploiement                         | La base de production se crée neuve avec le script du MPD, qui n'ajoute que les types d'alerte                                                                                        |
+
+Bilan : 11 points faits, 8 à confirmer au déploiement, 3 à faire au déploiement.

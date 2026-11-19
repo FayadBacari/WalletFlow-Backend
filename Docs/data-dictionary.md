@@ -83,6 +83,7 @@ Les sections 11 à 13 complètent le dictionnaire : données calculées, paramè
 | date_fin_blocage         | Fin du blocage en cours           | DH   | —      | Non    | GR Auth         |
 | date_demande_suppression | Date de la demande de suppression | DH   | —      | Non    | GR Suppression  |
 | dernier_mois_suggestions | Mois des dernières suggestions    | D    | —      | Non    | GR Sacs         |
+| dernier_pas_totp         | Pas du dernier code accepté       | N    | 19     | Non    | SS §2           |
 
 **Contraintes**
 
@@ -94,13 +95,14 @@ Les sections 11 à 13 complètent le dictionnaire : données calculées, paramè
 - `role_utilisateur` : `utilisateur` ou `administrateur`, `utilisateur` par défaut. Le rôle `administrateur` ne s'attribue que depuis le serveur, jamais depuis l'application.
 - `email_confirme` : faux par défaut. Le compte n'est actif que si cette valeur est vraie. Tant qu'elle est fausse, une nouvelle inscription remplace le mot de passe, et le compte est effacé une fois son lien expiré.
 - `double_auth_activee` : faux par défaut. Si vrai, l'utilisateur se connecte aussi avec un code de son application d'authentification ou un code de secours.
-- `secret_totp_chiffre` : chiffré individuellement. Rempli seulement si la double authentification est activée.
+- `secret_totp_chiffre` : chiffré individuellement. Rempli seulement si la double authentification est activée. Commence par le numéro de sa clé, par exemple `k2$` ; sans numéro, c'est la clé 1 (SS §7).
 - `canal_notification` : `email`, `telephone` ou `les_deux`, `email` par défaut.
 - `nb_tentatives_echouees` : de 0 à 5, 0 par défaut. Remis à 0 après une connexion réussie, un lien de déblocage, une récupération réussie, ou au premier essai qui suit la fin d'un blocage.
 - `nb_blocages` : 0 par défaut. Sert à doubler la durée de chaque nouveau blocage. Il s'arrête à 8 : la durée maximale est alors atteinte. Remis à 0 après une connexion réussie.
 - `date_fin_blocage` : vide si le compte n'est pas bloqué.
 - `date_demande_suppression` : vide s'il n'y a pas de demande. Effacement définitif 30 jours après. Une connexion réussie avant l'effacement la vide : la suppression est annulée (GR Suppression).
 - `dernier_mois_suggestions` : premier jour du dernier mois dont les suggestions ont été calculées, vide avant le premier calcul. Les suggestions d'un mois ne sont calculées qu'une fois (GR Sacs).
+- `dernier_pas_totp` : pas de temps du dernier code de l'application accepté, c'est-à-dire les secondes depuis 1970 divisées par 30. Positif, et rempli seulement si la double authentification est activée. Un code de ce pas, ou d'un pas plus ancien, est refusé : un code ne sert qu'une fois, même après un redémarrage ou sur un autre serveur. Noté dans la même transaction que l'action que le code autorise, et dès l'activation pour le premier code ; effacé à la désactivation.
 
 
 ## 4. Sécurité du compte
@@ -147,17 +149,19 @@ Seul l'administrateur fait envoyer le lien `desactivation_double_auth` (GR Admin
 
 ### 4.3 Appareils
 
-| Code           | Désignation                 | Type | Taille | Oblig. | Source   |
-|----------------|-----------------------------|------|--------|--------|----------|
-| id_appareil    | Identifiant de l'appareil   | AN   | 36     | Oui    | SS §3    |
-| jeton_appareil | Jeton d'appareil            | AN   | 64     | Oui    | SS §3    |
-| jeton_push     | Identifiant de notification | AN   | 255    | Non    | GR Notif |
+| Code                             | Désignation                          | Type | Taille | Oblig. | Source   |
+|----------------------------------|--------------------------------------|------|--------|--------|----------|
+| id_appareil                      | Identifiant de l'appareil            | AN   | 36     | Oui    | SS §3    |
+| jeton_appareil                   | Jeton d'appareil                     | AN   | 64     | Oui    | SS §3    |
+| jeton_push                       | Identifiant de notification          | AN   | 255    | Non    | GR Notif |
+| date_derniere_connexion_appareil | Dernière connexion depuis l'appareil | DH   | —      | Oui    | SS §3    |
 
 **Contraintes**
 
 - `id_appareil` : UUID.
 - `jeton_appareil` : aléatoire et durable, enregistré à la première connexion, dans un cookie sur le web et dans le stockage sécurisé du téléphone dans l'application mobile. Seule son empreinte SHA-256 est stockée. Le cookie dure 1 an, renouvelé à chaque connexion. Une connexion sans ce jeton déclenche l'alerte « nouvel appareil », sauf la toute première connexion du compte (GR Notif).
 - `jeton_push` : fourni par l'application mobile quand l'utilisateur accepte les notifications sur son téléphone. Vide sinon.
+- `date_derniere_connexion_appareil` : la date de la connexion qui a enregistré l'appareil, puis de chaque connexion depuis lui ; elle ne recule jamais. Un compte garde 20 appareils au plus : un nouvel appareil de trop fait oublier le moins récemment utilisé. Un appareil inutilisé depuis 1 an, dont le cookie a donc expiré, est oublié, sauf le plus récemment utilisé du compte : sans lui, la connexion suivante passerait pour la première, et l'alerte « nouvel appareil » ne partirait pas.
 
 ### 4.4 Sessions
 
@@ -165,11 +169,13 @@ Seul l'administrateur fait envoyer le lien `desactivation_double_auth` (GR Admin
 |------------------------|---------------------------------|------|--------|--------|----------------|
 | id_session             | Identifiant de session          | AN   | 64     | Oui    | SS §3          |
 | date_derniere_activite | Dernière activité de la session | DH   | —      | Oui    | GR Auth, SS §3 |
+| date_creation_session  | Ouverture de la session         | DH   | —      | Oui    | SS §3          |
 
 **Contraintes**
 
 - `id_session` : aléatoire, au moins 128 bits. Nouveau à chaque connexion. Seule son empreinte SHA-256 est stockée.
 - `date_derniere_activite` : la session expire après 30 min sans activité.
+- `date_creation_session` : la session expire aussi 12 heures après son ouverture, même active. Jamais après la dernière activité. Un compte garde 10 sessions au plus : la connexion de trop ferme la moins récemment active.
 
 ### 4.5 Journal de sécurité
 
@@ -527,6 +533,10 @@ Ces valeurs sont les mêmes pour tous les utilisateurs. Elles relèvent de la co
 | Durée maximale d'un blocage                  | 24 heures                                              | GR Auth        |
 | Longueur du mot de passe                     | 12 à 128 caractères                                    | GR Auth, SS §2 |
 | Inactivité avant fermeture de la session     | 30 minutes                                             | GR Auth        |
+| Durée maximale d'une session                 | 12 heures, même active                                 | SS §3          |
+| Sessions par compte                          | 10 au plus                                             | SS §3          |
+| Appareils par compte                         | 20 au plus                                             | SS §3          |
+| Oubli d'un appareil inutilisé                | 1 an, sauf le plus récent du compte                    | SS §3          |
 | Validité du lien de récupération             | 30 minutes                                             | GR Auth        |
 | Validité des liens de confirmation           | 24 heures (inscription, e-mail)                        | SS §2          |
 | Validité du lien de déblocage                | 1 heure                                                | SS §2          |
@@ -534,6 +544,7 @@ Ces valeurs sont les mêmes pour tous les utilisateurs. Elles relèvent de la co
 | Mot de passe inchangé avant ce lien          | 7 jours au moins                                       | GR Auth        |
 | Mauvais mots de passe sur ce lien            | 5, puis il est annulé                                  | GR Auth        |
 | Nombre de codes de secours                   | 10                                                     | GR Auth, SS §2 |
+| Rechiffrement des secrets de double auth.    | Chaque jour, avec la clé actuelle                      | SS §7          |
 | Durée d'une autorisation bancaire            | 180 jours au plus                                      | GR Comptes     |
 | Rappel avant la fin de l'autorisation        | 7 jours                                                | GR Comptes     |
 | Mises à jour en arrière-plan                 | 4 par jour au plus                                     | GR Comptes     |
@@ -542,6 +553,8 @@ Ces valeurs sont les mêmes pour tous les utilisateurs. Elles relèvent de la co
 | Sacs par utilisateur                         | 100 au plus                                            | SS §6          |
 | Déplacements d'argent par utilisateur        | 1 000 sur 24 heures glissantes                         | SS §6          |
 | Lectures coûteuses par session               | 60 par minute                                          | SS §6          |
+| Appels au prestataire bancaire               | 20 par heure et par session                            | SS §6          |
+| Requêtes par adresse IP                      | 600 par minute (bloc /64 en IPv6)                      | SS §6          |
 | Demandes de support par utilisateur          | 10 sur 24 heures glissantes                            | SS §6          |
 | Téléchargement des données                   | 3 essais par heure et par utilisateur, bons ou mauvais | SS §6          |
 | Règles de classement communes                | Liste fournie par l'application                        | GR Dépenses    |

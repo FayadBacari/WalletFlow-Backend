@@ -40,6 +40,13 @@ public class FakeUserAccountRepository : IUserAccountRepository, ITransactionalF
     // Simule une panne de la base au moment de lire un lien.
     public bool FailsWhenReadingLinks { get; set; } = false;
 
+    // Agit juste avant chaque lecture d'un compte par son identifiant : simule une panne de la base pour ce compte, ou l'arrêt de
+    // l'API pendant la lecture.
+    public Action<Guid>? BeforeFindById { get; set; } = null;
+
+    // Agit juste avant la liste des comptes à effacer : simule une panne de la base, ou l'arrêt de l'API pendant la lecture.
+    public Action? BeforeListingErasures { get; set; } = null;
+
     // Les réglages qui suivent simulent une autre requête qui agit juste avant l'enregistrement de celle du test.
 
     // Une autre inscription prend la même adresse juste après la recherche.
@@ -77,8 +84,16 @@ public class FakeUserAccountRepository : IUserAccountRepository, ITransactionalF
     // (voir PrepareUnchangedCheck). Un compte qui n'est ni changé ni contrôlé n'est pas réécrit : il ne voit pas ce conflit.
     public string? PasswordChangedBeforeCheckedSave { get; set; } = null;
 
+    // Une autre requête se sert du même code de l'application, de ce pas de temps, juste avant un enregistrement qui contrôle le
+    // compte, ou qui note ou oublie le pas de son dernier code : la version du compte a changé.
+    public long? AuthenticatorStepUsedBeforeSave { get; set; } = null;
+
+    // Une autre requête change le compte dont cet enregistrement change le canal des alertes : la version du compte a changé.
+    // Le nombre d'essais qui verront ce conflit.
+    public int ChannelChangeConflicts { get; set; } = 0;
+
     // Cherche en mémoire le compte qui utilise cette adresse.
-    public Task<User?> FindByEmailAsync(string email)
+    public Task<User?> FindByEmailAsync(string email, CancellationToken cancellationToken = default)
     {
         if (IsDown)
         {
@@ -100,8 +115,10 @@ public class FakeUserAccountRepository : IUserAccountRepository, ITransactionalF
     }
 
     // Cherche en mémoire un compte par son identifiant.
-    public Task<User?> FindByIdAsync(Guid accountId)
+    public Task<User?> FindByIdAsync(Guid accountId, CancellationToken cancellationToken = default)
     {
+        BeforeFindById?.Invoke(accountId);
+
         if (SearchesBeforeAccountDisappears == 0)
         {
             return Task.FromResult<User?>(null);
@@ -122,7 +139,7 @@ public class FakeUserAccountRepository : IUserAccountRepository, ITransactionalF
     }
 
     // Cherche en mémoire un jeton de ce type par son empreinte.
-    public Task<EmailToken?> FindTokenAsync(string tokenHash, EmailTokenType tokenType)
+    public Task<EmailToken?> FindTokenAsync(string tokenHash, EmailTokenType tokenType, CancellationToken cancellationToken = default)
     {
         if (FailsWhenReadingLinks)
         {
@@ -146,7 +163,8 @@ public class FakeUserAccountRepository : IUserAccountRepository, ITransactionalF
     public Task<bool> TryAddAccountAsync(
         User newAccount,
         List<Category> categories,
-        EmailToken confirmationToken)
+        EmailToken confirmationToken,
+        CancellationToken cancellationToken = default)
     {
         if (ConcurrentAccount != null)
         {
@@ -161,7 +179,7 @@ public class FakeUserAccountRepository : IUserAccountRepository, ITransactionalF
     }
 
     // Garde tout de suite le nouveau jeton en mémoire, et retire l'ancien du même type et du même compte.
-    public Task ReplaceTokenAsync(EmailToken newToken)
+    public Task ReplaceTokenAsync(EmailToken newToken, CancellationToken cancellationToken = default)
     {
         SavedEmailTokens.RemoveAll(token =>
             token.UserId == newToken.UserId
@@ -171,7 +189,7 @@ public class FakeUserAccountRepository : IUserAccountRepository, ITransactionalF
     }
 
     // Garde de côté le nouveau lien de confirmation : il ne remplacera les anciens qu'avec les autres changements.
-    public Task PrepareConfirmationTokenReplacementAsync(EmailToken newToken)
+    public Task PrepareConfirmationTokenReplacementAsync(EmailToken newToken, CancellationToken cancellationToken = default)
     {
         lock (pendingChangesLock)
         {
@@ -182,7 +200,7 @@ public class FakeUserAccountRepository : IUserAccountRepository, ITransactionalF
     }
 
     // Garde de côté l'effacement des liens partis vers l'ancienne adresse : il ne se fera qu'avec les autres changements.
-    public Task PrepareOldAddressLinksRemovalAsync(Guid accountId)
+    public Task PrepareOldAddressLinksRemovalAsync(Guid accountId, CancellationToken cancellationToken = default)
     {
         lock (pendingChangesLock)
         {
@@ -193,7 +211,7 @@ public class FakeUserAccountRepository : IUserAccountRepository, ITransactionalF
     }
 
     // Note le compte qui perdra tous ses liens à l'enregistrement.
-    public Task PrepareAllLinksRemovalAsync(Guid accountId)
+    public Task PrepareAllLinksRemovalAsync(Guid accountId, CancellationToken cancellationToken = default)
     {
         lock (pendingChangesLock)
         {
@@ -204,8 +222,10 @@ public class FakeUserAccountRepository : IUserAccountRepository, ITransactionalF
     }
 
     // Donne les comptes dont la suppression est demandée à cette date ou avant, du plus ancien au plus récent.
-    public Task<List<Guid>> FindAccountsToEraseAsync(DateTime requestedAtOrBefore)
+    public Task<List<Guid>> FindAccountsToEraseAsync(DateTime requestedAtOrBefore, CancellationToken cancellationToken = default)
     {
+        BeforeListingErasures?.Invoke();
+
         lock (pendingChangesLock)
         {
             var accountIds = SavedUsers
@@ -213,6 +233,26 @@ public class FakeUserAccountRepository : IUserAccountRepository, ITransactionalF
                 .OrderBy(user => user.DeletionRequestedAt)
                 .ThenBy(user => user.Id)
                 .Select(user => user.Id)
+                .ToList();
+            return Task.FromResult(accountIds);
+        }
+    }
+
+    // Donne les comptes dont le secret ne commence pas par ce début, dans l'ordre de leur identifiant, après celui-ci.
+    public Task<List<Guid>> FindAccountsWithOtherTotpKeyAsync(
+        string currentKeyPrefix,
+        Guid? afterUserId,
+        int count,
+        CancellationToken cancellationToken = default)
+    {
+        lock (pendingChangesLock)
+        {
+            var accountIds = SavedUsers
+                .Where(user => user.EncryptedTotpSecret != null && !user.EncryptedTotpSecret.StartsWith(currentKeyPrefix, StringComparison.Ordinal))
+                .Where(user => afterUserId == null || user.Id.CompareTo(afterUserId.Value) > 0)
+                .OrderBy(user => user.Id)
+                .Select(user => user.Id)
+                .Take(count)
                 .ToList();
             return Task.FromResult(accountIds);
         }
@@ -238,7 +278,7 @@ public class FakeUserAccountRepository : IUserAccountRepository, ITransactionalF
     }
 
     // Garde la date du passage. La vraie règle d'effacement est testée sur la vraie base.
-    public Task<int> DeleteExpiredUnconfirmedAccountsAsync(DateTime now)
+    public Task<int> DeleteExpiredUnconfirmedAccountsAsync(DateTime now, CancellationToken cancellationToken = default)
     {
         if (FailsDuringCleanup)
         {
@@ -326,12 +366,30 @@ public class FakeUserAccountRepository : IUserAccountRepository, ITransactionalF
                 return true;
             }
 
+            // Une autre requête se sert du même code de l'application juste avant l'enregistrement : elle a noté son pas sur le compte.
+            var steppedAccount = readAccounts.FindChangedSinceRead((copy, account) => copy.LastAuthenticatorStep != account.LastAuthenticatorStep)
+                ?? accountsUnderCheck.FirstOrDefault();
+            if (AuthenticatorStepUsedBeforeSave is long usedStep && steppedAccount != null)
+            {
+                AuthenticatorStepUsedBeforeSave = null;
+                concurrentChanges = () => steppedAccount.UseAuthenticatorStep(usedStep);
+                return true;
+            }
+
             // Un autre compte prend la nouvelle adresse juste avant l'enregistrement du changement : la base refuserait l'adresse en double.
             var otherAccount = AccountTakingNewEmailBeforeSave;
             if (otherAccount != null && FindAccountWithNewEmailSinceRead() != null)
             {
                 AccountTakingNewEmailBeforeSave = null;
                 concurrentChanges = () => SavedUsers.Add(otherAccount);
+                return true;
+            }
+
+            // Une autre requête change le compte dont le canal des alertes vient de changer.
+            var channelAccount = readAccounts.FindChangedSinceRead((copy, account) => copy.NotificationChannel != account.NotificationChannel);
+            if (channelAccount != null && ChannelChangeConflicts > 0)
+            {
+                ChannelChangeConflicts = ChannelChangeConflicts - 1;
                 return true;
             }
 

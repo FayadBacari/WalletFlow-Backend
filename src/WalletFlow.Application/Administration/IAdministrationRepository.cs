@@ -9,14 +9,14 @@ namespace WalletFlow.Application.Administration;
 public interface IAdministrationRepository
 {
     // Donne les demandes dans cet état, la plus ancienne d'abord, avec l'adresse où répondre. Rien n'est suivi.
-    Task<List<AdminSupportRequestItem>> FindRequestsAsync(SupportRequestStatus status);
+    Task<List<AdminSupportRequestItem>> FindRequestsAsync(SupportRequestStatus status, CancellationToken cancellationToken = default);
 
     // Donne une demande avec son message, l'adresse où répondre et ses réponses, de la plus ancienne à la plus récente.
     // Renvoie null si elle n'existe pas. Rien n'est suivi.
-    Task<AdminSupportRequestDetails?> FindRequestDetailsAsync(Guid requestId);
+    Task<AdminSupportRequestDetails?> FindRequestDetailsAsync(Guid requestId, CancellationToken cancellationToken = default);
 
     // Cherche la demande pour la changer : elle est suivie. Renvoie null si elle n'existe pas.
-    Task<SupportRequest?> FindRequestAsync(Guid requestId);
+    Task<SupportRequest?> FindRequestAsync(Guid requestId, CancellationToken cancellationToken = default);
 
     // Prépare l'écriture de la ligne de la demande, même si son état ne change pas : l'enregistrement échoue si une autre requête
     // l'a écrite depuis sa lecture. Une réponse et une demande résolue au même instant passent ainsi l'une après l'autre.
@@ -27,5 +27,5 @@ public interface IAdministrationRepository
 
     // Compte, à ce moment, les comptes par état, les connexions bancaires actives et les demandes par état. Aucun chiffre
     // ne porte sur l'argent (GR Admin).
-    Task<AdministrationStatistics> CountStatisticsAsync(DateTime now);
+    Task<AdministrationStatistics> CountStatisticsAsync(DateTime now, CancellationToken cancellationToken = default);
 }

@@ -1,4 +1,6 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 using WalletFlow.Api.Authentication;
 using WalletFlow.Api.Configuration;
 using WalletFlow.Api.Contracts;
@@ -9,10 +11,12 @@ namespace WalletFlow.Api.Controllers;
 
 // Connexions bancaires de l'utilisateur connecté, en lecture seule (GR Comptes, SS §7) : la liste des banques, la connexion
 // et son renouvellement, les comptes et leurs soldes, le solde total, leur mise à jour, et la déconnexion.
-// Ces routes n'ont aucun attribut de sécurité : toute route demande par défaut une session et le jeton anti-CSRF (voir Program.cs).
-// La connexion d'un autre utilisateur répond 404, comme une adresse qui n'existe pas (SS §4).
+// Ces routes demandent une session, que [Authorize] redit, et le jeton anti-CSRF, comme toute route (voir Program.cs).
+// La connexion d'un autre utilisateur répond 404, comme une adresse qui n'existe pas (SS §4). Les routes qui appellent le
+// prestataire partagent une limite par session (SS §6) : le prestataire limite les appels de toute l'application.
 [ApiController]
 [Route("api")]
+[Authorize]
 public class BankConnectionsController : ControllerBase
 {
     public const string DisconnectedMessage = "La banque est déconnectée. Ses comptes et leurs transactions sont supprimés de WalletFlow.";
@@ -49,9 +53,12 @@ public class BankConnectionsController : ControllerBase
 
     // GET api/banks : les banques que l'utilisateur peut connecter, dans l'ordre alphabétique.
     [HttpGet("banks")]
-    public async Task<IActionResult> ListBanks()
+    [EnableRateLimiting(RateLimitingConfiguration.BankPolicy)]
+    [ProducesResponseType<List<BankResponse>>(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status503ServiceUnavailable, Description = OpenApiConfiguration.BankUnavailableDescription)]
+    public async Task<IActionResult> ListBanks(CancellationToken cancellationToken = default)
     {
-        var result = await bankListService.ListAsync();
+        var result = await bankListService.ListAsync(cancellationToken);
 
         if (result is BankListResult.Listed listed)
         {
@@ -63,24 +70,31 @@ public class BankConnectionsController : ControllerBase
 
     // POST api/bank-connections : commence la connexion d'une banque, et donne l'adresse de sa page.
     [HttpPost("bank-connections")]
+    [EnableRateLimiting(RateLimitingConfiguration.BankPolicy)]
     [RequestSizeLimit(RequestSizeConfiguration.MaximumBankRequestBytes)]
-    public async Task<IActionResult> StartConnection(StartBankConnectionRequest request)
+    [ProducesResponseType<BankAddressResponse>(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status503ServiceUnavailable, Description = OpenApiConfiguration.BankUnavailableDescription)]
+    public async Task<IActionResult> StartConnection(StartBankConnectionRequest request, CancellationToken cancellationToken = default)
     {
-        var result = await authorizationStartService.StartNewAsync(SessionClaims.ReadUserId(User), request.BankName);
+        var result = await authorizationStartService.StartNewAsync(SessionClaims.ReadUserId(User), request.BankName, cancellationToken);
 
         return AnswerAuthorizationStart(result);
     }
 
     // POST api/bank-connections/{id}/renew : commence le renouvellement de l'autorisation d'une connexion (GR Comptes).
     [HttpPost("bank-connections/{connectionId:guid}/renew")]
+    [EnableRateLimiting(RateLimitingConfiguration.BankPolicy)]
     [RequestSizeLimit(RequestSizeConfiguration.MaximumBankRequestBytes)]
-    public async Task<IActionResult> StartRenewal(Guid connectionId)
+    [ProducesResponseType<BankAddressResponse>(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status503ServiceUnavailable, Description = OpenApiConfiguration.BankUnavailableDescription)]
+    public async Task<IActionResult> StartRenewal(Guid connectionId, CancellationToken cancellationToken = default)
     {
-        var result = await authorizationStartService.StartRenewalAsync(SessionClaims.ReadUserId(User), connectionId);
+        var result = await authorizationStartService.StartRenewalAsync(SessionClaims.ReadUserId(User), connectionId, cancellationToken);
 
         if (result is BankAuthorizationStartResult.NotFound)
         {
-            await RecordForeignAccessAsync(OwnedResource.BankConnection, connectionId);
+            await RecordForeignAccessAsync(OwnedResource.BankConnection, connectionId, cancellationToken);
         }
 
         return AnswerAuthorizationStart(result);
@@ -90,10 +104,15 @@ public class BankConnectionsController : ControllerBase
     // La banque renvoie l'utilisateur sur une page du site, qui envoie ici ce qu'elle a lu dans son adresse :
     // une requête GET ne doit jamais rien modifier (SS §6).
     [HttpPost("bank-connections/finish")]
+    [EnableRateLimiting(RateLimitingConfiguration.BankPolicy)]
     [RequestSizeLimit(RequestSizeConfiguration.MaximumBankRequestBytes)]
-    public async Task<IActionResult> Finish(FinishBankConnectionRequest request)
+    [ProducesResponseType<BankConnectionFinishResponse>(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    [ProducesResponseType(StatusCodes.Status503ServiceUnavailable, Description = OpenApiConfiguration.BankUnavailableDescription)]
+    public async Task<IActionResult> Finish(FinishBankConnectionRequest request, CancellationToken cancellationToken = default)
     {
-        var result = await finishService.FinishAsync(SessionClaims.ReadUserId(User), request.Code, request.State, ReadPresence());
+        var result = await finishService.FinishAsync(SessionClaims.ReadUserId(User), request.Code, request.State, ReadPresence(), cancellationToken);
 
         if (result is BankConnectionFinishResult.Connected connected)
         {
@@ -136,36 +155,36 @@ public class BankConnectionsController : ControllerBase
     // GET api/bank-connections : les banques connectées, leurs comptes, leurs soldes et la date de chaque solde.
     // Ce sont des données financières : aucun navigateur ni intermédiaire ne doit les garder.
     [HttpGet("bank-connections")]
-    [ResponseCache(NoStore = true, Location = ResponseCacheLocation.None)]
-    public async Task<IActionResult> ListConnections()
+    [ProducesResponseType<List<BankConnectionResponse>>(StatusCodes.Status200OK)]
+    public async Task<IActionResult> ListConnections(CancellationToken cancellationToken = default)
     {
-        return Ok(await CreateConnectionResponsesAsync());
+        return Ok(await CreateConnectionResponsesAsync(cancellationToken));
     }
 
     // POST api/bank-connections/refresh : met à jour les soldes, à l'ouverture de l'application, une fois par minute au plus.
     // Répond la liste à jour, ou 429 si la dernière mise à jour date de moins d'une minute (SS §6).
     [HttpPost("bank-connections/refresh")]
     [RequestSizeLimit(RequestSizeConfiguration.MaximumBankRequestBytes)]
-    [ResponseCache(NoStore = true, Location = ResponseCacheLocation.None)]
-    public async Task<IActionResult> Refresh()
+    [ProducesResponseType<List<BankConnectionResponse>>(StatusCodes.Status200OK)]
+    public async Task<IActionResult> Refresh(CancellationToken cancellationToken = default)
     {
-        var result = await balanceUpdateService.UpdateForUserAsync(SessionClaims.ReadUserId(User), ReadPresence());
+        var result = await balanceUpdateService.UpdateForUserAsync(SessionClaims.ReadUserId(User), ReadPresence(), cancellationToken);
 
         if (result is BankUpdateResult.TooManyUpdates)
         {
-            return Problem(statusCode: StatusCodes.Status429TooManyRequests);
+            return this.AnswerTooManyRequests(RetryDelays.BankUpdate);
         }
 
-        return Ok(await CreateConnectionResponsesAsync());
+        return Ok(await CreateConnectionResponsesAsync(cancellationToken));
     }
 
     // GET api/balance : le solde total, tous comptes confondus (GR Comptes), avec la date du plus ancien des soldes additionnés.
     // Chaque compte compte avec son dernier solde connu, même quand sa banque ne répond pas. Données financières : jamais gardées.
     [HttpGet("balance")]
-    [ResponseCache(NoStore = true, Location = ResponseCacheLocation.None)]
-    public async Task<IActionResult> ReadBalanceTotal()
+    [ProducesResponseType<BalanceTotalResponse>(StatusCodes.Status200OK)]
+    public async Task<IActionResult> ReadBalanceTotal(CancellationToken cancellationToken = default)
     {
-        var total = await balanceTotalService.ReadAsync(SessionClaims.ReadUserId(User));
+        var total = await balanceTotalService.ReadAsync(SessionClaims.ReadUserId(User), cancellationToken);
 
         return Ok(new BalanceTotalResponse(total.TotalInCents, total.OldestBalanceUpdatedAt, total.AccountCount));
     }
@@ -173,13 +192,19 @@ public class BankConnectionsController : ControllerBase
     // DELETE api/bank-connections/{id} : révoque l'autorisation, puis supprime la banque, ses comptes et leurs transactions.
     // Le site demande d'abord à l'utilisateur de confirmer (GR Comptes). Cette route ne lit aucun corps.
     [HttpDelete("bank-connections/{connectionId:guid}")]
+    [EnableRateLimiting(RateLimitingConfiguration.BankPolicy)]
     [RequestSizeLimit(RequestSizeConfiguration.MaximumBankRequestBytes)]
-    public async Task<IActionResult> Disconnect(Guid connectionId)
+    [ProducesResponseType<MessageResponse>(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    [ProducesResponseType(StatusCodes.Status503ServiceUnavailable, Description = OpenApiConfiguration.BankUnavailableDescription)]
+    public async Task<IActionResult> Disconnect(Guid connectionId, CancellationToken cancellationToken = default)
     {
         var result = await disconnectionService.DisconnectAsync(
             SessionClaims.ReadUserId(User),
             connectionId,
-            HttpContext.Connection.RemoteIpAddress);
+            HttpContext.Connection.RemoteIpAddress,
+            cancellationToken);
 
         if (result is BankDisconnectionResult.Disconnected)
         {
@@ -188,7 +213,7 @@ public class BankConnectionsController : ControllerBase
 
         if (result is BankDisconnectionResult.NotFound)
         {
-            await RecordForeignAccessAsync(OwnedResource.BankConnection, connectionId);
+            await RecordForeignAccessAsync(OwnedResource.BankConnection, connectionId, cancellationToken);
             return Problem(statusCode: StatusCodes.Status404NotFound);
         }
 
@@ -222,13 +247,14 @@ public class BankConnectionsController : ControllerBase
     }
 
     // Note au journal si la ressource visée est à un autre utilisateur (SS §11). La réponse reste la même dans tous les cas.
-    private async Task RecordForeignAccessAsync(OwnedResource resource, Guid? resourceId)
+    private async Task RecordForeignAccessAsync(OwnedResource resource, Guid? resourceId, CancellationToken cancellationToken = default)
     {
         await foreignAccessJournal.RecordIfForeignAsync(
             SessionClaims.ReadUserId(User),
             HttpContext.Connection.RemoteIpAddress,
             resource,
-            resourceId);
+            resourceId,
+            cancellationToken);
     }
 
     // Donne le message d'un champ refusé.
@@ -252,9 +278,9 @@ public class BankConnectionsController : ControllerBase
     }
 
     // Lit les connexions de l'utilisateur, et les traduit en réponses de l'API.
-    private async Task<List<BankConnectionResponse>> CreateConnectionResponsesAsync()
+    private async Task<List<BankConnectionResponse>> CreateConnectionResponsesAsync(CancellationToken cancellationToken = default)
     {
-        var views = await connectionListService.ListAsync(SessionClaims.ReadUserId(User));
+        var views = await connectionListService.ListAsync(SessionClaims.ReadUserId(User), cancellationToken);
         var responses = new List<BankConnectionResponse>();
 
         foreach (var view in views)

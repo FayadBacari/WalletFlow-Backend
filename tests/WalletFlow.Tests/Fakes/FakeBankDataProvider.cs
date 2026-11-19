@@ -123,7 +123,7 @@ public class FakeBankDataProvider : IBankDataProvider
     }
 
     // Donne les banques, ou échoue si le prestataire est en panne.
-    public Task<List<ProvidedBank>> ListBanksAsync()
+    public Task<List<ProvidedBank>> ListBanksAsync(CancellationToken cancellationToken = default)
     {
         lock (providerLock)
         {
@@ -133,7 +133,7 @@ public class FakeBankDataProvider : IBankDataProvider
     }
 
     // Note la demande d'autorisation, et renvoie l'adresse de la fausse banque.
-    public Task<string> StartAuthorizationAsync(BankAuthorizationRequest request)
+    public Task<string> StartAuthorizationAsync(BankAuthorizationRequest request, CancellationToken cancellationToken = default)
     {
         lock (providerLock)
         {
@@ -144,7 +144,7 @@ public class FakeBankDataProvider : IBankDataProvider
     }
 
     // Donne la session de ce code. Un code inconnu, ou déjà utilisé, est refusé comme chez le vrai prestataire.
-    public Task<ProvidedSession> CreateSessionAsync(string code)
+    public Task<ProvidedSession> CreateSessionAsync(string code, CancellationToken cancellationToken = default)
     {
         lock (providerLock)
         {
@@ -161,7 +161,7 @@ public class FakeBankDataProvider : IBankDataProvider
     }
 
     // Donne les comptes d'une session encore autorisée.
-    public Task<List<SessionAccount>> ReadSessionAccountsAsync(string sessionId)
+    public Task<List<SessionAccount>> ReadSessionAccountsAsync(string sessionId, CancellationToken cancellationToken = default)
     {
         lock (providerLock)
         {
@@ -177,7 +177,7 @@ public class FakeBankDataProvider : IBankDataProvider
     }
 
     // Donne les soldes d'un compte, et note si l'utilisateur était là.
-    public Task<List<ProvidedBalance>> ReadBalancesAsync(string accountUid, UserPresence? presence)
+    public Task<List<ProvidedBalance>> ReadBalancesAsync(string accountUid, UserPresence? presence, CancellationToken cancellationToken = default)
     {
         lock (providerLock)
         {
@@ -196,7 +196,7 @@ public class FakeBankDataProvider : IBankDataProvider
 
     // Donne les opérations du compte à partir de ce jour, comme le date_from du vrai prestataire, et note la lecture.
     // Le compte d'une session finie ou révoquée n'est plus lisible.
-    public Task<List<ProvidedTransaction>> ReadTransactionsAsync(string accountUid, DateOnly startDate, UserPresence? presence)
+    public Task<List<ProvidedTransaction>> ReadTransactionsAsync(string accountUid, DateOnly startDate, UserPresence? presence, CancellationToken cancellationToken = default)
     {
         lock (providerLock)
         {
@@ -223,7 +223,7 @@ public class FakeBankDataProvider : IBankDataProvider
     }
 
     // Note la session révoquée, ou échoue si le test le demande.
-    public Task RevokeSessionAsync(string sessionId)
+    public Task RevokeSessionAsync(string sessionId, CancellationToken cancellationToken = default)
     {
         lock (providerLock)
         {

@@ -21,6 +21,12 @@ public abstract class AccountRegistrationResult
         public required bool IsPasswordInvalid { get; init; }
     }
 
+    // Le mot de passe figure dans une fuite de données connue (SS §2) : rien n'est écrit ni envoyé. Le refus ne dépend que du
+    // mot de passe : il ne dit rien de l'adresse.
+    public sealed class PasswordBreached : AccountRegistrationResult
+    {
+    }
+
     // Trop de demandes pour cette adresse, qu'un compte existe ou non (SS §6).
     public sealed class TooManyRequests : AccountRegistrationResult
     {

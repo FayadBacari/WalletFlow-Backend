@@ -66,17 +66,21 @@ public class ConcurrentSuggestionRequestsTests
         return (suggestions, movements);
     }
 
-    // Calcule puis lit les suggestions avec le vrai cas d'utilisation, dans la portée de la requête.
-    private static async Task<SuggestionList> ListAsync(IServiceProvider services, Guid userId)
+    // Calcule le mois de ce compte comme la tâche horaire, puis lit ses suggestions, avec les vrais cas d'utilisation, dans la
+    // portée de la requête. La tâche entière n'est pas lancée : elle toucherait les comptes des autres tests de la base.
+    private static async Task<SuggestionList> CalculateThenListAsync(IServiceProvider services, Guid userId)
     {
+        var calculation = services.GetRequiredService<SuggestionCalculationService>();
+        await calculation.CalculateAsync(userId, calculation.FindEvaluatedMonth());
+
         return await services.GetRequiredService<SuggestionListService>().ListAsync(userId);
     }
 
-    // GR Sacs : 20 premières lectures en même temps ne calculent le mois qu'une fois. Toutes voient les deux mêmes suggestions,
-    // et la base n'en garde que deux. Sans le contrôle de la ligne de l'utilisateur, chaque lecture calculerait le mois,
-    // et les index uniques refuseraient les doublons.
+    // GR Sacs : 20 calculs du même mois en même temps, par exemple deux passages de la tâche, ne l'enregistrent qu'une fois.
+    // Tous voient les deux mêmes suggestions, et la base n'en garde que deux. Sans le contrôle de la ligne de l'utilisateur,
+    // chaque calcul enregistrerait le mois, et les index uniques refuseraient les doublons.
     [Fact]
-    public async Task SimultaneousFirstReadsCalculateTheMonthOnce()
+    public async Task SimultaneousCalculationsSaveTheMonthOnce()
     {
         using var api = new ApiFactoryWithRealDatabase();
         var email = CreateUniqueEmail("course-suggestions-calcul");
@@ -85,7 +89,7 @@ public class ConcurrentSuggestionRequestsTests
         {
             var (account, bag) = await SaveAccountWithDataAsync(email, EvaluatedMonth());
 
-            var results = await SimultaneousRequests.RunAsync(api, SimultaneousRequestCount, (services, _) => ListAsync(services, account.Id));
+            var results = await SimultaneousRequests.RunAsync(api, SimultaneousRequestCount, (services, _) => CalculateThenListAsync(services, account.Id));
 
             var (saved, _) = await ReadSavedAsync(account.Id, bag.Id);
             Assert.Equal(2, saved.Count);
@@ -111,7 +115,7 @@ public class ConcurrentSuggestionRequestsTests
             var (account, bag) = await SaveAccountWithDataAsync(email, EvaluatedMonth());
             await using (var scope = api.Services.CreateAsyncScope())
             {
-                await ListAsync(scope.ServiceProvider, account.Id);
+                await CalculateThenListAsync(scope.ServiceProvider, account.Id);
             }
             var suggestion = (await ReadSavedAsync(account.Id, bag.Id)).Suggestions.Single(row => row.Rule == SuggestionRule.UnallocatedMoney);
 
@@ -142,7 +146,7 @@ public class ConcurrentSuggestionRequestsTests
             var (account, bag) = await SaveAccountWithDataAsync(email, EvaluatedMonth());
             await using (var scope = api.Services.CreateAsyncScope())
             {
-                await ListAsync(scope.ServiceProvider, account.Id);
+                await CalculateThenListAsync(scope.ServiceProvider, account.Id);
             }
             var suggestion = (await ReadSavedAsync(account.Id, bag.Id)).Suggestions.Single(row => row.Rule == SuggestionRule.UnallocatedMoney);
 

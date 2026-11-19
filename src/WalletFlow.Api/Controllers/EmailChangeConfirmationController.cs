@@ -29,12 +29,16 @@ public class EmailChangeConfirmationController : ControllerBase
     [HttpPost("confirm-email-change")]
     [EnableRateLimiting(RateLimitingConfiguration.EmailChangeLinkPolicy)]
     [RequestSizeLimit(RequestSizeConfiguration.MaximumAccountRequestBytes)]
-    public async Task<IActionResult> ConfirmEmailChange(ConfirmEmailChangeRequest request)
+    [ProducesResponseType<MessageResponse>(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    [ProducesResponseType(StatusCodes.Status503ServiceUnavailable, Description = OpenApiConfiguration.ServerBusyDescription)]
+    public async Task<IActionResult> ConfirmEmailChange(ConfirmEmailChangeRequest request, CancellationToken cancellationToken = default)
     {
         var result = await confirmationService.ConfirmAsync(
             request.Token,
             request.Password,
-            HttpContext.Connection.RemoteIpAddress);
+            HttpContext.Connection.RemoteIpAddress,
+            cancellationToken);
 
         if (result is EmailChangeConfirmationResult.EmailChanged)
         {

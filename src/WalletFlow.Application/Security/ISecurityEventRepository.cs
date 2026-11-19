@@ -12,9 +12,9 @@ public interface ISecurityEventRepository
     void PrepareEvent(SecurityEvent securityEvent);
 
     // Donne la date du dernier événement réussi de ce type pour ce compte, ou null s'il n'y en a pas dans le journal.
-    Task<DateTime?> FindLastSuccessAsync(SecurityEventType type, Guid accountId);
+    Task<DateTime?> FindLastSuccessAsync(SecurityEventType type, Guid accountId, CancellationToken cancellationToken = default);
 
     // Efface tout de suite les événements de plus d'un an (SS §11), et renvoie leur nombre. La durée est gardée par la base :
     // l'application n'a pas le droit d'effacer un événement plus récent.
-    Task<int> DeleteExpiredEventsAsync();
+    Task<int> DeleteExpiredEventsAsync(CancellationToken cancellationToken = default);
 }

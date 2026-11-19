@@ -5,5 +5,5 @@ public interface IDataExportRepository
 {
     // Lit toutes les données que l'utilisateur voit, au même instant de la base : une modification enregistrée pendant la
     // lecture n'y apparaît pas à moitié. Renvoie null si le compte n'existe plus.
-    Task<AccountData?> ReadAsync(Guid userId);
+    Task<AccountData?> ReadAsync(Guid userId, CancellationToken cancellationToken = default);
 }

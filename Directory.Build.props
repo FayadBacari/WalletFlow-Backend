@@ -3,6 +3,11 @@
   <PropertyGroup>
     <!-- SS §10 : le fichier de verrouillage des dépendances (packages.lock.json) est versionné. -->
     <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+
+    <!-- Les règles d'analyse recommandées par .NET (qualité, fiabilité, sécurité) s'appliquent à tous les projets. La CI compile
+         avec -warnaserror : un nouvel avertissement bloque. Les règles qui ne servent pas ce projet sont coupées, chacune avec
+         sa raison, dans .editorconfig. -->
+    <AnalysisMode>Recommended</AnalysisMode>
   </PropertyGroup>
 
 </Project>

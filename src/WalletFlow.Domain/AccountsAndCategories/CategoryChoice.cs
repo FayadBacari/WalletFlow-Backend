@@ -1,3 +1,5 @@
+using System.Diagnostics.CodeAnalysis;
+
 namespace WalletFlow.Domain.AccountsAndCategories;
 
 // Choisit la catégorie d'une opération qui arrive de la banque (GR Dépenses) : d'abord la règle de l'utilisateur
@@ -7,6 +9,7 @@ public static class CategoryChoice
 {
     // Renvoie l'identifiant de la catégorie choisie parmi celles de l'utilisateur, ou null s'il n'a plus de « Autres » :
     // son compte vient d'être effacé.
+    [SuppressMessage("Performance", "CA1862", Justification = "Même comparaison que lower() de PostgreSQL, qui rend les noms uniques (ux_categorie_nom) : une autre pourrait s'en écarter.")]
     public static Guid? ForArrivingTransaction(string label, List<CategorizationRule> userRules, List<Category> userCategories)
     {
         var otherCategory = userCategories.FirstOrDefault(category => category.IsOtherCategory);

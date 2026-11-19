@@ -14,9 +14,9 @@ public class CategoryListService
     }
 
     // Donne les catégories de l'utilisateur dans l'ordre alphabétique, avec « Autres » à la fin (voir CategoryOrder).
-    public async Task<List<Category>> ListAsync(Guid userId)
+    public async Task<List<Category>> ListAsync(Guid userId, CancellationToken cancellationToken = default)
     {
-        var categories = await categoryRepository.FindAllAsync(userId);
+        var categories = await categoryRepository.FindAllAsync(userId, cancellationToken);
 
         categories.Sort(CategoryOrder.Compare);
 

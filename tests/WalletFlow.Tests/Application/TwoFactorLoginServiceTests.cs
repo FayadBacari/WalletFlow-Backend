@@ -58,7 +58,7 @@ public class TwoFactorLoginServiceTests
         var account = services.AddAccountWithoutTwoFactor();
         services.PasswordHasher.OnPasswordVerified = () =>
         {
-            account.ActivateTwoFactor("secret-chiffre-par-une-autre-requete");
+            account.ActivateTwoFactor("secret-chiffre-par-une-autre-requete", TwoFactorTestTools.OldStep);
         };
 
         var result = await services.LogInAsync(AccountPassword);
@@ -152,7 +152,7 @@ public class TwoFactorLoginServiceTests
         var waitingLoginToken = await services.LogInThenGetWaitingLoginTokenAsync();
         var code = services.CalculateCurrentCode(activatedAccount.Secret);
 
-        var result = await services.FinishLoginAsync(waitingLoginToken, code.Substring(0, 3) + " " + code.Substring(3));
+        var result = await services.FinishLoginAsync(waitingLoginToken, string.Concat(code.AsSpan(0, 3), " ", code.AsSpan(3)));
 
         Assert.IsType<TwoFactorLoginResult.LoggedIn>(result);
     }
@@ -275,7 +275,7 @@ public class TwoFactorLoginServiceTests
     {
         var activatedAccount = services.AddActivatedAccount();
         var waitingLoginToken = await services.LogInThenGetWaitingLoginTokenAsync();
-        activatedAccount.UserAccount.ActivateTwoFactor("secret-illisible");
+        activatedAccount.UserAccount.ActivateTwoFactor("secret-illisible", TwoFactorTestTools.OldStep);
         var comparisonCountBefore = services.PasswordHasher.VerifiedPasswordCount;
         var hashedCountBefore = services.BackupCodeHasher.HashedCodeCount;
 
@@ -543,7 +543,7 @@ public class TwoFactorLoginServiceTests
         activatedAccount.UserAccount.DeactivateTwoFactor();
         await services.FinishLoginAsync(waitingLoginToken, "123456");
 
-        activatedAccount.UserAccount.ActivateTwoFactor(encryptedSecret);
+        activatedAccount.UserAccount.ActivateTwoFactor(encryptedSecret, TwoFactorTestTools.OldStep);
         var result = await services.FinishLoginAsync(waitingLoginToken, services.CalculateCurrentCode(activatedAccount.Secret));
 
         Assert.IsType<TwoFactorLoginResult.LoginMustRestart>(result);
@@ -557,7 +557,7 @@ public class TwoFactorLoginServiceTests
         var activatedAccount = services.AddActivatedAccount();
         var waitingLoginToken = await services.LogInThenGetWaitingLoginTokenAsync();
         services.BackupCodeHasher.OnBackupCodeHashed = () =>
-            activatedAccount.UserAccount.ActivateTwoFactor("secret-du-nouveau-telephone");
+            activatedAccount.UserAccount.ActivateTwoFactor("secret-du-nouveau-telephone", TwoFactorTestTools.OldStep);
 
         var result = await services.FinishLoginAsync(waitingLoginToken, activatedAccount.BackupCodes[0]);
 
@@ -772,9 +772,9 @@ public class TwoFactorLoginServiceTests
     {
         var activatedAccount = services.AddActivatedAccount();
         var deviceToken = services.TokenGenerator.GenerateToken();
-        services.SessionRepository.SavedDevices.Add(new Device { DeviceToken = deviceToken.Hash, UserId = activatedAccount.UserAccount.Id });
+        services.SessionRepository.SavedDevices.Add(new Device { DeviceToken = deviceToken.Hash, UserId = activatedAccount.UserAccount.Id, LastUsedAt = services.Clock.GetUtcNow().UtcDateTime });
         var oldSessionToken = services.TokenGenerator.GenerateToken();
-        services.SessionRepository.SavedSessions.Add(new UserSession { Id = oldSessionToken.Hash, LastActivityAt = services.Clock.GetUtcNow().UtcDateTime, UserId = activatedAccount.UserAccount.Id });
+        services.SessionRepository.SavedSessions.Add(new UserSession { CreatedAt = services.Clock.GetUtcNow().UtcDateTime, Id = oldSessionToken.Hash, LastActivityAt = services.Clock.GetUtcNow().UtcDateTime, UserId = activatedAccount.UserAccount.Id });
         var waitingLoginToken = await services.LogInThenGetWaitingLoginTokenAsync();
 
         var result = await services.CreateTwoFactorLoginService().FinishAsync(new TwoFactorCodeAttempt
@@ -790,5 +790,34 @@ public class TwoFactorLoginServiceTests
         Assert.Single(services.SessionRepository.SavedDevices);
         var remainingSession = Assert.Single(services.SessionRepository.SavedSessions);
         Assert.NotEqual(oldSessionToken.Hash, remainingSession.Id);
+    }
+
+    // SS §2 : le code qui ouvre la session est noté avec elle : il ne resservira plus.
+    [Fact]
+    public async Task AuthenticatorCodeIsNotedWithTheSession()
+    {
+        var activatedAccount = services.AddActivatedAccount();
+        var waitingLoginToken = await services.LogInThenGetWaitingLoginTokenAsync();
+
+        var result = await services.FinishLoginAsync(waitingLoginToken, services.CalculateCurrentCode(activatedAccount.Secret));
+
+        Assert.IsType<TwoFactorLoginResult.LoggedIn>(result);
+        Assert.Equal(services.CurrentStep(), activatedAccount.UserAccount.LastAuthenticatorStep);
+    }
+
+    // Une autre requête se sert du même code juste avant l'enregistrement de la connexion : aucune session ne s'ouvre, et la
+    // connexion doit recommencer. De deux connexions avec le même code, une seule passe (SS §2).
+    [Fact]
+    public async Task CodeUsedByAnotherRequestMeanwhileOpensNoSession()
+    {
+        var activatedAccount = services.AddActivatedAccount();
+        var waitingLoginToken = await services.LogInThenGetWaitingLoginTokenAsync();
+        services.AccountRepository.AuthenticatorStepUsedBeforeSave = services.CurrentStep();
+
+        var result = await services.FinishLoginAsync(waitingLoginToken, services.CalculateCurrentCode(activatedAccount.Secret));
+
+        Assert.IsType<TwoFactorLoginResult.LoginMustRestart>(result);
+        Assert.Empty(services.SessionRepository.SavedSessions);
+        Assert.Null(services.AccountRepository.AuthenticatorStepUsedBeforeSave);
     }
 }

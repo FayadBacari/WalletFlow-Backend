@@ -46,7 +46,7 @@ public class BudgetAlertService
     // Renvoie le nombre d'e-mails mis dans la file. Chaque passage enregistre une seule alerte, dans sa propre transaction :
     // l'index unique des alertes est alors le seul verrou disputé, et deux vérifications simultanées ne s'attendent jamais
     // l'une l'autre en boucle. Une vérification que d'autres requêtes empêchent à chaque essai sera refaite au prochain changement.
-    public async Task<int> CheckAsync(Guid userId)
+    public async Task<int> CheckAsync(Guid userId, CancellationToken cancellationToken = default)
     {
         var now = clock.GetUtcNow();
         var month = AlertRules.FindBudgetMonth(UsersCalendar.FindToday(now));
@@ -55,8 +55,9 @@ public class BudgetAlertService
         for (var pass = 1; pass <= MaximumAlertsPerCheck; pass++)
         {
             var outcome = await savingService.SaveWithRetriesAsync(
-                () => PrepareNextAlertAsync(userId, month, now.UtcDateTime),
-                PassOutcome.NothingLeft);
+                () => PrepareNextAlertAsync(userId, month, now.UtcDateTime, cancellationToken),
+                PassOutcome.NothingLeft,
+                cancellationToken);
 
             if (outcome == PassOutcome.NothingLeft)
             {
@@ -76,14 +77,14 @@ public class BudgetAlertService
     // qui manque. Le seuil des 100 % passe avant celui des 80 % : l'e-mail qui compte part le premier, et les 80 %
     // sont ensuite notés sans e-mail. Une autre vérification qui enregistre la même alerte au même instant fait échouer
     // celle-ci sur l'index unique : le passage suivant relit, et passe à l'alerte suivante.
-    private async Task<PreparedChanges<PassOutcome>> PrepareNextAlertAsync(Guid userId, DateOnly month, DateTime now)
+    private async Task<PreparedChanges<PassOutcome>> PrepareNextAlertAsync(Guid userId, DateOnly month, DateTime now, CancellationToken cancellationToken = default)
     {
-        if (!await alertRepository.IsEnabledAsync(userId, AlertKind.BudgetReached))
+        if (!await alertRepository.IsEnabledAsync(userId, AlertKind.BudgetReached, cancellationToken))
         {
             return PreparedChanges<PassOutcome>.NothingToSave(PassOutcome.NothingLeft);
         }
 
-        var budgetedCategories = (await categoryRepository.FindAllAsync(userId))
+        var budgetedCategories = (await categoryRepository.FindAllAsync(userId, cancellationToken))
             .Where(category => category.MonthlyBudgetInCents != null)
             .ToList();
 
@@ -92,8 +93,8 @@ public class BudgetAlertService
             return PreparedChanges<PassOutcome>.NothingToSave(PassOutcome.NothingLeft);
         }
 
-        var totals = await transactionRepository.SumByCategoryAndMonthAsync(userId, month, month.AddMonths(1).AddDays(-1), null);
-        var sentAlerts = await alertRepository.FindBudgetAlertsAsync(userId, month);
+        var totals = await transactionRepository.SumByCategoryAndMonthAsync(userId, month, month.AddMonths(1).AddDays(-1), null, cancellationToken);
+        var sentAlerts = await alertRepository.FindBudgetAlertsAsync(userId, month, cancellationToken);
 
         foreach (var category in budgetedCategories)
         {

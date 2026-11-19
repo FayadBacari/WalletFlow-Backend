@@ -104,21 +104,23 @@ public class AccountRecoveryRealChainTests
     {
         foreach (var request in await FindRequestsOfThisTestAsync(databaseContext))
         {
+            var accountRepository = new UserAccountRepository(databaseContext);
+            var websiteSettings = new PublicWebsiteSettings("https://walletflow.test");
             var processingService = new EmailRequestProcessingService(
                 CreateEmailRequestRepository(databaseContext),
-                new UserAccountRepository(databaseContext),
-                new AlertRepository(databaseContext),
-                new SupportRequestRepository(databaseContext),
                 new EntityFrameworkDatabaseUnitOfWork(databaseContext),
                 CreateSecurityJournal(databaseContext, clock),
-                tokenGenerator,
                 emailSender,
-                new FrenchAccountRecoveryEmails(),
-                new FrenchAccountChangeEmails(),
-                new FrenchSecurityAlertEmails(),
-                new FrenchAlertEmails(),
-                new FrenchSupportEmails(),
-                new PublicWebsiteSettings("https://walletflow.test"),
+                new LinkEmailPreparation(
+                    accountRepository, tokenGenerator, new FrenchAccountRecoveryEmails(), new FrenchAccountChangeEmails(), websiteSettings, clock),
+                new NoticeEmailPreparation(accountRepository, new FrenchSecurityAlertEmails(), new FrenchAccountChangeEmails(), websiteSettings),
+                new AlertAndSupportEmailPreparation(
+                    accountRepository,
+                    new AlertRepository(databaseContext),
+                    new FrenchAlertEmails(),
+                    new SupportRequestRepository(databaseContext),
+                    new FrenchSupportEmails(),
+                    websiteSettings),
                 clock);
 
             await processingService.ProcessAsync(request.Id);
@@ -160,6 +162,7 @@ public class AccountRecoveryRealChainTests
             CreateSavingService(databaseContext),
             CreateSecurityJournal(databaseContext, clock),
             passwordHasher,
+            new FakeBreachedPasswordChecker(),
             tokenGenerator,
             clock);
 

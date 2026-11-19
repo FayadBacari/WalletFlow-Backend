@@ -42,7 +42,7 @@ public class FakeAdministrationRepository : IAdministrationRepository, ITransact
     public bool IsDown { get; set; } = false;
 
     // Donne les demandes gardées dans cet état, la plus ancienne d'abord, comme la vraie requête.
-    public Task<List<AdminSupportRequestItem>> FindRequestsAsync(SupportRequestStatus status)
+    public Task<List<AdminSupportRequestItem>> FindRequestsAsync(SupportRequestStatus status, CancellationToken cancellationToken = default)
     {
         ThrowIfDown();
 
@@ -66,7 +66,7 @@ public class FakeAdministrationRepository : IAdministrationRepository, ITransact
     }
 
     // Donne la demande gardée avec ses réponses, de la plus ancienne à la plus récente, comme la vraie requête.
-    public Task<AdminSupportRequestDetails?> FindRequestDetailsAsync(Guid requestId)
+    public Task<AdminSupportRequestDetails?> FindRequestDetailsAsync(Guid requestId, CancellationToken cancellationToken = default)
     {
         ThrowIfDown();
 
@@ -98,7 +98,7 @@ public class FakeAdministrationRepository : IAdministrationRepository, ITransact
     }
 
     // Cherche la demande gardée, et garde une copie de ses valeurs, comme le suivi d'EF Core.
-    public Task<SupportRequest?> FindRequestAsync(Guid requestId)
+    public Task<SupportRequest?> FindRequestAsync(Guid requestId, CancellationToken cancellationToken = default)
     {
         ThrowIfDown();
 
@@ -134,7 +134,7 @@ public class FakeAdministrationRepository : IAdministrationRepository, ITransact
     }
 
     // Compte les comptes par état avec la règle du domaine, les connexions actives du faux dépôt des banques, et les demandes par état.
-    public Task<AdministrationStatistics> CountStatisticsAsync(DateTime now)
+    public Task<AdministrationStatistics> CountStatisticsAsync(DateTime now, CancellationToken cancellationToken = default)
     {
         ThrowIfDown();
 

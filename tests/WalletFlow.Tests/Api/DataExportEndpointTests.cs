@@ -131,7 +131,7 @@ public class DataExportEndpointTests
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
         Assert.Equal(
             ErrorMessages.WrongCurrentPassword,
-            (await ReadJsonAsync(response)).GetProperty("errors").GetProperty(nameof(DataExportRequest.Password))[0].GetString());
+            (await ReadJsonAsync(response)).GetProperty("errors").GetProperty("password")[0].GetString());
         Assert.Empty(api.ExportRepository.ReadUserIds);
     }
 
@@ -172,7 +172,7 @@ public class DataExportEndpointTests
         var csrfTokenAnHourLater = await LogInThenGetCsrfTokenAsync(client);
         var anHourLater = await SendSettingsRequestAsync(client, ExportEndpoint, new { password = ValidPassword }, csrfTokenAnHourLater);
 
-        Assert.Equal(HttpStatusCode.TooManyRequests, fourth.StatusCode);
+        await TooManyRequestsAssertions.AssertTooManyRequestsAsync(fourth, 3600);
         Assert.Equal(HttpStatusCode.OK, anHourLater.StatusCode);
     }
 
@@ -211,7 +211,7 @@ public class DataExportEndpointTests
         var response = await SendSettingsRequestAsync(client, ExportEndpoint, new { }, csrfToken);
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
-        Assert.True((await ReadJsonAsync(response)).GetProperty("errors").TryGetProperty(nameof(DataExportRequest.Password), out _));
+        Assert.True((await ReadJsonAsync(response)).GetProperty("errors").TryGetProperty("password", out _));
         Assert.Empty(api.ExportRepository.ReadUserIds);
     }
 }

@@ -23,7 +23,7 @@ public class VisitorSupportRequestService
 
     // Enregistre le message tapé et l'adresse saisie, sous leur forme enregistrée, s'ils respectent leur règle.
     // Les deux sont vérifiés avant de répondre : le visiteur apprend en une fois tout ce qui ne va pas.
-    public async Task<VisitorSupportRequestResult> SendAsync(string? typedContactEmail, string? typedMessage)
+    public async Task<VisitorSupportRequestResult> SendAsync(string? typedContactEmail, string? typedMessage, CancellationToken cancellationToken = default)
     {
         var contactEmail = EmailAddressRules.Normalize(typedContactEmail ?? string.Empty);
         var message = SupportRules.NormalizeText(typedMessage);
@@ -41,7 +41,7 @@ public class VisitorSupportRequestService
 
         supportRepository.PrepareRequest(SupportRequest.FromVisitor(contactEmail, message, clock.GetUtcNow().UtcDateTime));
 
-        if (!await unitOfWork.TrySaveChangesAsync())
+        if (!await unitOfWork.TrySaveChangesAsync(cancellationToken))
         {
             return new VisitorSupportRequestResult.NotSaved();
         }

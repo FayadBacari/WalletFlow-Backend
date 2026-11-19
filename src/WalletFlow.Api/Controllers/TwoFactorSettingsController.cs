@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
 using WalletFlow.Api.Authentication;
@@ -8,13 +9,13 @@ using WalletFlow.Application.TwoFactorAuthentication;
 namespace WalletFlow.Api.Controllers;
 
 // Réglage de la double authentification par l'utilisateur connecté (GR Auth, SS §2).
-// Ces routes n'ont aucun attribut de sécurité : toute route demande par défaut une session et le jeton anti-CSRF (voir Program.cs).
+// Ces routes demandent une session, que [Authorize] redit, et le jeton anti-CSRF, comme toute route (voir Program.cs).
 // Leurs réponses contiennent un secret ou des codes de secours : aucun navigateur ni intermédiaire ne doit les garder.
 [ApiController]
 [Route("api/account/two-factor")]
+[Authorize]
 [EnableRateLimiting(RateLimitingConfiguration.TwoFactorSettingsPolicy)]
 [RequestSizeLimit(RequestSizeConfiguration.MaximumAccountRequestBytes)]
-[ResponseCache(NoStore = true, Location = ResponseCacheLocation.None)]
 public class TwoFactorSettingsController : ControllerBase
 {
     public const string DeactivatedMessage = "La double authentification est désactivée.";
@@ -31,12 +32,16 @@ public class TwoFactorSettingsController : ControllerBase
 
     // POST api/account/two-factor/start-activation : le mot de passe redemandé donne le secret à ajouter à l'application.
     [HttpPost("start-activation")]
-    public async Task<IActionResult> StartActivation(StartTwoFactorActivationRequest request)
+    [ProducesResponseType<TwoFactorSecretResponse>(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    [ProducesResponseType(StatusCodes.Status503ServiceUnavailable, Description = OpenApiConfiguration.ServerBusyDescription)]
+    public async Task<IActionResult> StartActivation(StartTwoFactorActivationRequest request, CancellationToken cancellationToken = default)
     {
         var result = await activationService.StartAsync(
             SessionClaims.ReadUserId(User),
             request.Password,
-            HttpContext.Connection.RemoteIpAddress);
+            HttpContext.Connection.RemoteIpAddress,
+            cancellationToken);
 
         if (result is TwoFactorActivationStartResult.Started started)
         {
@@ -54,12 +59,16 @@ public class TwoFactorSettingsController : ControllerBase
 
     // POST api/account/two-factor/finish-activation : un premier code juste active tout, et donne les 10 codes de secours.
     [HttpPost("finish-activation")]
-    public async Task<IActionResult> FinishActivation(TwoFactorCodeRequest request)
+    [ProducesResponseType<TwoFactorBackupCodesResponse>(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    [ProducesResponseType(StatusCodes.Status503ServiceUnavailable, Description = OpenApiConfiguration.ServerBusyDescription)]
+    public async Task<IActionResult> FinishActivation(TwoFactorCodeRequest request, CancellationToken cancellationToken = default)
     {
         var result = await activationService.FinishAsync(
             SessionClaims.ReadUserId(User),
             request.Code,
-            HttpContext.Connection.RemoteIpAddress);
+            HttpContext.Connection.RemoteIpAddress,
+            cancellationToken);
 
         if (result is TwoFactorActivationFinishResult.Activated activated)
         {
@@ -77,13 +86,17 @@ public class TwoFactorSettingsController : ControllerBase
 
     // POST api/account/two-factor/deactivate : le mot de passe et un code désactivent tout.
     [HttpPost("deactivate")]
-    public async Task<IActionResult> Deactivate(DeactivateTwoFactorRequest request)
+    [ProducesResponseType<MessageResponse>(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    [ProducesResponseType(StatusCodes.Status503ServiceUnavailable, Description = OpenApiConfiguration.ServerBusyDescription)]
+    public async Task<IActionResult> Deactivate(DeactivateTwoFactorRequest request, CancellationToken cancellationToken = default)
     {
         var result = await deactivationService.DeactivateAsync(
             SessionClaims.ReadUserId(User),
             request.Password,
             request.Code,
-            HttpContext.Connection.RemoteIpAddress);
+            HttpContext.Connection.RemoteIpAddress,
+            cancellationToken);
 
         if (result is TwoFactorDeactivationResult.TwoFactorDeactivated)
         {

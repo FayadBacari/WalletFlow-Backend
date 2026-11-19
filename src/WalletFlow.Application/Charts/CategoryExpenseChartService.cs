@@ -21,7 +21,7 @@ public class CategoryExpenseChartService
 
     // Donne la dépense de chaque catégorie dépensière entre ces deux jours compris, la plus grande d'abord.
     // À dépense égale, les catégories gardent l'ordre de leur liste (voir CategoryOrder).
-    public async Task<ChartPeriodResult<List<CategoryExpense>>> ReadAsync(Guid userId, DateOnly from, DateOnly to, Guid? accountId)
+    public async Task<ChartPeriodResult<List<CategoryExpense>>> ReadAsync(Guid userId, DateOnly from, DateOnly to, Guid? accountId, CancellationToken cancellationToken = default)
     {
         if (to < from)
         {
@@ -33,8 +33,8 @@ public class CategoryExpenseChartService
             return new ChartPeriodResult<List<CategoryExpense>>.PeriodTooLong();
         }
 
-        var totals = await transactionRepository.SumByCategoryAndMonthAsync(userId, from, to, accountId);
-        var categories = await categoryRepository.FindAllAsync(userId);
+        var totals = await transactionRepository.SumByCategoryAndMonthAsync(userId, from, to, accountId, cancellationToken);
+        var categories = await categoryRepository.FindAllAsync(userId, cancellationToken);
         categories.Sort(CategoryOrder.Compare);
         var expenses = new List<CategoryExpense>();
 

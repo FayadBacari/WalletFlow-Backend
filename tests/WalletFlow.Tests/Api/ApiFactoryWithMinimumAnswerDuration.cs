@@ -1,3 +1,4 @@
+using System.Globalization;
 using Microsoft.AspNetCore.Hosting;
 using WalletFlow.Api.Filters;
 
@@ -15,6 +16,6 @@ public class ApiFactoryWithMinimumAnswerDuration : ApiFactoryWithFakes
 
         builder.UseSetting(
             MinimumAnswerDurationFilter.SettingName,
-            MinimumMilliseconds.ToString());
+            MinimumMilliseconds.ToString(CultureInfo.InvariantCulture));
     }
 }

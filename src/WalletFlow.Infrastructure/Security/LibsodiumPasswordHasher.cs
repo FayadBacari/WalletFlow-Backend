@@ -18,16 +18,18 @@ public class LibsodiumPasswordHasher : IPasswordHasher
 
     // Le niveau « Interactive » de Sodium.Core (32 Mio de mémoire, 4 passes) est prévu pour une connexion
     // en ligne. Il dépasse le minimum recommandé par l'OWASP pour Argon2id (19 Mio de mémoire, 2 passes).
-    public async Task<string> HashAsync(string password)
+    public async Task<string> HashAsync(string password, CancellationToken cancellationToken = default)
     {
         return await argonLimiter.RunAsync(() =>
-            PasswordHash.ArgonHashString(password, PasswordHash.StrengthArgon.Interactive));
+            PasswordHash.ArgonHashString(password, PasswordHash.StrengthArgon.Interactive),
+            cancellationToken);
     }
 
     // Renvoie vrai si le mot de passe correspond à l'empreinte enregistrée en base.
-    public async Task<bool> VerifyAsync(string password, string storedHash)
+    public async Task<bool> VerifyAsync(string password, string storedHash, CancellationToken cancellationToken = default)
     {
         return await argonLimiter.RunAsync(() =>
-            PasswordHash.ArgonHashStringVerify(storedHash, password));
+            PasswordHash.ArgonHashStringVerify(storedHash, password),
+            cancellationToken);
     }
 }

@@ -1,0 +1,61 @@
+WalletFlow — Proprietary License
+
+Copyright (c) 2026 Fayad Idriss BACARI. All rights reserved.
+
+
+1. Ownership
+
+This repository and everything it contains — source code, database scripts, tests, documentation, designs and
+any other file (together, the "Software") — are the exclusive property of the copyright holder named above.
+The Software is protected by copyright law and by international treaties.
+
+
+2. No license is granted
+
+This notice grants no license or right of any kind, whether express or implied. Being able to see the Software,
+for example in a public repository, gives no right to use it.
+
+Where the Software is hosted on a platform whose terms of service give its users limited rights over public
+repositories (for example, viewing or forking within the platform), those rights are limited to what those terms
+strictly require, and they allow no other use.
+
+
+3. Prohibited acts
+
+Without the prior written permission of the copyright holder, no one may, in whole or in part, by any means and
+for any purpose:
+
+  a) copy, reproduce, download, clone or store the Software, beyond what is described in section 2;
+  b) modify, adapt or translate the Software, or create derivative works from it;
+  c) distribute, publish, sublicense, sell, rent, lend or otherwise make the Software available to anyone;
+  d) run, use or host the Software, including as an online service;
+  e) decompile, disassemble or reverse engineer any compiled form of the Software;
+  f) use the Software to train, test or improve any artificial intelligence or machine learning system;
+  g) remove, hide or alter this notice or any other copyright notice.
+
+
+4. Written permission
+
+A permission is only valid if the copyright holder gives it in writing, and it only covers what it explicitly
+names. Requests can be sent to the copyright holder at fayadbacari-dev@outlook.com.
+
+
+5. Infringement
+
+Any use that this notice or a written permission does not explicitly allow infringes the copyright holder's
+rights, constitutes counterfeiting under articles L.122-4 and L.335-2 and following of the French Intellectual
+Property Code, and may lead to civil and criminal proceedings.
+
+
+6. No warranty
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO
+THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT. IN NO EVENT SHALL THE
+COPYRIGHT HOLDER BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY ARISING FROM, OUT OF OR IN CONNECTION WITH
+THE SOFTWARE OR ITS USE.
+
+
+7. Governing law
+
+This notice is governed by French law. Any dispute relating to it falls under the jurisdiction of the competent
+French courts.

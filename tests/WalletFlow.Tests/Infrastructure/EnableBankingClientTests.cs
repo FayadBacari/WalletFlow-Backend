@@ -158,8 +158,8 @@ public sealed class EnableBankingClientTests : IDisposable
         Assert.Equal("session-1", session.SessionId);
         Assert.Equal(new DateTime(2027, 5, 11, 9, 50, 0, DateTimeKind.Utc), session.ValidUntil);
         Assert.Equal(2, session.Accounts.Count);
-        Assert.Equal(new ProvidedAccount("uid-1", EnableBankingClient.ComputeStableId(longHash), "Compte courant", "EUR"), session.Accounts[0]);
-        Assert.Equal(new ProvidedAccount("uid-2", EnableBankingClient.ComputeStableId("empreinte-2"), "Compte en dollars", "USD"), session.Accounts[1]);
+        Assert.Equal(new ProvidedAccount("uid-1", EnableBankingConversions.ComputeStableId(longHash), "Compte courant", "EUR"), session.Accounts[0]);
+        Assert.Equal(new ProvidedAccount("uid-2", EnableBankingConversions.ComputeStableId("empreinte-2"), "Compte en dollars", "USD"), session.Accounts[1]);
         Assert.Equal(64, session.Accounts[0].StableId.Length);
         Assert.DoesNotContain(session.Accounts, account => account.Name == "Jean Dupont");
     }
@@ -190,7 +190,7 @@ public sealed class EnableBankingClientTests : IDisposable
         var accounts = await client.ReadSessionAccountsAsync("session-1");
 
         Assert.Equal("/sessions/session-1", server.Requests.Single().PathAndQuery);
-        Assert.Equal(new List<SessionAccount> { new SessionAccount("uid-1", EnableBankingClient.ComputeStableId("empreinte-1")) }, accounts);
+        Assert.Equal(new List<SessionAccount> { new SessionAccount("uid-1", EnableBankingConversions.ComputeStableId("empreinte-1")) }, accounts);
     }
 
     // Une session qui n'est plus autorisée, ou que le prestataire ne connaît plus, demande une nouvelle autorisation.
@@ -246,9 +246,21 @@ public sealed class EnableBankingClientTests : IDisposable
     [InlineData("", null)]
     [InlineData(null, null)]
     [InlineData("99999999999999999999999999", null)]
+    [InlineData("1000000000000", 100_000_000_000_000L)]
+    [InlineData("1000000000000.01", null)]
+    [InlineData("-1000000000000", -100_000_000_000_000L)]
+    [InlineData("-1000000000000.01", null)]
     public void AmountIsReadInWholeCents(string? amount, long? expectedCents)
     {
-        Assert.Equal(expectedCents, EnableBankingClient.ReadCents(amount));
+        Assert.Equal(expectedCents, EnableBankingConversions.ReadCents(amount));
+    }
+
+    // L'identifiant stable garde toujours la même forme : l'empreinte SHA-256 en hexadécimal minuscule, sur 64 caractères. Sinon,
+    // les comptes déjà enregistrés ne seraient plus reconnus à la mise à jour suivante. « abc » est le vecteur de test de SHA-256.
+    [Fact]
+    public void StableIdIsTheLowercaseSha256OfTheBankIdentifier()
+    {
+        Assert.Equal("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad", EnableBankingConversions.ComputeStableId("abc"));
     }
 
     // DSP2 : l'adresse IP et le navigateur ne partent que si l'utilisateur est là. Le navigateur est nettoyé avant.
@@ -314,6 +326,18 @@ public sealed class EnableBankingClientTests : IDisposable
         Assert.Equal(BankProviderFailure.Unavailable, await CatchFailureAsync(() => client.ReadBalancesAsync("uid-1", null)));
     }
 
+    // Une requête abandonnée par son client n'est pas une banque muette : rien ne la note comme une panne du prestataire.
+    [Fact]
+    public async Task AbandonedRequestIsNotTakenForASilentBank()
+    {
+        server.WaitsForever = true;
+        using var abandon = new CancellationTokenSource(TimeSpan.FromMilliseconds(50));
+
+        var exception = await Assert.ThrowsAnyAsync<OperationCanceledException>(() => client.ReadBalancesAsync("uid-1", null, abandon.Token));
+
+        Assert.Equal(abandon.Token, exception.CancellationToken);
+    }
+
     // Prépare les pages d'opérations du faux serveur : chaque requête reçoit la page suivante, puis la dernière à nouveau.
     private void AnswerPages(params string[] pages)
     {
@@ -375,7 +399,7 @@ public sealed class EnableBankingClientTests : IDisposable
         Assert.Equal(300, transactions[4].AmountInCents);
     }
 
-    // Le libellé : les lignes de texte de la banque, sinon le nom de l'autre partie, sinon le type d'opération.
+    // Le libellé : les lignes de texte de la banque, même une seule, sinon le nom de l'autre partie, sinon le type d'opération.
     // Les comptes de l'autre partie ne sont jamais lus (DD §13).
     [Fact]
     public async Task LabelComesFromTheTextThenTheOtherPartyThenTheType()
@@ -383,6 +407,7 @@ public sealed class EnableBankingClientTests : IDisposable
         Answer(HttpStatusCode.OK, """
             { "transactions": [
                 { "status": "BOOK", "credit_debit_indicator": "DBIT", "remittance_information": [ "CB CARREFOUR", " ", null, "PARIS 12" ], "creditor": { "name": "CARREFOUR SAS" } },
+                { "status": "BOOK", "credit_debit_indicator": "DBIT", "remittance_information": [ "PRLV NETFLIX" ], "creditor": { "name": "NETFLIX INTERNATIONAL" } },
                 { "status": "BOOK", "credit_debit_indicator": "DBIT", "remittance_information": [], "creditor": { "name": "EDF" }, "debtor": { "name": "MOI" }, "creditor_account": { "iban": "FR00COMPTEDETEST" } },
                 { "status": "BOOK", "credit_debit_indicator": "CRDT", "creditor": { "name": "MOI" }, "debtor": { "name": "EMPLOYEUR SAS" } },
                 { "status": "BOOK", "credit_debit_indicator": "DBIT", "bank_transaction_code": { "description": "Frais bancaires" } }
@@ -392,7 +417,7 @@ public sealed class EnableBankingClientTests : IDisposable
         var transactions = await client.ReadTransactionsAsync("uid-1", new DateOnly(2026, 1, 1), null);
 
         Assert.Equal(
-            new List<string> { "CB CARREFOUR PARIS 12", "EDF", "EMPLOYEUR SAS", "Frais bancaires" },
+            new List<string> { "CB CARREFOUR PARIS 12", "PRLV NETFLIX", "EDF", "EMPLOYEUR SAS", "Frais bancaires" },
             transactions.Select(transaction => transaction.Label).ToList());
         Assert.DoesNotContain(transactions, transaction => transaction.Label.Contains("FR00"));
     }
@@ -445,6 +470,7 @@ public sealed class EnableBankingClientTests : IDisposable
         public List<RecordedRequest> Requests { get; } = new List<RecordedRequest>();
         public Func<HttpRequestMessage, HttpResponseMessage> Respond { get; set; } = request => new HttpResponseMessage(HttpStatusCode.OK);
         public Exception? Failure { get; set; } = null;
+        public bool WaitsForever { get; set; } = false;
 
         // Garde la requête, puis répond ou échoue (nom imposé par le framework).
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
@@ -456,6 +482,11 @@ public sealed class EnableBankingClientTests : IDisposable
             if (Failure != null)
             {
                 throw Failure;
+            }
+
+            if (WaitsForever)
+            {
+                await Task.Delay(Timeout.Infinite, cancellationToken);
             }
 
             return Respond(request);

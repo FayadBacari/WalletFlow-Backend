@@ -55,6 +55,7 @@ public class AccountLoginRealChainTests
             new UserAccountRepository(databaseContext),
             new EntityFrameworkDatabaseUnitOfWork(databaseContext),
             passwordHasher,
+            new FakeBreachedPasswordChecker(),
             tokenGenerator,
             emailSender,
             new FrenchAccountRegistrationEmails(),

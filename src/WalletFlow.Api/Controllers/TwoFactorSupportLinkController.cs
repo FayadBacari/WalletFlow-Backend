@@ -30,9 +30,11 @@ public class TwoFactorSupportLinkController : ControllerBase
     [HttpPost("disable-two-factor")]
     [EnableRateLimiting(RateLimitingConfiguration.TwoFactorSupportLinkPolicy)]
     [RequestSizeLimit(RequestSizeConfiguration.MaximumAccountRequestBytes)]
-    public async Task<IActionResult> DisableTwoFactor(DisableTwoFactorRequest request)
+    [ProducesResponseType<MessageResponse>(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status503ServiceUnavailable, Description = OpenApiConfiguration.ServerBusyDescription)]
+    public async Task<IActionResult> DisableTwoFactor(DisableTwoFactorRequest request, CancellationToken cancellationToken = default)
     {
-        var result = await linkService.DeactivateAsync(request.Token, request.Password, HttpContext.Connection.RemoteIpAddress);
+        var result = await linkService.DeactivateAsync(request.Token, request.Password, HttpContext.Connection.RemoteIpAddress, cancellationToken);
 
         if (result is TwoFactorSupportLinkResult.Deactivated)
         {

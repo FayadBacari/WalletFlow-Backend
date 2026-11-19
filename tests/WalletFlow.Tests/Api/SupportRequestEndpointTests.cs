@@ -1,4 +1,5 @@
 using System.Net;
+using WalletFlow.Application.Persistence;
 using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
@@ -172,7 +173,7 @@ public class SupportRequestEndpointTests
         foreach (var response in new[] { empty, invisible, missing })
         {
             Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
-            Assert.Equal(ErrorMessages.SupportMessageBreaksRules, await ReadFieldErrorAsync(response, nameof(SupportMessageRequest.Message)));
+            Assert.Equal(ErrorMessages.SupportMessageBreaksRules, await ReadFieldErrorAsync(response, "message"));
         }
 
         Assert.Empty(api.SupportRepository.SavedRequests);
@@ -194,6 +195,7 @@ public class SupportRequestEndpointTests
         var eleventh = await SendAsync(user, "Demande 11");
 
         await AssertProblemTitleAsync(eleventh, HttpStatusCode.TooManyRequests, "Trop de demandes. Réessaie plus tard.");
+        await TooManyRequestsAssertions.AssertTooManyRequestsAsync(eleventh, 86400);
         Assert.Equal(10, api.SupportRepository.SavedRequests.Count);
     }
 
@@ -238,8 +240,8 @@ public class SupportRequestEndpointTests
         var response = await PostAsync(client, VisitorEndpoint, new { contactEmail = "pas-une-adresse", message = "a\tb" }, null);
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
-        Assert.Equal(ErrorMessages.InvalidEmailAddress, await ReadFieldErrorAsync(response, nameof(VisitorSupportMessageRequest.ContactEmail)));
-        Assert.Equal(ErrorMessages.SupportMessageBreaksRules, await ReadFieldErrorAsync(response, nameof(VisitorSupportMessageRequest.Message)));
+        Assert.Equal(ErrorMessages.InvalidEmailAddress, await ReadFieldErrorAsync(response, "contactEmail"));
+        Assert.Equal(ErrorMessages.SupportMessageBreaksRules, await ReadFieldErrorAsync(response, "message"));
         Assert.Empty(api.SupportRepository.SavedRequests);
     }
 
@@ -298,5 +300,33 @@ public class SupportRequestEndpointTests
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var saved = Assert.Single(api.SupportRepository.SavedRequests);
         Assert.Equal(((Guid?)null, SupportRequestStatus.Sent), (saved.UserId, saved.Status));
+    }
+
+    // Une demande que d'autres requêtes empêchent à chaque essai répond 409 : rien n'est enregistré, l'utilisateur peut réessayer.
+    [Fact]
+    public async Task RequestThatNeverSavesAsksToRetry()
+    {
+        using var api = new ApiFactoryWithFakes();
+        var user = await LogInAsync(api);
+        api.SupportRepository.Conflicts = DatabaseChangesSavingService.MaximumTries;
+
+        var response = await SendAsync(user, "Bonjour");
+
+        await AssertProblemTitleAsync(response, HttpStatusCode.Conflict, ErrorMessages.AccountChangedMeanwhile);
+        Assert.Empty(api.SupportRepository.SavedRequests);
+    }
+
+    // Une demande de visiteur que la base n'enregistre pas répond 409 : le visiteur peut la renvoyer.
+    [Fact]
+    public async Task VisitorRequestNotSavedAsksToRetry()
+    {
+        using var api = new ApiFactoryWithFakes();
+        var client = CreateVisitorClient(api, "192.0.2.12");
+        api.SupportRepository.Conflicts = 1;
+
+        var response = await PostAsync(client, VisitorEndpoint, new { contactEmail = "visiteur@exemple.test", message = "Mon compte est bloqué." }, null);
+
+        await AssertProblemTitleAsync(response, HttpStatusCode.Conflict, ErrorMessages.SupportRequestNotSaved);
+        Assert.Empty(api.SupportRepository.SavedRequests);
     }
 }
