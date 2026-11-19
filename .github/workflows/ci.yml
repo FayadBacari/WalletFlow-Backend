@@ -248,7 +248,7 @@ jobs:
           del document["paths"]["/api/account/logout"]
           json.dump(document, open(path, "w", encoding="utf-8"))
           PY
-          cp .zap/rules.tsv .zap/hook.py "$RUNNER_TEMP/zap/"
+          cp .zap/rules.tsv .zap/hook.py .zap/adresse-variable.js "$RUNNER_TEMP/zap/"
 
       # L'image démarre en production, avec des secrets jetables créés pour ce passage : aucun n'est écrit dans le dépôt. Les
       # clés du jeton anti-CSRF vont dans un dossier en mémoire, chiffrées avec un certificat jetable, et la clé de la banque et
@@ -315,16 +315,17 @@ jobs:
 
       # OWASP ZAP attaque l'API en marche, en production, sur chaque route de la description : injections, en-têtes, réponses qui
       # en disent trop… Le crochet .zap/hook.py ajoute à chaque requête la session d'administrateur : ZAP atteint donc aussi les
-      # routes qui demandent une connexion, la double authentification et le rôle. Un seul fil et 100 ms entre deux requêtes :
-      # au-delà de 600 requêtes par minute, la limite commune de l'API refuserait une partie de l'attaque. Toute alerte arrête
-      # la vérification, sauf celles que .zap/rules.tsv écarte, chacune avec sa raison. Le nom « localhost » est accepté par
-      # l'API pour ce passage seulement, et ZAP est désigné par l'empreinte de son image, la même sur Docker Hub et sur GHCR.
+      # routes qui demandent une connexion, la double authentification et le rôle. Il donne aussi à chaque requête une adresse
+      # IP tirée au hasard (.zap/adresse-variable.js) : sinon, les limites de débit par adresse refusaient plus de la moitié de
+      # l'attaque. Le crochet écrit à la fin les réponses par code et l'avancement de l'attaque. Toute alerte arrête la
+      # vérification, sauf celles que .zap/rules.tsv écarte, chacune avec sa raison. Le nom « localhost » est accepté par l'API
+      # pour ce passage seulement, et ZAP est désigné par l'empreinte de son image, la même sur Docker Hub et sur GHCR.
       - name: Attaquer l'API en marche (OWASP ZAP 2.17.0)
         run: |
           docker run --rm --network host --volume "$RUNNER_TEMP/zap:/zap/wrk:rw" \
             ghcr.io/zaproxy/zaproxy@sha256:9624669db72f54d86c4b46a7064518bd9bf79d8c61a4c31befa9923489f328af \
             zap-api-scan.py -t openapi.json -f openapi -c rules.tsv -l WARN --hook=/zap/wrk/hook.py \
-            -z "-config scanner.maxScanDurationInMins=20 -config scanner.threadPerHost=1 -config scanner.delayInMs=100"
+            -z "-config scanner.maxScanDurationInMins=20"
 
       # Fermée pendant l'attaque, la session aurait laissé la fin de l'attaque sans connexion, et donc arrêtée aux refus.
       - name: Vérifier que la session a tenu pendant l'attaque
