@@ -8,7 +8,8 @@
 # - CodeQL cherche les failles du code C# (injections, données non vérifiées, cryptographie fragile…), et range ses alertes
 #   dans l'onglet Security de GitHub.
 # - l'image Docker est construite comme en production, vérifiée (fuseau de Paris, utilisateur sans droits), scannée par Trivy,
-#   démarrée avec des secrets jetables, sondée sur ses points de santé, puis attaquée en marche par OWASP ZAP.
+#   démarrée avec des secrets jetables, sondée sur ses points de santé, puis attaquée en marche par OWASP ZAP, avec la session
+#   d'un administrateur jetable.
 # - la sauvegarde chiffrée de la base fait l'aller-retour complet : sauvegarde, restauration dans une base neuve, comparaison
 #   avec la source et tests SQL, puis chaque refus de la restauration (SS §7).
 # - l'outil de migration du schéma prouve qu'une base migrée a exactement le schéma d'une base neuve créée par le MPD, et passe
@@ -157,7 +158,7 @@ jobs:
   docker:
     name: Image Docker
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 50
 
     services:
       postgres:
@@ -202,19 +203,25 @@ jobs:
             --exit-code 1 --no-progress
 
       # ZAP attaque l'API route par route : il en lit la liste dans la description OpenAPI, que l'API ne publie qu'en
-      # développement. La même image démarre donc un instant en développement pour la donner, puis s'arrête avant le démarrage
-      # en production : la garde de l'instance unique refuserait deux instances sur la même base.
-      - name: Lire la description OpenAPI de l'image
+      # développement. La même image démarre donc un instant en développement pour la donner, et pour créer le compte
+      # d'administrateur de l'attaque (voir .zap/session-admin.py) : ses e-mails vont dans un dossier, d'où le script lit le
+      # lien de confirmation, et le rôle se donne par fn_changer_role. Elle s'arrête avant le démarrage en production : la garde
+      # de l'instance unique refuserait deux instances sur la même base. Les deux reçoivent la même clé jetable de chiffrement
+      # des secrets de double authentification : la production doit relire celui que le développement a enregistré. ZAP ne
+      # reçoit pas la déconnexion : elle fermerait la session de l'attaque au premier passage.
+      - name: Lire la description OpenAPI et créer le compte de l'attaque
         run: |
+          mkdir -p "$RUNNER_TEMP/zap" "$RUNNER_TEMP/courriels" "$RUNNER_TEMP/secrets"
+          chmod 777 "$RUNNER_TEMP/zap" "$RUNNER_TEMP/courriels"
+          openssl rand -base64 32 > "$RUNNER_TEMP/secrets/totp.key"
           docker run --detach --name walletflow-dev --network host \
+            --volume "$RUNNER_TEMP/courriels:/tmp/courriels" \
             --env ASPNETCORE_ENVIRONMENT=Development \
             --env ASPNETCORE_HTTP_PORTS=8081 \
             --env ConnectionStrings__WalletFlowDatabase="Host=localhost;Port=5432;Database=walletflow;Username=walletflow_app" \
-            --env TwoFactorSecretEncryptionKey="$(openssl rand -base64 32)" \
+            --env TwoFactorSecretEncryptionKey="$(cat "$RUNNER_TEMP/secrets/totp.key")" \
             --env LocalEmailsFolder=/tmp/courriels \
             walletflow-backend:ci
-          mkdir -p "$RUNNER_TEMP/zap"
-          chmod 777 "$RUNNER_TEMP/zap"
           for attempt in $(seq 1 30); do
             if curl --silent --fail --output "$RUNNER_TEMP/zap/openapi.json" http://localhost:8081/openapi/v1.json; then
               break
@@ -225,6 +232,12 @@ jobs:
             docker logs walletflow-dev
             exit 1
           fi
+          python3 .zap/session-admin.py creer --api http://localhost:8081 --emails "$RUNNER_TEMP/courriels" \
+            --account "$RUNNER_TEMP/secrets/compte-zap.json" || { docker logs walletflow-dev; exit 1; }
+          email="$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["email"])' "$RUNNER_TEMP/secrets/compte-zap.json")"
+          psql -h localhost -U postgres -d walletflow -v ON_ERROR_STOP=1 -v email="$email" <<'SQL'
+          SELECT fn_changer_role(:'email', 'administrateur');
+          SQL
           docker stop walletflow-dev
           docker rm walletflow-dev
           python3 - "$RUNNER_TEMP/zap/openapi.json" <<'PY'
@@ -232,13 +245,15 @@ jobs:
           path = sys.argv[1]
           document = json.load(open(path, encoding="utf-8"))
           document["servers"] = [{"url": "http://localhost:8080"}]
+          del document["paths"]["/api/account/logout"]
           json.dump(document, open(path, "w", encoding="utf-8"))
           PY
-          cp .zap/rules.tsv "$RUNNER_TEMP/zap/rules.tsv"
+          cp .zap/rules.tsv .zap/hook.py "$RUNNER_TEMP/zap/"
 
       # L'image démarre en production, avec des secrets jetables créés pour ce passage : aucun n'est écrit dans le dépôt. Les
       # clés du jeton anti-CSRF vont dans un dossier en mémoire, chiffrées avec un certificat jetable, et la clé de la banque et
-      # celle du certificat sont lues en lecture seule.
+      # celle du certificat sont lues en lecture seule. Le nom du prestataire bancaire mène à la machine elle-même : pendant
+      # l'attaque, les routes des banques échouent tout de suite, sans jamais appeler le vrai prestataire.
       - name: Démarrer l'image en production
         run: |
           mkdir -p "$RUNNER_TEMP/banque" "$RUNNER_TEMP/certificat"
@@ -247,12 +262,13 @@ jobs:
             -keyout "$RUNNER_TEMP/certificat/cle.pem" -out "$RUNNER_TEMP/certificat/certificat.pem" 2> /dev/null
           chmod 644 "$RUNNER_TEMP/banque/cle.pem" "$RUNNER_TEMP/certificat/cle.pem"
           docker run --detach --name walletflow --network host \
+            --add-host api.enablebanking.com:127.0.0.1 \
             --mount type=tmpfs,destination=/cles,tmpfs-mode=1777 \
             --volume "$RUNNER_TEMP/banque:/banque:ro" \
             --volume "$RUNNER_TEMP/certificat:/certificat:ro" \
             --env ASPNETCORE_HTTP_PORTS=8080 \
             --env ConnectionStrings__WalletFlowDatabase="Host=localhost;Port=5432;Database=walletflow;Username=walletflow_app" \
-            --env TwoFactorSecretEncryptionKey="$(openssl rand -base64 32)" \
+            --env TwoFactorSecretEncryptionKey="$(cat "$RUNNER_TEMP/secrets/totp.key")" \
             --env PublicWebsiteAddress=https://walletflow.test \
             --env "AllowedHosts=walletflow.test;localhost" \
             --env EnableBanking__ApplicationId=application-de-la-ci \
@@ -290,16 +306,30 @@ jobs:
           fi
           test "$(curl --silent --output /dev/null --write-out '%{http_code}' --header 'Host: site-piege.example' http://localhost:8080/health/live)" = "400"
 
+      # Le compte de l'attaque se connecte avec sa double authentification : sa session, ses cookies et son jeton anti-CSRF vont
+      # dans un fichier que lit le crochet de ZAP. Le script vérifie d'abord que la session atteint l'administration.
+      - name: Connecter le compte d'administrateur de l'attaque
+        run: |
+          python3 .zap/session-admin.py connecter --api http://localhost:8080 \
+            --account "$RUNNER_TEMP/secrets/compte-zap.json" --session "$RUNNER_TEMP/zap/session.json"
+
       # OWASP ZAP attaque l'API en marche, en production, sur chaque route de la description : injections, en-têtes, réponses qui
-      # en disent trop… Sans session, il atteint surtout les routes publiques ; les autres répondent 401. Toute alerte arrête la
-      # vérification, sauf celles que .zap/rules.tsv écarte, chacune avec sa raison. Le nom « localhost » est accepté par l'API
-      # pour ce passage seulement, et ZAP est désigné par l'empreinte de son image, la même sur Docker Hub et sur GHCR.
+      # en disent trop… Le crochet .zap/hook.py ajoute à chaque requête la session d'administrateur : ZAP atteint donc aussi les
+      # routes qui demandent une connexion, la double authentification et le rôle. Un seul fil et 100 ms entre deux requêtes :
+      # au-delà de 600 requêtes par minute, la limite commune de l'API refuserait une partie de l'attaque. Toute alerte arrête
+      # la vérification, sauf celles que .zap/rules.tsv écarte, chacune avec sa raison. Le nom « localhost » est accepté par
+      # l'API pour ce passage seulement, et ZAP est désigné par l'empreinte de son image, la même sur Docker Hub et sur GHCR.
       - name: Attaquer l'API en marche (OWASP ZAP 2.17.0)
         run: |
           docker run --rm --network host --volume "$RUNNER_TEMP/zap:/zap/wrk:rw" \
             ghcr.io/zaproxy/zaproxy@sha256:9624669db72f54d86c4b46a7064518bd9bf79d8c61a4c31befa9923489f328af \
-            zap-api-scan.py -t openapi.json -f openapi -c rules.tsv -l WARN \
-            -z "-config scanner.maxScanDurationInMins=10"
+            zap-api-scan.py -t openapi.json -f openapi -c rules.tsv -l WARN --hook=/zap/wrk/hook.py \
+            -z "-config scanner.maxScanDurationInMins=20 -config scanner.threadPerHost=1 -config scanner.delayInMs=100"
+
+      # Fermée pendant l'attaque, la session aurait laissé la fin de l'attaque sans connexion, et donc arrêtée aux refus.
+      - name: Vérifier que la session a tenu pendant l'attaque
+        if: success() || failure()
+        run: python3 .zap/session-admin.py verifier --api http://localhost:8080 --session "$RUNNER_TEMP/zap/session.json"
 
       - name: Afficher le journal de l'API en cas d'échec
         if: failure()
