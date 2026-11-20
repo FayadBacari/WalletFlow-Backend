@@ -343,7 +343,7 @@ Les journaux techniques ne contiennent jamais de mot de passe, de jeton, de code
 - Les dépendances sont analysées automatiquement (Dependabot, Renovate ou l'audit du gestionnaire de paquets). Une faille critique est corrigée dans la semaine.
 - Un outil de détection de secrets (par exemple gitleaks) tourne avant chaque commit ou dans l'intégration continue.
 - Un outil d'analyse du code (par exemple CodeQL) cherche les failles à chaque envoi, dans l'intégration continue. Une alerte est corrigée, ou expliquée si c'est une fausse alerte, avant la mise en production.
-- L'image Docker est scannée par Trivy, et l'API en marche attaquée par OWASP ZAP, à chaque envoi dans l'intégration continue. Une alerte est corrigée, ou écartée avec sa raison si c'est une fausse alerte, avant la mise en production.
+- L'image Docker est scannée par Trivy, et l'API en marche attaquée par OWASP ZAP, à chaque envoi dans l'intégration continue, avec la session d'un administrateur jetable : toutes les routes sont attaquées, sauf la déconnexion. Une alerte est corrigée, ou écartée avec sa raison si c'est une fausse alerte, avant la mise en production.
 - Les données de production ne sont jamais copiées en développement : on utilise de fausses données.
 - En production, le mode débogage est désactivé. Les erreurs affichées à l'utilisateur restent génériques ; le détail ne va que dans les journaux.
 - Chaque modification de l'authentification ou du contrôle d'accès est relue en vérifiant les §2 à §4.
