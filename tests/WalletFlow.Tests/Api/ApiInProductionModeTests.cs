@@ -62,7 +62,7 @@ public class ApiInProductionModeTests
     {
         using var productionApi = new ApiFactoryInProduction();
         productionApi.UseKestrel(0);
-        var client = productionApi.CreateClient();
+        var client = LocalProxyClient.Create(productionApi);
 
         var answers = new[]
         {

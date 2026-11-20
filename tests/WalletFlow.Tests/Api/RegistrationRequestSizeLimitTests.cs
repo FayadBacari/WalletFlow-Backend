@@ -22,7 +22,7 @@ public class RegistrationRequestSizeLimitTests
     {
         using var api = new ApiFactoryInProduction();
         api.UseKestrel(AnyFreePort);
-        var client = api.CreateClient();
+        var client = LocalProxyClient.Create(api);
         var tooBigBody = "{\"email\":\"" + new string('a', 5000) + "@exemple.fr\",\"password\":\"" + ValidPassword + "\"}";
 
         var response = await client.PostAsync(
@@ -46,7 +46,7 @@ public class RegistrationRequestSizeLimitTests
     {
         using var api = new ApiFactoryInProduction();
         api.UseKestrel(AnyFreePort);
-        var client = api.CreateClient();
+        var client = LocalProxyClient.Create(api);
         var longestEmailAddress = new string('a', 64) + "@" + new string('b', 63) + "." + new string('c', 63) + "." + new string('d', 58) + ".fr";
         var longestValidPassword = "Aa1!" + string.Concat(Enumerable.Repeat("\\ud83d\\ude00", 124));
         var biggestValidBody = "{\"email\":\"" + longestEmailAddress + "\",\"password\":\"" + longestValidPassword + "\"}";
@@ -65,7 +65,7 @@ public class RegistrationRequestSizeLimitTests
     {
         using var api = new ApiFactoryInProduction();
         api.UseKestrel(AnyFreePort);
-        var client = api.CreateClient();
+        var client = LocalProxyClient.Create(api);
         var tooBigBody = "{\"token\":\"jeton\",\"password\":\"" + new string('a', 5000) + "\"}";
 
         var response = await client.PostAsync(
@@ -81,7 +81,7 @@ public class RegistrationRequestSizeLimitTests
     {
         using var api = new ApiFactoryInProduction();
         api.UseKestrel(AnyFreePort);
-        var client = api.CreateClient();
+        var client = LocalProxyClient.Create(api);
         var tooBigBody = "{\"email\":\"utilisateur@exemple.test\",\"password\":\"" + new string('a', 5000) + "\"}";
 
         var response = await client.PostAsync(
@@ -98,7 +98,7 @@ public class RegistrationRequestSizeLimitTests
     {
         using var api = new ApiFactoryInProduction();
         api.UseKestrel(AnyFreePort);
-        var client = api.CreateClient();
+        var client = LocalProxyClient.Create(api);
         var longestEmailAddress = new string('a', 64) + "@" + new string('b', 63) + "." + new string('c', 63) + "." + new string('d', 58) + ".fr";
         var longestValidPassword = "Aa1!" + string.Concat(Enumerable.Repeat("\\ud83d\\ude00", 124));
         var biggestValidBody = "{\"email\":\"" + longestEmailAddress + "\",\"password\":\"" + longestValidPassword + "\"}";
@@ -120,7 +120,7 @@ public class RegistrationRequestSizeLimitTests
     {
         using var api = new ApiFactoryInProduction();
         api.UseKestrel(AnyFreePort);
-        var client = api.CreateClient();
+        var client = LocalProxyClient.Create(api);
         var tooBigBody = "{\"token\":\"jeton\",\"" + longFieldName + "\":\"" + new string('a', 5000) + "\"}";
 
         var response = await client.PostAsync(
@@ -136,7 +136,7 @@ public class RegistrationRequestSizeLimitTests
     {
         using var api = new ApiFactoryInProduction();
         api.UseKestrel(AnyFreePort);
-        var client = api.CreateClient();
+        var client = LocalProxyClient.Create(api);
         var longestEmailAddress = new string('a', 64) + "@" + new string('b', 63) + "." + new string('c', 63) + "." + new string('d', 58) + ".fr";
 
         var response = await client.PostAsync(
@@ -152,7 +152,7 @@ public class RegistrationRequestSizeLimitTests
     {
         using var api = new ApiFactoryInProduction();
         api.UseKestrel(AnyFreePort);
-        var client = api.CreateClient();
+        var client = LocalProxyClient.Create(api);
         var longestValidPassword = "Aa1!" + string.Concat(Enumerable.Repeat("\\ud83d\\ude00", 124));
         var biggestValidBody = "{\"token\":\"" + new string('a', 43) + "\",\"newPassword\":\"" + longestValidPassword + "\"}";
 
@@ -170,7 +170,7 @@ public class RegistrationRequestSizeLimitTests
     {
         using var api = new ApiFactoryInProduction();
         api.UseKestrel(AnyFreePort);
-        var client = api.CreateClient();
+        var client = LocalProxyClient.Create(api);
         var longestValidPassword = "Aa1!" + string.Concat(Enumerable.Repeat("\\ud83d\\ude00", 124));
         var biggestValidBody = "{\"token\":\"" + new string('a', 43) + "\",\"password\":\"" + longestValidPassword + "\"}";
 
@@ -188,7 +188,7 @@ public class RegistrationRequestSizeLimitTests
     {
         using var api = new ApiFactoryInProduction();
         api.UseKestrel(AnyFreePort);
-        var client = api.CreateClient();
+        var client = LocalProxyClient.Create(api);
         var tooBigBody = "{\"code\":\"" + new string('1', 5000) + "\"}";
 
         var response = await client.PostAsync(

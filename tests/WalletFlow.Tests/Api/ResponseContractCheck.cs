@@ -111,12 +111,15 @@ public static class ResponseContractCheck
             }
 
             // Sans action, la requête n'a touché aucune route décrite : une adresse inconnue, ou une erreur déjà effacée. La redirection
-            // vers HTTPS du mode production n'est pas une réponse de l'API non plus : elle répond à toute requête en HTTP simple.
+            // vers HTTPS n'est pas une réponse de l'API non plus : elle répond à toute requête en HTTP simple, comme le refus de cette
+            // requête quand la redirection ne peut pas se faire (voir HttpsOnlyMiddleware).
             var action = context.GetEndpoint()?.Metadata.GetMetadata<ControllerActionDescriptor>();
-            var isHttpsRedirection = !context.Request.IsHttps
-                && context.Response.StatusCode is StatusCodes.Status307TemporaryRedirect or StatusCodes.Status308PermanentRedirect;
+            var isAnswerToPlainHttp = !context.Request.IsHttps
+                && context.Response.StatusCode is StatusCodes.Status307TemporaryRedirect
+                    or StatusCodes.Status308PermanentRedirect
+                    or StatusCodes.Status400BadRequest;
 
-            if (action != null && !isHttpsRedirection)
+            if (action != null && !isAnswerToPlainHttp)
             {
                 var key = ReadOperationKey(context.Request.Method, action.AttributeRouteInfo!.Template!);
                 var codes = await ReadDocumentedCodesAsync(context.RequestServices);

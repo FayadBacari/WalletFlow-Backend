@@ -18,6 +18,7 @@ public static class ApiErrorConfiguration
     public const string UnreadableRequestMessage = "La requête n'est pas lisible.";
     public const string InvalidValueMessage = "Cette valeur n'est pas valide.";
     public const string CsrfRefusalMessage = "Le jeton anti-CSRF manque ou n'est pas valide. Demande un nouveau jeton, puis réessaie.";
+    public const string HttpsRequiredMessage = "L'API ne répond qu'en HTTPS. Envoie la requête à son adresse en https://.";
 
     // Remplace les messages d'ASP.NET Core pour une valeur illisible, comme un nombre écrit en lettres dans l'adresse.
     // Ceux d'origine sont en anglais, et recopient la valeur envoyée par le visiteur : chacun devient le même message en français.
@@ -133,6 +134,16 @@ public static class ApiErrorConfiguration
     {
         var errors = new ModelStateDictionary();
         errors.AddModelError(nameof(CsrfTokenResponse.CsrfToken), CsrfRefusalMessage);
+
+        return CreateBadRequest(httpContext, errors);
+    }
+
+    // Construit le refus d'une requête arrivée en HTTP simple (voir HttpsOnlyMiddleware). Son unique erreur ne vise aucun champ :
+    // c'est l'adresse de la requête qui est refusée.
+    public static IActionResult CreateHttpsRefusalAnswer(HttpContext httpContext)
+    {
+        var errors = new ModelStateDictionary();
+        errors.AddModelError(GeneralErrorsKey, HttpsRequiredMessage);
 
         return CreateBadRequest(httpContext, errors);
     }

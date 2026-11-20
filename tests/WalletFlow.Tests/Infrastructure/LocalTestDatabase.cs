@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
+using Npgsql;
 using WalletFlow.Application.Emails;
 using WalletFlow.Application.Notifications;
 using WalletFlow.Application.Persistence;
@@ -10,14 +11,19 @@ using WalletFlow.Infrastructure.Persistence.Repositories;
 
 namespace WalletFlow.Tests.Infrastructure;
 
-// Donne aux tests un accès à la vraie base PostgreSQL locale, avec l'utilisateur de l'API.
+// Donne aux tests un accès à la vraie base PostgreSQL locale des tests, avec l'utilisateur de l'API.
 public static class LocalTestDatabase
 {
     // Une autre machine, ou une intégration continue, peut désigner sa propre base avec cette variable d'environnement.
     public const string DatabaseVariableName = "WALLETFLOW_TEST_DATABASE";
 
-    // Sans la variable : la base locale, dont le mode « trust » ne demande pas de mot de passe (voir SS §7 pour la production).
-    private const string ConnectionString = "Host=localhost;Port=5432;Database=walletflow;Username=walletflow_app";
+    // Le nom de toute base des tests finit par ce mot. Les tests écrivent et effacent des lignes : ils ne touchent donc jamais
+    // la base de développement « walletflow », ni une base de production, même si la variable les y envoie par erreur.
+    public const string NameEnding = "_tests";
+
+    // Sans la variable : la base locale des tests, dont le mode « trust » ne demande pas de mot de passe (voir SS §7 pour la
+    // production).
+    public const string DefaultConnectionString = "Host=localhost;Port=5432;Database=walletflow_tests;Username=walletflow_app";
 
     // Crée un accès à la base des tests. Un intercepteur peut agir entre deux commandes, comme une autre requête au même instant.
     public static WalletFlowDatabaseContext CreateDatabaseContext(params IInterceptor[] interceptors)
@@ -92,14 +98,33 @@ public static class LocalTestDatabase
         await databaseContext.Database.ExecuteSqlRawAsync("RELEASE SAVEPOINT autre_requete");
     }
 
-    // Prend la base donnée par la variable d'environnement si elle existe, sinon la base locale.
+    // Prend la base donnée par la variable d'environnement si elle existe, sinon la base locale des tests. Une base dont le nom
+    // ne finit pas par « _tests » est refusée avant toute connexion.
     public static string ReadConnectionString()
     {
         var connectionString = Environment.GetEnvironmentVariable(DatabaseVariableName);
 
         if (string.IsNullOrWhiteSpace(connectionString))
         {
-            return ConnectionString;
+            connectionString = DefaultConnectionString;
+        }
+
+        return RefuseIfNotTestDatabase(connectionString);
+    }
+
+    // Renvoie la chaîne de connexion si sa base est une base des tests, sinon refuse. Le nom est lu comme Npgsql le lit pour se
+    // connecter : un synonyme (« DB ») ou une clé écrite deux fois ne trompent pas ce contrôle. Le refus ne recopie que le nom de
+    // la base, jamais la chaîne, qui peut contenir un mot de passe.
+    public static string RefuseIfNotTestDatabase(string connectionString)
+    {
+        var databaseName = new NpgsqlConnectionStringBuilder(connectionString).Database;
+
+        if (databaseName == null || !databaseName.EndsWith(NameEnding, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "Les tests refusent la base « " + databaseName + " » : le nom d'une base des tests finit par « " + NameEnding
+                + " », car les tests y écrivent et y effacent des lignes. Crée la base locale des tests (voir le README), ou donne "
+                + "une base des tests dans " + DatabaseVariableName + ".");
         }
 
         return connectionString;

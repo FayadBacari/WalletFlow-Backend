@@ -37,6 +37,9 @@ if (string.IsNullOrWhiteSpace(connectionString))
     throw new InvalidOperationException(
         "La chaîne de connexion « WalletFlowDatabase » est absente. En développement, ajoute-la avec dotnet user-secrets.");
 }
+
+// Sans chiffrement GSS (voir DatabaseConnectionString), pour EF Core comme pour le verrou de l'instance unique.
+connectionString = DatabaseConnectionString.WithoutGssEncryption(connectionString);
 builder.Services.AddWalletFlowDatabase(connectionString);
 
 // Une seule instance de l'API par base (voir SingleInstanceGuard) : la garde prend son verrou au démarrage, avant toutes les
@@ -281,8 +284,9 @@ app.UseMiddleware<SecurityHeadersMiddleware>();
 // Donne le même format aux erreurs sans contenu, comme une adresse inconnue ou le dépassement d'une limite.
 app.UseStatusCodePages();
 
-// Redirige toute requête HTTP vers HTTPS (SS §7).
+// Redirige toute requête HTTP vers HTTPS (SS §7). Sans port HTTPS connu, une requête en HTTP vers une route de l'API est refusée.
 app.UseHttpsRedirection();
+app.UseMiddleware<HttpsOnlyMiddleware>();
 
 // Applique les limites de débit (SS §6), avant toute lecture de la base.
 app.UseRateLimiter();
