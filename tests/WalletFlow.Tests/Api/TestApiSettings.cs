@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using Microsoft.AspNetCore.DataProtection;
@@ -24,6 +25,11 @@ public static class TestApiSettings
     public const string WebsiteAddress = "https://walletflow.test";
     public const string AllowedHosts = "localhost;127.0.0.1;walletflow.test";
     public const string BankApplicationId = "application-enable-banking-des-tests";
+
+    // Le nombre de calculs Argon2id à la fois des API de test, le même sur toutes les machines : 8 calculs et 32 en attente,
+    // de quoi passer les courses de 20 requêtes simultanées. Réglé sur le nombre de cœurs, il refusait la moitié d'une course
+    // sur une machine à 2 cœurs.
+    public const int ArgonConcurrentComputations = 8;
 
     // Nom du réglage d'ASP.NET Core qui active ou non la relecture des fichiers appsettings quand ils changent.
     public const string HostReloadSettingName = "hostBuilder:reloadConfigOnChange";
@@ -65,6 +71,9 @@ public static class TestApiSettings
 
         // Les tests n'attendent pas la durée minimale de réponse : elle a ses propres tests.
         builder.UseSetting(MinimumAnswerDurationFilter.SettingName, "0");
+        builder.UseSetting(
+            ArgonConfiguration.ConcurrentComputationsSetting,
+            ArgonConcurrentComputations.ToString(CultureInfo.InvariantCulture));
         builder.UseSetting(DataProtectionConfiguration.KeysFolderSetting, KeysFolder);
         builder.UseSetting(DataProtectionConfiguration.CertificatePathSetting, ThrowawayKeysCertificate.Value.CertificatePath);
         builder.UseSetting(DataProtectionConfiguration.CertificateKeyPathSetting, ThrowawayKeysCertificate.Value.KeyPath);

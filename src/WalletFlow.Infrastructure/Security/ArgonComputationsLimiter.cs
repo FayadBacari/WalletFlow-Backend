@@ -28,10 +28,14 @@ public sealed class ArgonComputationsLimiter : IDisposable
             throw new ArgumentOutOfRangeException(nameof(maximumConcurrentComputations), "Il faut permettre au moins un calcul à la fois.");
         }
 
+        ConcurrentComputations = maximumConcurrentComputations;
         slots = new SemaphoreSlim(maximumConcurrentComputations, maximumConcurrentComputations);
         maximumWaiting = maximumConcurrentComputations * WaitingPerSlot;
         this.maximumWait = maximumWait ?? MaximumWait;
     }
+
+    // Le nombre de calculs permis en même temps.
+    public int ConcurrentComputations { get; }
 
     // Le nombre de calculs qui attendent leur tour en ce moment.
     public int WaitingCount => Volatile.Read(ref waitingCount);

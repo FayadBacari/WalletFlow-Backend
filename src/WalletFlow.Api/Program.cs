@@ -53,8 +53,9 @@ var minimumDuration = MinimumAnswerDurationFilter.ReadMinimumDuration(builder.Co
 builder.Services.AddSingleton(serviceProvider =>
     new MinimumAnswerDurationFilter(minimumDuration, serviceProvider.GetRequiredService<TimeProvider>()));
 
-// Hachage des mots de passe, création des jetons et limites par adresse e-mail (SS §2 et §6).
-builder.Services.AddWalletFlowSecurityTools();
+// Hachage des mots de passe, création des jetons et limites par adresse e-mail (SS §2 et §6). Le nombre de calculs Argon2id à
+// la fois se règle selon le serveur (voir ArgonConfiguration).
+builder.Services.AddWalletFlowSecurityTools(ArgonConfiguration.ReadConcurrentComputations(builder.Configuration));
 
 // Les clés qui chiffrent les secrets de double authentification viennent des secrets, jamais du code ni de Git (SS §2 et §7).
 // Sans clé actuelle, aucun compte avec double authentification ne pourrait utiliser son application : l'API refuse donc de

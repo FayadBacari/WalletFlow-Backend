@@ -51,7 +51,7 @@ public class TestApiSettingsTests
     {
         var services = new ServiceCollection();
         services.AddLogging();
-        services.AddWalletFlowSecurityTools();
+        services.AddWalletFlowSecurityTools(Environment.ProcessorCount);
         using var serviceProvider = services.BuildServiceProvider();
         using var fakeDatabaseApi = new ApiFactoryWithFakes();
         using var realDatabaseApi = new ApiFactoryWithRealDatabase();
