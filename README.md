@@ -1,6 +1,6 @@
 # WalletFlow — Backend
 
-WalletFlow is a personal finance application: it connects your bank accounts in read-only mode, sorts every transaction into a category, follows your monthly budgets, and lets you set money aside in virtual "bags" with savings suggestions based on your spending. This repository holds its REST API.
+WalletFlow est une application de finances personnelles : elle connecte les comptes bancaires en lecture seule, range chaque opération dans une catégorie, suit les budgets du mois, et permet de mettre de l'argent de côté dans des « sacs » virtuels, avec des suggestions d'épargne tirées des dépenses. Ce dépôt contient son API REST.
 
 ![.NET](https://img.shields.io/badge/.NET-10-512BD4?logo=dotnet&logoColor=white)
 ![C#](https://img.shields.io/badge/C%23-14-239120?logo=csharp&logoColor=white)
@@ -8,40 +8,40 @@ WalletFlow is a personal finance application: it connects your bank accounts in 
 ![EF Core](https://img.shields.io/badge/EF%20Core-10-512BD4?logo=dotnet&logoColor=white)
 
 
-## Stack and versions
+## Technologies et versions
 
-The versions below come from the project files. The exact package versions are locked in each project's `packages.lock.json`: if this table ever drifts, the lock files are the source of truth.
+Les versions ci-dessous viennent des fichiers du projet. Les versions exactes des paquets sont verrouillées dans le `packages.lock.json` de chaque projet : si ce tableau s'en écarte un jour, ce sont les fichiers de verrouillage qui font foi.
 
-| Area         | Technology                                                         | Version (reference)                      |
-|--------------|--------------------------------------------------------------------|------------------------------------------|
-| Runtime      | .NET                                                               | 10 (SDK 10.0.x)                          |
-| Language     | C#                                                                 | 14, nullable reference types enabled     |
-| Web          | ASP.NET Core (controllers)                                         | 10.0                                     |
-| Data access  | Entity Framework Core + Npgsql                                     | 10.0.3                                   |
-| Database     | PostgreSQL                                                         | 13 or later (developed and tested on 18) |
-| Passwords    | Argon2id through libsodium (`Sodium.Core`)                         | 1.4.1                                    |
-| Two-factor   | TOTP codes (`Otp.NET`)                                             | 1.4.1                                    |
-| Encryption   | AES-256-GCM (built into .NET)                                      | —                                        |
-| E-mails      | SMTP through MailKit (TLS 1.2+)                                    | 4.18.2                                   |
-| Bank data    | Enable Banking (PSD2 account information)                          | REST API with RS256 signatures           |
-| API contract | OpenAPI (`Microsoft.AspNetCore.OpenApi`)                           | 10.0.15, published in development only   |
-| Tests        | xUnit v3 (`xunit.v3.mtp-off`) + `Microsoft.AspNetCore.Mvc.Testing` | 4.0.3 / 10.0.15                          |
-| CI           | GitHub Actions, gitleaks, CodeQL, Dependabot                       | gitleaks 8.30.1, CodeQL action 4.39.3    |
-
-
-## Prerequisites
-
-- **.NET SDK 10.0** (`dotnet --version` should print 10.0.x).
-- **PostgreSQL 13 or later**, with an administrator account and the `psql` client.
-- **OpenSSL**, to generate the encryption key (preinstalled on macOS and most Linux distributions).
-- Optional: an **Enable Banking** sandbox application (its id and its RSA private key) to connect test banks. Without it, the bank routes answer 503 in development.
+| Domaine                 | Technologie                                                        | Version (référence)                        |
+|-------------------------|--------------------------------------------------------------------|--------------------------------------------|
+| Exécution               | .NET                                                               | 10 (SDK 10.0.x)                            |
+| Langage                 | C#                                                                 | 14, types de référence nullables activés   |
+| Web                     | ASP.NET Core (contrôleurs)                                         | 10.0                                       |
+| Accès aux données       | Entity Framework Core + Npgsql                                     | 10.0.3                                     |
+| Base de données         | PostgreSQL                                                         | 13 ou plus (développé et testé sur la 18)  |
+| Mots de passe           | Argon2id avec libsodium (`Sodium.Core`)                            | 1.4.1                                      |
+| Double authentification | Codes TOTP (`Otp.NET`)                                             | 1.4.1                                      |
+| Chiffrement             | AES-256-GCM (intégré à .NET)                                       | —                                          |
+| E-mails                 | SMTP avec MailKit (TLS 1.2 ou plus)                                | 4.18.2                                     |
+| Données bancaires       | Enable Banking (information sur les comptes, DSP2)                 | API REST avec signatures RS256             |
+| Contrat de l'API        | OpenAPI (`Microsoft.AspNetCore.OpenApi`)                           | 10.0.15, publié en développement seulement |
+| Tests                   | xUnit v3 (`xunit.v3.mtp-off`) + `Microsoft.AspNetCore.Mvc.Testing` | 4.0.3 / 10.0.15                            |
+| Intégration continue    | GitHub Actions, gitleaks, CodeQL, Dependabot                       | gitleaks 8.30.1, action CodeQL 4.39.3      |
 
 
-## Run locally
+## Prérequis
 
-All commands run from the repository root.
+- **SDK .NET 10.0** (`dotnet --version` doit afficher 10.0.x).
+- **PostgreSQL 13 ou plus**, avec un compte administrateur et le client `psql`.
+- **OpenSSL**, pour créer la clé de chiffrement (déjà installé sur macOS et la plupart des distributions Linux).
+- Facultatif : une application **Enable Banking** de bac à sable (son identifiant et sa clé privée RSA), pour connecter des banques de test. Sans elle, les routes des banques répondent 503 en développement.
 
-**1. Create the database** with a PostgreSQL administrator account. The migration tool creates the tables, the rules the database enforces, and the restricted role `walletflow_app` that the API uses (only if the server does not have it yet):
+
+## Lancer en local
+
+Toutes les commandes se lancent depuis la racine du dépôt.
+
+**1. Créer la base** avec un compte administrateur de PostgreSQL. L'outil de migration crée les tables, les règles que la base fait respecter, et le rôle restreint `walletflow_app` qu'utilise l'API (seulement si le serveur ne l'a pas encore) :
 
 ```bash
 createdb walletflow
@@ -49,94 +49,95 @@ PGDATABASE=walletflow database/migrate.sh
 psql -d walletflow -c '\password walletflow_app'
 ```
 
-A database created earlier with the MPD script is adopted once with `PGDATABASE=walletflow database/migrate.sh --baseline`.
+Une base créée plus tôt avec le script du MPD s'adopte une seule fois avec `PGDATABASE=walletflow database/migrate.sh --baseline`.
 
-**2. Store the secrets** in the API's user-secrets. They never go into the code or Git:
+**2. Ranger les secrets** dans les user-secrets de l'API. Ils ne vont jamais dans le code ni dans Git :
 
 ```bash
-dotnet user-secrets set "ConnectionStrings:WalletFlowDatabase" "Host=localhost;Port=5432;Database=walletflow;Username=walletflow_app;Password=<the password chosen above>" --project src/WalletFlow.Api
+dotnet user-secrets set "ConnectionStrings:WalletFlowDatabase" "Host=localhost;Port=5432;Database=walletflow;Username=walletflow_app;Password=<le mot de passe choisi plus haut>" --project src/WalletFlow.Api
 dotnet user-secrets set "TwoFactorSecretEncryptionKey" "$(openssl rand -base64 32)" --project src/WalletFlow.Api
 ```
 
-Keep a copy of `TwoFactorSecretEncryptionKey` somewhere safe: it encrypts the two-factor secrets, and losing it breaks the authenticator codes of every account that uses them.
+Garder une copie de `TwoFactorSecretEncryptionKey` en lieu sûr : elle chiffre les secrets de la double authentification, et la perdre casse les codes d'application d'authentification de tous les comptes qui s'en servent.
 
-To change this key, set the new one as `TwoFactorSecretEncryptionKey` with a new `TwoFactorSecretEncryptionKeyId` (the first key is 1), and keep the old one as `TwoFactorSecretPreviousKeys:<its id>`. A daily task re-encrypts every secret with the new key; once the technical log reports no failure, remove the old key.
+Pour changer cette clé, donner la nouvelle comme `TwoFactorSecretEncryptionKey`, avec un nouveau `TwoFactorSecretEncryptionKeyId` (la première clé porte le 1), et garder l'ancienne comme `TwoFactorSecretPreviousKeys:<son identifiant>`. Une tâche quotidienne rechiffre chaque secret avec la nouvelle clé ; quand le journal technique ne signale plus aucun échec, retirer l'ancienne.
 
-To connect test banks, add the Enable Banking settings too:
+Pour connecter des banques de test, ajouter aussi les réglages d'Enable Banking :
 
 ```bash
-dotnet user-secrets set "EnableBanking:ApplicationId" "<application id>" --project src/WalletFlow.Api
-dotnet user-secrets set "EnableBanking:PrivateKeyPath" "<absolute path to the private key .pem file>" --project src/WalletFlow.Api
+dotnet user-secrets set "EnableBanking:ApplicationId" "<identifiant de l'application>" --project src/WalletFlow.Api
+dotnet user-secrets set "EnableBanking:PrivateKeyPath" "<chemin absolu du fichier .pem de la clé privée>" --project src/WalletFlow.Api
 ```
 
-The other development settings (`PublicWebsiteAddress`, `LocalEmailsFolder`, `AllowedHosts`) are already in `src/WalletFlow.Api/appsettings.Development.json`.
+Les autres réglages de développement (`PublicWebsiteAddress`, `LocalEmailsFolder`, `AllowedHosts`) sont déjà dans `src/WalletFlow.Api/appsettings.Development.json`.
 
-**3. Start the API** over HTTPS:
+**3. Démarrer l'API** en HTTPS :
 
 ```bash
 dotnet dev-certs https --trust
 dotnet run --project src/WalletFlow.Api --launch-profile https
 ```
 
-- The API listens on `https://localhost:7078`, and its OpenAPI description is at `https://localhost:7078/openapi/v1.json`.
-- In development, e-mails are not sent: each one is written as a file in `.local-emails/` (ignored by Git), links included, even when SMTP settings are present. Outside development, no e-mail is ever written to disk: they leave through the e-mail provider's SMTP server, and the API refuses to start without `Smtp:Host`, `Smtp:Username`, `Smtp:Password` and `Smtp:SenderAddress` (optional: `Smtp:Port`, 587 by default, and `Smtp:SenderName`, "WalletFlow" by default). In production these come from environment variables, such as `Smtp__Password`. The connection is always encrypted (STARTTLS, or TLS from the start on port 465) and the server certificate must be valid.
-- New passwords are checked against Pwned Passwords: only the first 5 characters of their SHA-1 hash leave the server. Without outbound HTTPS to `api.pwnedpasswords.com`, they are accepted and the technical log says so.
-- Health endpoints, open without a session: `/health/live` (the API runs), `/health/ready` (the database answers too, within 5 seconds) and `/health/tasks` (the background tasks are well); they answer `Healthy`, or `Unhealthy` with 503. Outside development they only answer the site names of `AllowedHosts`, so the host's probe must send one of them.
-- Outside development, `DataProtection:KeysFolder` must give an absolute folder that survives redeployments, such as a mounted volume: it keeps the keys that sign the anti-CSRF tokens. These keys are encrypted with an X.509 certificate: `DataProtection:CertificatePath` and `DataProtection:CertificateKeyPath` give the absolute paths of its PEM certificate and RSA private key, for example made with `openssl req -x509 -newkey rsa:4096 -nodes -days 3650 -subj "/CN=WalletFlow keys" -keyout keys-key.pem -out keys-certificate.pem`. Keep the private key apart from the keys folder, readable only by the API. Without these settings, the API refuses to start. A new certificate makes the old keys unreadable: the API creates a new key, and each anti-CSRF token in use is refused once, until the website asks for a new one.
-- Behind a reverse proxy, declare it with `ReverseProxy:KnownProxies:0` (an address) or `ReverseProxy:KnownNetworks:0` (a network such as `10.0.0.0/24`). Otherwise the rate limits count the proxy's address for everyone.
-- The API refuses to start when a required setting is missing or unreadable, and says which one.
+- L'API écoute sur `https://localhost:7078`, et sa description OpenAPI est à `https://localhost:7078/openapi/v1.json`.
+- En développement, les e-mails ne partent pas : chacun est écrit dans un fichier de `.local-emails/` (ignoré par Git), liens compris, même si des réglages SMTP sont présents. Hors du développement, aucun e-mail n'est jamais écrit sur le disque : ils partent par le serveur SMTP du fournisseur d'e-mails, et l'API refuse de démarrer sans `Smtp:Host`, `Smtp:Username`, `Smtp:Password` et `Smtp:SenderAddress` (facultatifs : `Smtp:Port`, 587 par défaut, et `Smtp:SenderName`, « WalletFlow » par défaut). En production, ils viennent de variables d'environnement, comme `Smtp__Password`. La connexion est toujours chiffrée (STARTTLS, ou TLS dès le début sur le port 465), et le certificat du serveur doit être valide.
+- Les nouveaux mots de passe sont comparés à Pwned Passwords : seuls les 5 premiers caractères de leur empreinte SHA-1 quittent le serveur. Sans accès HTTPS sortant vers `api.pwnedpasswords.com`, ils sont acceptés, et le journal technique le dit.
+- Le nombre de calculs Argon2id faits en même temps se règle avec `Argon2:ConcurrentComputations`, de 1 à 64 ; sans réglage, c'est le nombre de cœurs. Chaque calcul prend 32 Mio de mémoire, et au plus 4 attendent leur tour par calcul permis : au-delà, ou après 5 secondes d'attente, la requête reçoit « serveur très demandé » (503).
+- Points de santé, ouverts sans session : `/health/live` (l'API tourne), `/health/ready` (la base répond aussi, en moins de 5 secondes) et `/health/tasks` (les tâches de fond vont bien) ; ils répondent `Healthy`, ou `Unhealthy` avec 503. Hors du développement, ils ne répondent qu'aux noms du site d'`AllowedHosts` : la sonde de l'hébergeur doit donc envoyer l'un d'eux.
+- Hors du développement, `DataProtection:KeysFolder` doit donner un dossier absolu qui survit aux redéploiements, comme un volume monté : il garde les clés qui signent les jetons anti-CSRF. Ces clés sont chiffrées avec un certificat X.509 : `DataProtection:CertificatePath` et `DataProtection:CertificateKeyPath` donnent les chemins absolus de son certificat PEM et de sa clé privée RSA, par exemple créés avec `openssl req -x509 -newkey rsa:4096 -nodes -days 3650 -subj "/CN=Jetons anti-CSRF WalletFlow" -keyout cle-des-jetons.pem -out certificat-des-jetons.pem`. Garder la clé privée à part du dossier des clés, lisible par l'API seulement. Sans ces réglages, l'API refuse de démarrer. Un nouveau certificat rend les anciennes clés illisibles : l'API crée une nouvelle clé, et chaque jeton anti-CSRF en cours est refusé une fois, jusqu'à ce que le site en demande un nouveau.
+- Derrière un proxy inverse, le déclarer avec `ReverseProxy:KnownProxies:0` (une adresse) ou `ReverseProxy:KnownNetworks:0` (un réseau comme `10.0.0.0/24`). Sinon, les limites de débit comptent l'adresse du proxy pour tout le monde.
+- L'API refuse de démarrer quand un réglage obligatoire manque ou ne peut pas être lu, et elle dit lequel.
 
-**4. Give the administrator role** (optional). Only the PostgreSQL administrator can, once the account is confirmed. The administration routes also require the account to have two-factor authentication on:
+**4. Donner le rôle d'administrateur** (facultatif). Seul l'administrateur de PostgreSQL le peut, une fois le compte confirmé. Les routes d'administration demandent aussi que le compte ait activé la double authentification :
 
 ```bash
-psql -d walletflow -c "SELECT fn_changer_role('<account e-mail>', 'administrateur');"
+psql -d walletflow -c "SELECT fn_changer_role('<adresse e-mail du compte>', 'administrateur');"
 ```
 
 
-## Backups
+## Sauvegardes
 
-The scripts of `database/backup` make one encrypted backup of the database, and restore it into a new database. A backup is encrypted while it is read, with a public certificate: the server can encrypt, but never decrypt. Keep the private key off the server, protected by a passphrase.
+Les scripts de `database/backup` font une sauvegarde chiffrée de la base, et la restaurent dans une base neuve. Une sauvegarde est chiffrée pendant sa lecture, avec un certificat public : le serveur peut chiffrer, mais jamais déchiffrer. Garder la clé privée hors du serveur, protégée par une phrase secrète.
 
-**1. Create the backup keys once**, on your own machine (OpenSSL asks for the passphrase of the private key):
-
-```bash
-openssl req -x509 -newkey rsa:4096 -days 3650 -subj "/CN=WalletFlow backups" -keyout backup-private-key.pem -out backup-certificate.pem
-```
-
-Only `backup-certificate.pem` goes on the server. Keep `backup-private-key.pem` and its passphrase somewhere safe, apart from the backups, with `TwoFactorSecretEncryptionKey`: a restored database without that key cannot use two-factor authentication anymore.
-
-**2. Back up**, once a day (for example with cron or a systemd timer). The script writes `walletflow-YYYYMMDD-HHMMSS.dump.cms` and erases the backups older than `BACKUP_KEEP_DAYS` (30 by default):
+**1. Créer les clés des sauvegardes une seule fois**, sur sa propre machine (OpenSSL demande la phrase secrète de la clé privée) :
 
 ```bash
-PGHOST=<server> PGDATABASE=walletflow PGUSER=<role that can read every table> BACKUP_CERTIFICATE=backup-certificate.pem BACKUP_FOLDER=<folder> database/backup/backup-database.sh
+openssl req -x509 -newkey rsa:4096 -days 3650 -subj "/CN=Sauvegardes WalletFlow" -keyout cle-privee-des-sauvegardes.pem -out certificat-des-sauvegardes.pem
 ```
 
-**3. Restore** into a new database, never over the one in use. The `walletflow_app` role must already exist on the server:
+Seul `certificat-des-sauvegardes.pem` va sur le serveur. Garder `cle-privee-des-sauvegardes.pem` et sa phrase secrète en lieu sûr, à part des sauvegardes, avec `TwoFactorSecretEncryptionKey` : une base restaurée sans cette clé ne peut plus servir la double authentification.
+
+**2. Sauvegarder**, une fois par jour (par exemple avec cron ou un minuteur systemd). Le script écrit `walletflow-YYYYMMDD-HHMMSS.dump.cms` et efface les sauvegardes de plus de `BACKUP_KEEP_DAYS` jours (30 par défaut) :
 
 ```bash
-PGHOST=<server> PGUSER=<administrator> TARGET_DATABASE=walletflow_restored BACKUP_FILE=<backup file> BACKUP_CERTIFICATE=backup-certificate.pem BACKUP_PRIVATE_KEY=backup-private-key.pem database/backup/restore-database.sh
+PGHOST=<serveur> PGDATABASE=walletflow PGUSER=<rôle qui peut lire toutes les tables> BACKUP_CERTIFICATE=certificat-des-sauvegardes.pem BACKUP_FOLDER=<dossier> database/backup/backup-database.sh
 ```
 
-Check the restored database, then point the API's connection string at it. The hourly task of the API erases again any account whose deletion is more than 30 days old.
+**3. Restaurer** dans une base neuve, jamais par-dessus celle qui sert. Le rôle `walletflow_app` doit déjà exister sur le serveur :
 
-`database/backup/test-backup-round-trip.sh` proves the whole round trip on a test server (`PGHOST`, `PGUSER` for an administrator), and the CI runs it on every push.
+```bash
+PGHOST=<serveur> PGUSER=<administrateur> TARGET_DATABASE=walletflow_restored BACKUP_FILE=<fichier de sauvegarde> BACKUP_CERTIFICATE=certificat-des-sauvegardes.pem BACKUP_PRIVATE_KEY=cle-privee-des-sauvegardes.pem database/backup/restore-database.sh
+```
+
+Vérifier la base restaurée, puis y diriger la chaîne de connexion de l'API. La tâche horaire de l'API efface de nouveau tout compte dont la suppression date de plus de 30 jours.
+
+`database/backup/test-backup-round-trip.sh` prouve tout l'aller-retour sur un serveur de test (`PGHOST`, et `PGUSER` pour un administrateur), et la CI le lance à chaque envoi.
 
 
-## Tests and checks
+## Tests et vérifications
 
-The SQL tests check the constraints, triggers, cascades and rights of the database script. They run in one transaction, rolled back at the end:
+Les tests SQL vérifient les contraintes, les déclencheurs, les cascades et les droits du script de la base. Ils tournent dans une seule transaction, annulée à la fin :
 
 ```bash
 psql -h localhost -U walletflow_app -d walletflow -v ON_ERROR_STOP=1 -f database/tests/test_001_create_walletflow_schema.sql
 ```
 
-The .NET tests include end-to-end journeys and concurrency races on a real PostgreSQL database. They connect as `walletflow_app` to the `walletflow` database on `localhost`, without a password (local `trust` authentication). To use another database or a password, give a full connection string:
+Les tests .NET comprennent des parcours de bout en bout et des courses de concurrence sur une vraie base PostgreSQL. Ils se connectent en `walletflow_app` à la base `walletflow` sur `localhost`, sans mot de passe (authentification `trust` en local). Pour une autre base ou avec un mot de passe, donner une chaîne de connexion complète :
 
 ```bash
-export WALLETFLOW_TEST_DATABASE="Host=localhost;Port=5432;Database=walletflow;Username=walletflow_app;Password=<password>"
+export WALLETFLOW_TEST_DATABASE="Host=localhost;Port=5432;Database=walletflow;Username=walletflow_app;Password=<mot de passe>"
 ```
 
-Then run the same checks as the CI:
+Puis lancer les mêmes vérifications que la CI :
 
 ```bash
 dotnet restore --locked-mode
@@ -145,58 +146,58 @@ dotnet format --verify-no-changes --no-restore
 dotnet test --no-build
 ```
 
-The CI also builds the Docker image (`src/WalletFlow.Api/Dockerfile`) as in production, checks it holds the Paris time zone and runs as a non-root user, scans it with Trivy (known vulnerabilities and forgotten secrets), starts it in production mode with throwaway secrets, probes `/health/live`, `/health/ready` and `/health/tasks`, then attacks the running API with OWASP ZAP, route by route from its OpenAPI description. The container only serves HTTP on port 8080: HTTPS belongs to the reverse proxy in front of it.
+La CI construit aussi l'image Docker (`src/WalletFlow.Api/Dockerfile`) comme en production, vérifie qu'elle contient le fuseau horaire de Paris et qu'elle tourne avec un utilisateur sans droits, la scanne avec Trivy (failles connues et secrets oubliés), la démarre en mode production avec des secrets jetables, sonde `/health/live`, `/health/ready` et `/health/tasks`, puis attaque l'API en marche avec OWASP ZAP, route par route, d'après sa description OpenAPI. ZAP se connecte comme un administrateur jetable, avec sa double authentification (`.zap/session-admin.py`), et ses requêtes viennent d'adresses IP tirées au hasard : il atteint ainsi toutes les routes sauf la déconnexion, sans être arrêté par les limites de débit par adresse. Après l'attaque, la CI vérifie que la session a tenu et qu'aucune exception imprévue n'est arrivée. Le conteneur ne sert que du HTTP, sur le port 8080 : le HTTPS revient au proxy inverse placé devant lui.
 
-Each test cleans up the rows it writes. Their security journal events stay, anonymized, because the application role can only add events to the journal.
+Chaque test nettoie les lignes qu'il écrit. Ses événements du journal de sécurité restent, rendus anonymes, car le rôle de l'application ne peut qu'ajouter des événements au journal.
 
 
-## Repository structure and architecture (high-level)
+## Structure du dépôt et architecture (vue d'ensemble)
 
 ```
 WalletFlow-Backend/
 ├── src/
-│   ├── WalletFlow.Domain/           entities and business rules, no dependency
-│   ├── WalletFlow.Application/      use cases, and the interfaces they need
-│   ├── WalletFlow.Infrastructure/   PostgreSQL, security tools, bank provider, e-mails
-│   └── WalletFlow.Api/              HTTP routes, configuration, background tasks
-├── tests/WalletFlow.Tests/          unit, database, end-to-end and concurrency tests
-├── database/                        schema script and its SQL tests
-├── Docs/                            business rules, data dictionary, MCD, MLD, MPD, security strategy, frontend guide
-└── .github/                         CI workflow and Dependabot
+│   ├── WalletFlow.Domain/           entités et règles métier, sans aucune dépendance
+│   ├── WalletFlow.Application/      cas d'utilisation, et les interfaces dont ils ont besoin
+│   ├── WalletFlow.Infrastructure/   PostgreSQL, outils de sécurité, prestataire bancaire, e-mails
+│   └── WalletFlow.Api/              routes HTTP, configuration, tâches de fond
+├── tests/WalletFlow.Tests/          tests unitaires, de base, de bout en bout et de concurrence
+├── database/                        script du schéma et ses tests SQL
+├── Docs/                            règles de gestion, dictionnaire des données, MCD, MLD, MPD, stratégie de sécurité, guide du frontend
+└── .github/                         intégration continue et Dependabot
 ```
 
-The backend follows Clean Architecture: dependencies only point inwards. The Domain depends on nothing, the Application only on the Domain, the Infrastructure implements the Application's interfaces, and the Api wires everything together. Neither the Domain nor the Application knows about EF Core or PostgreSQL.
+Le backend suit la Clean Architecture : les dépendances ne pointent que vers l'intérieur. Le Domain ne dépend de rien, l'Application seulement du Domain, l'Infrastructure met en œuvre les interfaces de l'Application, et l'Api relie le tout. Ni le Domain ni l'Application ne connaissent EF Core ou PostgreSQL.
 
-Every request follows the same path: a controller reads the session and the request, calls one Application service, and turns its closed result into an HTTP answer. The service reads through repositories, applies the Domain rules, prepares its changes, and saves them in a single database transaction. When another request changed the same rows in the meantime (PostgreSQL `xmin` row versions), the service reads everything again and replays its checks, so simultaneous requests can never bypass a rule.
+Chaque requête suit le même chemin : un contrôleur lit la session et la requête, appelle un seul service de l'Application, et transforme son résultat fermé en réponse HTTP. Le service lit par les dépôts, applique les règles du Domain, prépare ses changements, et les enregistre en une seule transaction de la base. Quand une autre requête a changé les mêmes lignes entre-temps (versions de ligne `xmin` de PostgreSQL), le service relit tout et rejoue ses contrôles : des requêtes simultanées ne peuvent donc jamais contourner une règle.
 
-The `Docs/` folder is the reference: the business rules (`gestion-rules.md`) come first, and the data dictionary, the MCD, the MLD, the MPD and the security strategy follow from them. The database script is an exact copy of the MPD's script.
+Le dossier `Docs/` fait référence : les règles de gestion (`gestion-rules.md`) viennent d'abord, et le dictionnaire des données, le MCD, le MLD, le MPD et la stratégie de sécurité en découlent. Le script de la base est une copie exacte de celui du MPD.
 
-The frontend guide (`Docs/frontend-guide.md`) explains how the website calls the API: same origin and HTTPS, the session cookies, the anti-CSRF token, the seven pages that e-mails and banks open, the formats, the errors and the rate limits. The detail of every route is in the OpenAPI description, published in development at `/openapi/v1.json`.
-
-
-## Backend in detail
-
-- **Domain** (`src/WalletFlow.Domain/`): users and security, bank accounts and categories, bags and savings suggestions, notifications and support. Entities keep their state private and change it only through rule methods. Amounts are integer cents, and every user-facing day starts at midnight in Europe/Paris.
-- **Application** (`src/WalletFlow.Application/`): one service per use case (sign-up, login, two-factor, transactions, charts, bags, suggestions, alerts, support, administration, export, deletion), an explicit unit of work, a retry helper for concurrency conflicts, and the security journal.
-- **Infrastructure** (`src/WalletFlow.Infrastructure/`): EF Core repositories, Argon2id hashing, AES-256-GCM encryption of the two-factor secrets, random tokens stored as SHA-256 hashes, the Enable Banking client, and the French texts of the e-mails.
-- **Api** (`src/WalletFlow.Api/`): controllers, cookie sessions, anti-CSRF tokens, rate limits (per route, per session, and 600 requests per minute per IP address or IPv6 /64 block), security headers, French error messages in the "problem details" format, and the background tasks: e-mail queue (kept in the database), bank updates, suggestions, alerts, account erasure, re-encryption of the two-factor secrets and clean-ups.
-- **Database** (`database/`): constraints and triggers that mirror the business rules, a restricted role for the API, and a security journal the API can only append to.
-
-Main backend rules:
-
-- Business rules live in the Domain. Controllers stay thin: they never decide anything.
-- The user id always comes from the session, never from the request.
-- Every route requires a session and an anti-CSRF token unless it explicitly says otherwise.
-- Every write route declares a request size limit, and every route that receives an id is tested against another user's id: it must answer exactly like an unknown id.
-- A schema change starts in the MPD (`Docs/merise/mpd.md`), then goes into the script and its SQL tests, and into a new numbered migration in `database/migrations` that brings existing databases up to date; `database/tests/test-migrations.sh` proves a migrated database matches the MPD.
-- No secret in the code or in Git: user-secrets in development, environment variables in production.
+Le guide du frontend (`Docs/frontend-guide.md`) explique comment le site appelle l'API : même origine et HTTPS, les cookies de session, le jeton anti-CSRF, les sept pages qu'ouvrent les e-mails et les banques, les formats, les erreurs et les limites de débit. Le détail de chaque route est dans la description OpenAPI, publiée en développement à `/openapi/v1.json`.
 
 
-## Project status
+## Le backend en détail
 
-The API covers every business rule of the project: accounts and two-factor authentication, bank connections, transactions and categories, charts, bags, savings suggestions, alerts, support and administration, data export and account deletion. The website, the mobile app and the production setup come next. The API keeps part of its security state in memory, such as the logins waiting for their code and the rate limit counters, so it runs as a single instance: at startup it takes a PostgreSQL advisory lock, and a second instance on the same database refuses to start. In development it writes e-mails to a local folder; elsewhere it sends them through the SMTP server of its settings.
+- **Domain** (`src/WalletFlow.Domain/`) : utilisateurs et sécurité, comptes bancaires et catégories, sacs et suggestions d'épargne, notifications et support. Les entités gardent leur état privé, et ne le changent que par des méthodes de règle. Les montants sont des centimes entiers, et chaque jour vu par l'utilisateur commence à minuit, heure de Paris.
+- **Application** (`src/WalletFlow.Application/`) : un service par cas d'utilisation (inscription, connexion, double authentification, opérations, graphiques, sacs, suggestions, alertes, support, administration, export, suppression), une unité de travail explicite, une aide qui rejoue en cas de conflit de concurrence, et le journal de sécurité.
+- **Infrastructure** (`src/WalletFlow.Infrastructure/`) : dépôts EF Core, hachage Argon2id, chiffrement AES-256-GCM des secrets de la double authentification, jetons aléatoires gardés sous forme d'empreintes SHA-256, client d'Enable Banking, et textes des e-mails en français.
+- **Api** (`src/WalletFlow.Api/`) : contrôleurs, sessions par cookie, jetons anti-CSRF, limites de débit (par route, par session, et 600 requêtes par minute par adresse IP ou bloc IPv6 /64), en-têtes de sécurité, messages d'erreur en français au format « problem details », et les tâches de fond : file des e-mails (gardée en base), mises à jour des banques, suggestions, alertes, effacement des comptes, rechiffrement des secrets de la double authentification et nettoyages.
+- **Base de données** (`database/`) : contraintes et déclencheurs qui reprennent les règles métier, un rôle restreint pour l'API, et un journal de sécurité où l'API ne peut qu'ajouter.
+
+Règles principales du backend :
+
+- Les règles métier vivent dans le Domain. Les contrôleurs restent minces : ils ne décident jamais rien.
+- L'identifiant de l'utilisateur vient toujours de la session, jamais de la requête.
+- Chaque route demande une session et un jeton anti-CSRF, sauf si elle dit explicitement le contraire.
+- Chaque route d'écriture déclare une limite de taille de requête, et chaque route qui reçoit un identifiant est testée avec l'identifiant d'un autre utilisateur : elle doit répondre exactement comme pour un identifiant inconnu.
+- Un changement du schéma commence dans le MPD (`Docs/merise/mpd.md`), passe ensuite dans le script et ses tests SQL, puis dans une nouvelle migration numérotée de `database/migrations`, qui met à jour les bases existantes ; `database/tests/test-migrations.sh` prouve qu'une base migrée correspond au MPD.
+- Aucun secret dans le code ni dans Git : user-secrets en développement, variables d'environnement en production.
 
 
-## License
+## État du projet
 
-Proprietary software: all rights reserved. See [LICENSE](LICENSE).
+L'API couvre toutes les règles de gestion du projet : comptes et double authentification, connexions bancaires, opérations et catégories, graphiques, sacs, suggestions d'épargne, alertes, support et administration, export des données et suppression du compte. Le site web, l'application mobile et la mise en production viennent ensuite. L'API garde une partie de son état de sécurité en mémoire, comme les connexions qui attendent leur code et les compteurs des limites de débit : elle tourne donc en une seule instance. Au démarrage, elle prend un verrou consultatif de PostgreSQL, et une deuxième instance sur la même base refuse de démarrer. En développement, elle écrit les e-mails dans un dossier local ; ailleurs, elle les envoie par le serveur SMTP de ses réglages.
+
+
+## Licence
+
+Logiciel propriétaire : tous droits réservés. Voir [LICENSE](LICENSE).

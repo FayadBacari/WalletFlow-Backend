@@ -3,6 +3,7 @@ using System.Text;
 using Microsoft.AspNetCore.Http.Metadata;
 using Microsoft.AspNetCore.Mvc.Infrastructure;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using WalletFlow.Api.Configuration;
 using static WalletFlow.Tests.Api.RegistrationRequestTestValues;
 
@@ -14,7 +15,8 @@ public class RegistrationRequestSizeLimitTests
     // Le système choisit un port libre : un port fixe ferait échouer ces tests dès qu'un autre programme l'utilise.
     private const int AnyFreePort = 0;
 
-    // Une requête trop grosse reçoit 413, sans détail technique, et n'arrive jamais à la base.
+    // Une requête trop grosse reçoit 413, sans détail technique, et n'arrive jamais à la base. Elle n'est pas écrite au journal
+    // comme une panne : n'importe qui pourrait sinon le remplir d'erreurs.
     [Fact]
     public async Task RequestBiggerThanTheLimitIsRefusedWithPayloadTooLarge()
     {
@@ -33,6 +35,9 @@ public class RegistrationRequestSizeLimitTests
         Assert.DoesNotContain("4096", responseText);
         Assert.Empty(api.AccountRepository.SavedUsers);
         SecurityHeadersAssertions.AssertExactSecurityHeaders(response);
+        Assert.DoesNotContain(api.LoggerProvider.Messages, message =>
+            message.StartsWith(nameof(LogLevel.Error), StringComparison.Ordinal)
+            || message.StartsWith(nameof(LogLevel.Critical), StringComparison.Ordinal));
     }
 
     // La plus longue adresse et le plus long mot de passe permis passent, même si chaque emoji est écrit en \uXXXX.

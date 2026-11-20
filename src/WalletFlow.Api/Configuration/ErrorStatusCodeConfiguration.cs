@@ -1,3 +1,5 @@
+using Microsoft.AspNetCore.Diagnostics;
+
 namespace WalletFlow.Api.Configuration;
 
 // Choisit le code de réponse d'une erreur attrapée en production.
@@ -13,5 +15,13 @@ public static class ErrorStatusCodeConfiguration
         }
 
         return StatusCodes.Status500InternalServerError;
+    }
+
+    // Une requête refusée par le serveur lui-même n'est pas écrite au journal comme une panne : sinon, n'importe qui pourrait
+    // remplir le journal d'erreurs, et faire sonner la surveillance, à coups de corps trop gros. Toute autre erreur y est
+    // écrite, avec son détail.
+    public static bool IsRefusedRequest(ExceptionHandlerSuppressDiagnosticsContext context)
+    {
+        return context.Exception is BadHttpRequestException;
     }
 }

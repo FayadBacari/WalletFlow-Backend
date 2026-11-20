@@ -62,11 +62,11 @@ public static class InfrastructureServicesRegistration
 
     // Ajoute le hachage des mots de passe et des codes de secours, la création des jetons, les limites par adresse e-mail,
     // les outils de la double authentification et la recherche des mots de passe des fuites connues.
-    public static IServiceCollection AddWalletFlowSecurityTools(this IServiceCollection services)
+    public static IServiceCollection AddWalletFlowSecurityTools(this IServiceCollection services, int argonConcurrentComputations)
     {
-        // Un seul limiteur pour tous les calculs Argon2id : autant de calculs à la fois que de cœurs, pas plus. Le conteneur le crée
+        // Un seul limiteur pour tous les calculs Argon2id, avec ce nombre de calculs à la fois, pas plus. Le conteneur le crée
         // lui-même : il ne libère à l'arrêt que ce qu'il a créé.
-        services.AddSingleton(serviceProvider => new ArgonComputationsLimiter(Environment.ProcessorCount));
+        services.AddSingleton(serviceProvider => new ArgonComputationsLimiter(argonConcurrentComputations));
         services.AddSingleton<IPasswordHasher, LibsodiumPasswordHasher>();
         services.AddSingleton<IBackupCodeHasher, LibsodiumBackupCodeHasher>();
         services.AddSingleton<ISecureTokenGenerator, RandomSecureTokenGenerator>();

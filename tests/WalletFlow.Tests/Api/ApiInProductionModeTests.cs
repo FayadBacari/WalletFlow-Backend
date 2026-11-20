@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Json;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.Extensions.Logging;
 using WalletFlow.Tests.Fakes;
 using static WalletFlow.Tests.Api.RegistrationRequestTestValues;
 
@@ -10,7 +11,7 @@ namespace WalletFlow.Tests.Api;
 // Vérifie ce qu'un vrai visiteur reçoit en production : erreurs génériques, HSTS et noms du site permis (SS §6 et §10).
 public class ApiInProductionModeTests
 {
-    // Une panne imprévue donne une erreur générique : le détail ne va que dans les journaux (SS §10).
+    // Une panne imprévue donne une erreur générique : le détail ne va que dans les journaux (SS §10), comme une erreur.
     [Fact]
     public async Task UnexpectedFailureIsAnsweredWithoutAnyTechnicalDetail()
     {
@@ -27,6 +28,9 @@ public class ApiInProductionModeTests
         Assert.DoesNotContain(FakeUserAccountRepository.FailureDetail, responseText);
         Assert.DoesNotContain(nameof(FakeUserAccountRepository), responseText);
         SecurityHeadersAssertions.AssertExactSecurityHeaders(response);
+        Assert.Contains(productionApi.LoggerProvider.Messages, message =>
+            message.StartsWith(nameof(LogLevel.Error), StringComparison.Ordinal)
+            && message.Contains(FakeUserAccountRepository.FailureDetail, StringComparison.Ordinal));
     }
 
     // HSTS : le navigateur n'utilise plus que HTTPS pendant un an, sous-domaines compris (SS §6).
