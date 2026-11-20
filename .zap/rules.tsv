@@ -8,3 +8,9 @@
 # quand le prestataire ne répond pas, et la CI le rend injoignable exprès (voir l'étape « Démarrer l'image en production »).
 # Une vraie panne n'y passerait pas inaperçue : après l'attaque, la CI refuse toute exception imprévue au journal de l'API.
 100000	OUTOFSCOPE	http://localhost:8080/api/(banks|bank-connections)([/?].*)?$
+
+# 100000 sur l'inscription : elle répond 503, « réessaie plus tard », quand l'e-mail de confirmation ne peut pas partir, et
+# le serveur d'e-mails de la CI (smtp.walletflow.test) n'existe pas. Avec ses adresses IP tirées au hasard, ZAP n'est plus
+# arrêté par la limite d'inscriptions par adresse, et réussit donc des inscriptions. Une vraie panne n'y passerait pas
+# inaperçue : après l'attaque, la CI refuse toute exception imprévue au journal de l'API.
+100000	OUTOFSCOPE	http://localhost:8080/api/account/register([?].*)?$
