@@ -8,12 +8,54 @@ namespace WalletFlow.Tests.Fakes;
 // uniques de la vraie base, une alerte gardée deux fois fait échouer l'enregistrement : un cas d'utilisation qui la
 // préparerait deux fois est en faute, et le test le voit. Les noms visés par un e-mail se lisent dans les faux dépôts
 // des catégories, des sacs et des connexions que le test relie. Les requêtes SQL elles-mêmes sont testées sur la vraie
-// base (AlertRepositoryTests).
+// base (AlertRepositoryTests). Chaque vue (voir CreateView) a ses propres changements en attente, comme un DbContext, sur la même fausse base.
 public class FakeAlertRepository : IAlertRepository, ITransactionalFakeRepository
 {
     public const string FailureDetail = "detail-technique-de-la-panne-des-alertes";
 
-    private readonly object pendingChangesLock = new object();
+    private readonly Store store;
+    private readonly object pendingChangesLock;
+
+    // La fausse base, commune à toutes les vues : les types d'alerte, ce qui est enregistré, les liens, ce que les tests vérifient, et la panne et les requêtes simulées.
+    private sealed class Store
+    {
+        public object Gate { get; } = new object();
+
+        public List<AlertType> SavedTypes { get; } = new List<AlertType>
+        {
+            new AlertType { Kind = AlertKind.BudgetReached, Label = "Budget d'une catégorie atteint", CanBeDisabled = true },
+            new AlertType { Kind = AlertKind.NewSuggestion, Label = "Nouvelle suggestion d'épargne", CanBeDisabled = true },
+            new AlertType { Kind = AlertKind.BagGoalReached, Label = "Objectif d'un sac atteint", CanBeDisabled = true },
+            new AlertType { Kind = AlertKind.BankAuthorizationToRenew, Label = "Autorisation bancaire à renouveler", CanBeDisabled = true },
+            new AlertType { Kind = AlertKind.NewDevice, Label = "Connexion depuis un nouvel appareil", CanBeDisabled = false },
+            new AlertType { Kind = AlertKind.AccountLocked, Label = "Compte bloqué", CanBeDisabled = false },
+            new AlertType { Kind = AlertKind.PasswordChange, Label = "Changement de mot de passe", CanBeDisabled = false },
+            new AlertType { Kind = AlertKind.EmailChange, Label = "Changement d'adresse e-mail", CanBeDisabled = false },
+            new AlertType { Kind = AlertKind.TwoFactorDeactivation, Label = "Désactivation de la double authentification", CanBeDisabled = false },
+            new AlertType { Kind = AlertKind.BackupCodeUse, Label = "Utilisation d'un code de secours", CanBeDisabled = false },
+        };
+
+        public List<AlertPreference> SavedPreferences { get; set; } = new List<AlertPreference>();
+
+        public List<Alert> SavedAlerts { get; set; } = new List<Alert>();
+
+        public List<int> AlertsPerCommit { get; set; } = new List<int>();
+
+        public FakeCategoryRepository? Categories { get; set; } = null;
+
+        public FakeBagRepository? Bags { get; set; } = null;
+
+        public FakeBankConnectionRepository? Connections { get; set; } = null;
+
+        public bool IsDown { get; set; } = false;
+
+        public Alert? AlertSavedBeforeSave { get; set; } = null;
+
+        public AlertPreference? PreferenceSavedBeforeSave { get; set; } = null;
+
+        public int Conflicts { get; set; } = 0;
+    }
+
     private readonly List<AlertPreference> preparedPreferences = new List<AlertPreference>();
     private readonly List<Alert> preparedAlerts = new List<Alert>();
     private readonly List<Alert> preparedDeletions = new List<Alert>();
@@ -21,45 +63,80 @@ public class FakeAlertRepository : IAlertRepository, ITransactionalFakeRepositor
     private Action? concurrentChanges = null;
 
     // Les 10 types d'alerte, comme le script SQL les remplit.
-    public List<AlertType> SavedTypes { get; } = new List<AlertType>
-    {
-        new AlertType { Kind = AlertKind.BudgetReached, Label = "Budget d'une catégorie atteint", CanBeDisabled = true },
-        new AlertType { Kind = AlertKind.NewSuggestion, Label = "Nouvelle suggestion d'épargne", CanBeDisabled = true },
-        new AlertType { Kind = AlertKind.BagGoalReached, Label = "Objectif d'un sac atteint", CanBeDisabled = true },
-        new AlertType { Kind = AlertKind.BankAuthorizationToRenew, Label = "Autorisation bancaire à renouveler", CanBeDisabled = true },
-        new AlertType { Kind = AlertKind.NewDevice, Label = "Connexion depuis un nouvel appareil", CanBeDisabled = false },
-        new AlertType { Kind = AlertKind.AccountLocked, Label = "Compte bloqué", CanBeDisabled = false },
-        new AlertType { Kind = AlertKind.PasswordChange, Label = "Changement de mot de passe", CanBeDisabled = false },
-        new AlertType { Kind = AlertKind.EmailChange, Label = "Changement d'adresse e-mail", CanBeDisabled = false },
-        new AlertType { Kind = AlertKind.TwoFactorDeactivation, Label = "Désactivation de la double authentification", CanBeDisabled = false },
-        new AlertType { Kind = AlertKind.BackupCodeUse, Label = "Utilisation d'un code de secours", CanBeDisabled = false },
-    };
+    public List<AlertType> SavedTypes => store.SavedTypes;
 
     // Ce que la fausse base contient.
-    public List<AlertPreference> SavedPreferences { get; } = new List<AlertPreference>();
-    public List<Alert> SavedAlerts { get; } = new List<Alert>();
+    public List<AlertPreference> SavedPreferences => store.SavedPreferences;
+    public List<Alert> SavedAlerts => store.SavedAlerts;
 
     // Le nombre d'alertes ajoutées par chaque enregistrement réussi qui en ajoute.
-    public List<int> AlertsPerCommit { get; } = new List<int>();
+    public List<int> AlertsPerCommit => store.AlertsPerCommit;
 
     // Les faux dépôts où se lisent les noms et les dates de fin que disent les e-mails, et les connexions à prévenir.
-    public FakeCategoryRepository? Categories { get; set; } = null;
-    public FakeBagRepository? Bags { get; set; } = null;
-    public FakeBankConnectionRepository? Connections { get; set; } = null;
+    public FakeCategoryRepository? Categories
+    {
+        get => store.Categories;
+        set => store.Categories = value;
+    }
+    public FakeBagRepository? Bags
+    {
+        get => store.Bags;
+        set => store.Bags = value;
+    }
+    public FakeBankConnectionRepository? Connections
+    {
+        get => store.Connections;
+        set => store.Connections = value;
+    }
 
     // Simule une panne de la base : lire ou écrire les alertes échoue.
-    public bool IsDown { get; set; } = false;
+    public bool IsDown
+    {
+        get => store.IsDown;
+        set => store.IsDown = value;
+    }
 
     // Simule une autre requête qui enregistre cette alerte juste avant le prochain enregistrement qui en prépare une :
     // comme l'index unique de la vraie base, l'enregistrement en cours échoue, et le passage suivant la trouve déjà partie.
-    public Alert? AlertSavedBeforeSave { get; set; } = null;
+    public Alert? AlertSavedBeforeSave
+    {
+        get => store.AlertSavedBeforeSave;
+        set => store.AlertSavedBeforeSave = value;
+    }
 
     // Simule une autre requête qui enregistre ce choix juste avant le prochain enregistrement qui en crée un :
     // comme la clé primaire de la vraie base, l'enregistrement en cours échoue, et le passage suivant le relit.
-    public AlertPreference? PreferenceSavedBeforeSave { get; set; } = null;
+    public AlertPreference? PreferenceSavedBeforeSave
+    {
+        get => store.PreferenceSavedBeforeSave;
+        set => store.PreferenceSavedBeforeSave = value;
+    }
 
     // Simule d'autres requêtes qui écrivent les mêmes lignes juste avant chaque enregistrement : un conflit chacune.
-    public int Conflicts { get; set; } = 0;
+    public int Conflicts
+    {
+        get => store.Conflicts;
+        set => store.Conflicts = value;
+    }
+
+    // Crée une fausse base vide, et sa première vue.
+    public FakeAlertRepository()
+        : this(new Store())
+    {
+    }
+
+    // Crée une vue sur cette fausse base.
+    private FakeAlertRepository(Store store)
+    {
+        this.store = store;
+        pendingChangesLock = store.Gate;
+    }
+
+    // Crée une autre vue sur la même fausse base, avec ses propres changements en attente.
+    public FakeAlertRepository CreateView()
+    {
+        return new FakeAlertRepository(store);
+    }
 
     // Donne les 10 types d'alerte.
     public Task<List<AlertType>> FindTypesAsync(CancellationToken cancellationToken = default)

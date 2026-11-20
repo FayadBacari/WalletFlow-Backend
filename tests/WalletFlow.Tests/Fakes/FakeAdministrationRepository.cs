@@ -10,12 +10,26 @@ namespace WalletFlow.Tests.Fakes;
 // du support, les comptes qu'il partage, et les connexions du faux dépôt des banques. Ce qui est préparé n'est gardé qu'avec les
 // autres changements (voir FakeDatabaseUnitOfWork). Une demande lue a une version, comme xmin dans la vraie base : une autre
 // requête simulée qui l'écrit avant l'enregistrement fait échouer celui-ci. Les vraies requêtes SQL sont testées sur la vraie
-// base (AdministrationRepositoryTests).
+// base (AdministrationRepositoryTests). Chaque vue (voir CreateView) a ses propres changements en attente, comme un DbContext, sur la même fausse base.
 public class FakeAdministrationRepository : IAdministrationRepository, ITransactionalFakeRepository
 {
     public const string FailureDetail = "detail-technique-de-la-panne-de-l-administration";
 
-    private readonly object pendingChangesLock = new object();
+    private readonly Store store;
+    private readonly object pendingChangesLock;
+
+    // La fausse base, commune à toutes les vues : la panne et les autres requêtes simulées.
+    private sealed class Store
+    {
+        public object Gate { get; } = new object();
+
+        public Guid? RequestResolvedBeforeSave { get; set; } = null;
+
+        public int Conflicts { get; set; } = 0;
+
+        public bool IsDown { get; set; } = false;
+    }
+
     private readonly FakeSupportRequestRepository support;
     private readonly FakeBankConnectionRepository? bank;
     private readonly List<SupportResponse> preparedResponses = new List<SupportResponse>();
@@ -25,21 +39,47 @@ public class FakeAdministrationRepository : IAdministrationRepository, ITransact
 
     // Reçoit le faux dépôt du support, qui garde les demandes, les réponses et les comptes, et celui des banques s'il y en a un.
     public FakeAdministrationRepository(FakeSupportRequestRepository support, FakeBankConnectionRepository? bank = null)
+        : this(new Store(), support, bank)
     {
+    }
+
+    // Crée une vue sur cette fausse base.
+    private FakeAdministrationRepository(Store store, FakeSupportRequestRepository support, FakeBankConnectionRepository? bank)
+    {
+        this.store = store;
+        pendingChangesLock = store.Gate;
         this.support = support;
         this.bank = bank;
+    }
+
+    // Crée une autre vue sur la même fausse base, avec ses propres changements en attente.
+    public FakeAdministrationRepository CreateView()
+    {
+        return new FakeAdministrationRepository(store, support, bank);
     }
 
     // Simule une autre requête qui marque cette demande « résolue » juste avant le prochain enregistrement de l'administrateur,
     // comme la vraie base : si cet enregistrement réécrit la ligne de la demande, il échoue, et le passage suivant relit la
     // demande résolue. Sinon, rien ne l'arrête : il passe, et la demande reste « résolue ».
-    public Guid? RequestResolvedBeforeSave { get; set; } = null;
+    public Guid? RequestResolvedBeforeSave
+    {
+        get => store.RequestResolvedBeforeSave;
+        set => store.RequestResolvedBeforeSave = value;
+    }
 
     // Simule d'autres requêtes qui écrivent les mêmes lignes juste avant chaque enregistrement : un conflit chacune.
-    public int Conflicts { get; set; } = 0;
+    public int Conflicts
+    {
+        get => store.Conflicts;
+        set => store.Conflicts = value;
+    }
 
     // Simule une panne de la base : lire ou écrire pour l'administrateur échoue.
-    public bool IsDown { get; set; } = false;
+    public bool IsDown
+    {
+        get => store.IsDown;
+        set => store.IsDown = value;
+    }
 
     // Donne les demandes gardées dans cet état, la plus ancienne d'abord, comme la vraie requête.
     public Task<List<AdminSupportRequestItem>> FindRequestsAsync(SupportRequestStatus status, CancellationToken cancellationToken = default)

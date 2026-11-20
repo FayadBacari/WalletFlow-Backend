@@ -5,22 +5,51 @@ namespace WalletFlow.Tests.Fakes;
 
 // Remplace la vraie base dans les tests : garde la file d'e-mails en mémoire. Une demande préparée n'entre dans la file
 // qu'avec les autres changements (voir FakeDatabaseUnitOfWork), et réveille la tâche de fond une fois tout enregistré, comme
-// la vraie file.
+// la vraie file. Chaque vue (voir CreateView) a ses propres changements en attente, comme un DbContext, sur la même fausse base.
 public class FakeEmailRequestRepository : IEmailRequestRepository, ITransactionalFakeRepository
 {
     public const string FailureDetail = "detail-technique-de-la-panne-de-la-file";
 
-    private readonly object pendingChangesLock = new object();
+    private readonly Store store;
+    private readonly object pendingChangesLock;
+
+    // La fausse base, commune à toutes les vues : la file enregistrée, son réveil, et la panne et la requête simulées.
+    private sealed class Store
+    {
+        public object Gate { get; } = new object();
+
+        public required EmailRequestWakeUp WakeUp { get; set; }
+
+        public List<EmailRequest> SavedRequests { get; set; } = new List<EmailRequest>();
+
+        public bool IsDown { get; set; } = false;
+
+        public Guid? RemovedBeforeSave { get; set; } = null;
+    }
+
     private readonly List<EmailRequest> preparedRequests = new List<EmailRequest>();
     private readonly List<EmailRequest> preparedRemovals = new List<EmailRequest>();
     private readonly ReadCopies<EmailRequest> readRequests = new ReadCopies<EmailRequest>();
     private Guid? requestToRemoveAfterRollback = null;
     private bool hasRequestsToAnnounce = false;
 
-    // Reçoit le réveil de la tâche de fond, le même que celui qu'elle attend.
+    // Reçoit le réveil de la tâche de fond, le même que celui qu'elle attend, et crée la première vue.
     public FakeEmailRequestRepository(EmailRequestWakeUp wakeUp)
+        : this(new Store { WakeUp = wakeUp })
     {
-        WakeUp = wakeUp;
+    }
+
+    // Crée une vue sur cette fausse base.
+    private FakeEmailRequestRepository(Store store)
+    {
+        this.store = store;
+        pendingChangesLock = store.Gate;
+    }
+
+    // Crée une autre vue sur la même fausse base, avec ses propres changements en attente.
+    public FakeEmailRequestRepository CreateView()
+    {
+        return new FakeEmailRequestRepository(store);
     }
 
     // Pour les tests sans tâche de fond : personne n'attend ce réveil.
@@ -29,17 +58,25 @@ public class FakeEmailRequestRepository : IEmailRequestRepository, ITransactiona
     {
     }
 
-    public EmailRequestWakeUp WakeUp { get; }
+    public EmailRequestWakeUp WakeUp => store.WakeUp;
 
     // Ce que la fausse base contient.
-    public List<EmailRequest> SavedRequests { get; } = new List<EmailRequest>();
+    public List<EmailRequest> SavedRequests => store.SavedRequests;
 
     // Simule une panne de la base : lire la file ou y écrire échoue.
-    public bool IsDown { get; set; } = false;
+    public bool IsDown
+    {
+        get => store.IsDown;
+        set => store.IsDown = value;
+    }
 
     // Simule une autre requête qui sort cette demande de la file juste avant l'enregistrement,
     // comme l'effacement de son compte : l'enregistrement échoue, et la demande n'est plus là.
-    public Guid? RemovedBeforeSave { get; set; } = null;
+    public Guid? RemovedBeforeSave
+    {
+        get => store.RemovedBeforeSave;
+        set => store.RemovedBeforeSave = value;
+    }
 
     // Les demandes gardées en mémoire, lues même pendant qu'une tâche de fond écrit.
     public List<EmailRequest> ReadSavedRequests()

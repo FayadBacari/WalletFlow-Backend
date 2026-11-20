@@ -5,50 +5,116 @@ using WalletFlow.Domain.AccountsAndCategories;
 namespace WalletFlow.Tests.Fakes;
 
 // Remplace la vraie base dans les tests : garde les catégories, les transactions et les règles de classement en mémoire.
-// Une catégorie préparée n'est gardée qu'avec les autres changements (voir FakeDatabaseUnitOfWork).
+// Une catégorie préparée n'est gardée qu'avec les autres changements (voir FakeDatabaseUnitOfWork). Chaque vue (voir
+// CreateView) a ses propres changements en attente, comme un DbContext, sur la même fausse base.
 // La comparaison des noms, faite par lower() dans la vraie base, est testée sur la vraie base (CategoryRepositoryTests).
 public class FakeCategoryRepository : ICategoryRepository, ITransactionalFakeRepository
 {
-    private readonly object pendingChangesLock = new object();
+    private readonly Store store;
+    private readonly object pendingChangesLock;
+
+    // La fausse base, commune à toutes les vues : ce qui est enregistré, ce que les tests vérifient, et les autres requêtes simulées.
+    private sealed class Store
+    {
+        public object Gate { get; } = new object();
+
+        public List<Category> SavedCategories { get; set; } = new List<Category>();
+
+        public List<BankTransaction> SavedTransactions { get; set; } = new List<BankTransaction>();
+
+        public List<CategorizationRule> SavedRules { get; set; } = new List<CategorizationRule>();
+
+        public List<Category> CheckedCategories { get; set; } = new List<Category>();
+
+        public int SearchCount { get; set; } = 0;
+
+        public Category? CategoryCreatedBeforeSave { get; set; } = null;
+
+        public bool DeleteReadCategoryBeforeSave { get; set; } = false;
+
+        public bool CategoryDisappearsBeforeDeletion { get; set; } = false;
+
+        public int DeadlocksBeforeDeletion { get; set; } = 0;
+
+        public int Conflicts { get; set; } = 0;
+    }
+
     private readonly List<Category> preparedCategories = new List<Category>();
     private readonly ReadCopies<Category> readCategories = new ReadCopies<Category>();
     private Action? concurrentChanges = null;
 
     // Ce que la fausse base contient. La liste des catégories peut être celle du faux dépôt des comptes, où l'inscription écrit.
-    public List<Category> SavedCategories { get; }
-    public List<BankTransaction> SavedTransactions { get; } = new List<BankTransaction>();
-    public List<CategorizationRule> SavedRules { get; } = new List<CategorizationRule>();
+    public List<Category> SavedCategories => store.SavedCategories;
+    public List<BankTransaction> SavedTransactions => store.SavedTransactions;
+    public List<CategorizationRule> SavedRules => store.SavedRules;
 
     // Ce que les tests vérifient : les catégories réécrites pour contrôler leur version, et les recherches faites.
-    public List<Category> CheckedCategories { get; } = new List<Category>();
-    public int SearchCount { get; private set; } = 0;
+    public List<Category> CheckedCategories => store.CheckedCategories;
+    public int SearchCount
+    {
+        get => store.SearchCount;
+        private set => store.SearchCount = value;
+    }
 
     // Simule une autre requête qui crée cette catégorie juste avant l'enregistrement d'une création :
     // sa création a réécrit « Autres », dont la version a changé.
-    public Category? CategoryCreatedBeforeSave { get; set; } = null;
-
-    // Simule une autre requête qui supprime la catégorie lue, juste avant l'enregistrement de son changement.
-    public bool DeleteReadCategoryBeforeSave { get; set; } = false;
-
-    // Simule une autre requête qui supprime la catégorie entre sa lecture et sa suppression.
-    public bool CategoryDisappearsBeforeDeletion { get; set; } = false;
-
-    // Simule des interblocages avec d'autres requêtes : chacun annule une suppression, qui ne change alors rien.
-    public int DeadlocksBeforeDeletion { get; set; } = 0;
-
-    // Simule d'autres requêtes qui écrivent les mêmes catégories juste avant chaque enregistrement : un conflit chacune.
-    public int Conflicts { get; set; } = 0;
-
-    // Crée une fausse base vide.
-    public FakeCategoryRepository()
+    public Category? CategoryCreatedBeforeSave
     {
-        SavedCategories = new List<Category>();
+        get => store.CategoryCreatedBeforeSave;
+        set => store.CategoryCreatedBeforeSave = value;
     }
 
-    // Crée une fausse base qui partage cette liste de catégories, par exemple avec le faux dépôt des comptes.
-    public FakeCategoryRepository(List<Category> savedCategories)
+    // Simule une autre requête qui supprime la catégorie lue, juste avant l'enregistrement de son changement.
+    public bool DeleteReadCategoryBeforeSave
     {
-        SavedCategories = savedCategories;
+        get => store.DeleteReadCategoryBeforeSave;
+        set => store.DeleteReadCategoryBeforeSave = value;
+    }
+
+    // Simule une autre requête qui supprime la catégorie entre sa lecture et sa suppression.
+    public bool CategoryDisappearsBeforeDeletion
+    {
+        get => store.CategoryDisappearsBeforeDeletion;
+        set => store.CategoryDisappearsBeforeDeletion = value;
+    }
+
+    // Simule des interblocages avec d'autres requêtes : chacun annule une suppression, qui ne change alors rien.
+    public int DeadlocksBeforeDeletion
+    {
+        get => store.DeadlocksBeforeDeletion;
+        set => store.DeadlocksBeforeDeletion = value;
+    }
+
+    // Simule d'autres requêtes qui écrivent les mêmes catégories juste avant chaque enregistrement : un conflit chacune.
+    public int Conflicts
+    {
+        get => store.Conflicts;
+        set => store.Conflicts = value;
+    }
+
+    // Crée une fausse base vide, et sa première vue.
+    public FakeCategoryRepository()
+        : this(new Store())
+    {
+    }
+
+    // Crée une fausse base qui partage cette liste de catégories, par exemple avec le faux dépôt des comptes, et sa première vue.
+    public FakeCategoryRepository(List<Category> savedCategories)
+        : this(new Store { SavedCategories = savedCategories })
+    {
+    }
+
+    // Crée une vue sur cette fausse base.
+    private FakeCategoryRepository(Store store)
+    {
+        this.store = store;
+        pendingChangesLock = store.Gate;
+    }
+
+    // Crée une autre vue sur la même fausse base, avec ses propres changements en attente.
+    public FakeCategoryRepository CreateView()
+    {
+        return new FakeCategoryRepository(store);
     }
 
     // Donne les catégories gardées pour cet utilisateur.

@@ -93,22 +93,26 @@ public class ApiFactoryWithFakes : WebApplicationFactory<Program>
 
         builder.ConfigureTestServices(services =>
         {
-            services.AddSingleton<IDatabaseUnitOfWork>(UnitOfWork);
+            // Comme un DbContext par portée, chaque requête et chaque étape d'une tâche de fond reçoit ses propres vues des faux
+            // dépôts, avec leur unité de travail : ses changements en attente ne se mêlent jamais à ceux d'une autre, sur la même
+            // fausse base. Les propriétés de cette fabrique sont les premières vues, où les tests lisent et remplissent la base.
+            services.AddScoped(serviceProvider => new ScopeViews(this));
+            services.AddScoped<IDatabaseUnitOfWork>(serviceProvider => serviceProvider.GetRequiredService<ScopeViews>().UnitOfWork);
+            services.AddScoped<IUserAccountRepository>(serviceProvider => serviceProvider.GetRequiredService<ScopeViews>().Accounts);
+            services.AddScoped<IUserSessionRepository>(serviceProvider => serviceProvider.GetRequiredService<ScopeViews>().Sessions);
+            services.AddScoped<ISecurityEventRepository>(serviceProvider => serviceProvider.GetRequiredService<ScopeViews>().SecurityEvents);
+            services.AddScoped<ITwoFactorAuthenticationRepository>(serviceProvider => serviceProvider.GetRequiredService<ScopeViews>().TwoFactor);
+            services.AddScoped<ICategoryRepository>(serviceProvider => serviceProvider.GetRequiredService<ScopeViews>().Categories);
+            services.AddScoped<IBankConnectionRepository>(serviceProvider => serviceProvider.GetRequiredService<ScopeViews>().Banks);
+            services.AddScoped<ITransactionRepository>(serviceProvider => serviceProvider.GetRequiredService<ScopeViews>().Transactions);
+            services.AddScoped<IBagRepository>(serviceProvider => serviceProvider.GetRequiredService<ScopeViews>().Bags);
+            services.AddScoped<ISuggestionRepository>(serviceProvider => serviceProvider.GetRequiredService<ScopeViews>().Suggestions);
+            services.AddScoped<IEmailRequestRepository>(serviceProvider => serviceProvider.GetRequiredService<ScopeViews>().EmailRequests);
+            services.AddScoped<IAlertRepository>(serviceProvider => serviceProvider.GetRequiredService<ScopeViews>().Alerts);
+            services.AddScoped<ISupportRequestRepository>(serviceProvider => serviceProvider.GetRequiredService<ScopeViews>().Support);
+            services.AddScoped<IAdministrationRepository>(serviceProvider => serviceProvider.GetRequiredService<ScopeViews>().Administration);
             services.AddSingleton<IDatabaseHealth>(DatabaseHealth);
-            services.AddSingleton<IUserAccountRepository>(AccountRepository);
-            services.AddSingleton<IUserSessionRepository>(SessionRepository);
-            services.AddSingleton<ISecurityEventRepository>(SecurityEventRepository);
-            services.AddSingleton<ITwoFactorAuthenticationRepository>(TwoFactorRepository);
-            services.AddSingleton<ICategoryRepository>(CategoryRepository);
-            services.AddSingleton<IBankConnectionRepository>(BankRepository);
-            services.AddSingleton<ITransactionRepository>(TransactionRepository);
-            services.AddSingleton<IBagRepository>(BagRepository);
-            services.AddSingleton<ISuggestionRepository>(SuggestionRepository);
             services.AddSingleton<IResourceOwnershipRepository>(OwnershipRepository);
-            services.AddSingleton<IEmailRequestRepository>(EmailRequests);
-            services.AddSingleton<IAlertRepository>(AlertRepository);
-            services.AddSingleton<ISupportRequestRepository>(SupportRepository);
-            services.AddSingleton<IAdministrationRepository>(AdministrationRepository);
             services.AddSingleton<IDataExportRepository>(ExportRepository);
             services.AddSingleton(EmailWakeUp);
             services.AddSingleton<IBankDataProvider>(BankProvider);
@@ -119,5 +123,69 @@ public class ApiFactoryWithFakes : WebApplicationFactory<Program>
             services.AddSingleton<IStartupFilter, VisitorAddressStartupFilter>();
             ResponseContractCheck.AddTo(services);
         });
+    }
+
+    // Les vues des faux dépôts d'une portée de services, et leur unité de travail, dans le même ordre que celle de la fabrique.
+    private sealed class ScopeViews
+    {
+        // Crée une vue de chaque faux dépôt de la fabrique, et l'unité de travail qui les enregistre ensemble.
+        public ScopeViews(ApiFactoryWithFakes api)
+        {
+            Accounts = api.AccountRepository.CreateView();
+            Sessions = api.SessionRepository.CreateView();
+            TwoFactor = api.TwoFactorRepository.CreateView();
+            SecurityEvents = api.SecurityEventRepository.CreateView();
+            Categories = api.CategoryRepository.CreateView();
+            Banks = api.BankRepository.CreateView();
+            Transactions = api.TransactionRepository.CreateView();
+            Bags = api.BagRepository.CreateView();
+            Suggestions = api.SuggestionRepository.CreateView();
+            EmailRequests = api.EmailRequests.CreateView();
+            Alerts = api.AlertRepository.CreateView();
+            Support = api.SupportRepository.CreateView();
+            Administration = api.AdministrationRepository.CreateView();
+            UnitOfWork = api.UnitOfWork.CreateView(
+                Accounts,
+                Sessions,
+                TwoFactor,
+                SecurityEvents,
+                Categories,
+                Banks,
+                Transactions,
+                Bags,
+                Suggestions,
+                EmailRequests,
+                Alerts,
+                Support,
+                Administration);
+        }
+
+        public FakeUserAccountRepository Accounts { get; }
+
+        public FakeUserSessionRepository Sessions { get; }
+
+        public FakeTwoFactorAuthenticationRepository TwoFactor { get; }
+
+        public FakeSecurityEventRepository SecurityEvents { get; }
+
+        public FakeCategoryRepository Categories { get; }
+
+        public FakeBankConnectionRepository Banks { get; }
+
+        public FakeTransactionRepository Transactions { get; }
+
+        public FakeBagRepository Bags { get; }
+
+        public FakeSuggestionRepository Suggestions { get; }
+
+        public FakeEmailRequestRepository EmailRequests { get; }
+
+        public FakeAlertRepository Alerts { get; }
+
+        public FakeSupportRequestRepository Support { get; }
+
+        public FakeAdministrationRepository Administration { get; }
+
+        public FakeDatabaseUnitOfWork UnitOfWork { get; }
     }
 }

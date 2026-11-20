@@ -4,32 +4,86 @@ using WalletFlow.Domain.UsersAndSecurity;
 namespace WalletFlow.Tests.Fakes;
 
 // Remplace la vraie base dans les tests : garde les codes de secours en mémoire.
-// Les codes préparés, ou leur effacement, ne sont gardés qu'avec les autres changements (voir FakeDatabaseUnitOfWork).
+// Les codes préparés, ou leur effacement, ne sont gardés qu'avec les autres changements (voir FakeDatabaseUnitOfWork). Chaque
+// vue (voir CreateView) a ses propres changements en attente, comme un DbContext, sur la même fausse base.
 public class FakeTwoFactorAuthenticationRepository : ITwoFactorAuthenticationRepository, ITransactionalFakeRepository
 {
     public const string FailureDetail = "detail-technique-de-la-panne-de-la-double-authentification";
 
-    private readonly object pendingChangesLock = new object();
+    private readonly Store store;
+    private readonly object pendingChangesLock;
+
+    // La fausse base, commune à toutes les vues : ce qui est enregistré, les pannes et les conflits simulés.
+    private sealed class Store
+    {
+        public object Gate { get; } = new object();
+
+        public List<BackupCode> SavedBackupCodes { get; set; } = new List<BackupCode>();
+
+        public bool FailsWhenReadingBackupCodes { get; set; } = false;
+
+        public bool FailsWhenSavingSettings { get; set; } = false;
+
+        public int ActivationConflicts { get; set; } = 0;
+
+        public int DeactivationConflicts { get; set; } = 0;
+    }
+
     private readonly ReadCopies<BackupCode> readBackupCodes = new ReadCopies<BackupCode>();
     private readonly List<BackupCode> preparedBackupCodes = new List<BackupCode>();
     private readonly List<Guid> backupCodeRemovals = new List<Guid>();
 
     // Ce que la fausse base contient.
-    public List<BackupCode> SavedBackupCodes { get; } = new List<BackupCode>();
+    public List<BackupCode> SavedBackupCodes => store.SavedBackupCodes;
 
     // Simule une panne de la base au moment de lire les codes de secours.
-    public bool FailsWhenReadingBackupCodes { get; set; } = false;
+    public bool FailsWhenReadingBackupCodes
+    {
+        get => store.FailsWhenReadingBackupCodes;
+        set => store.FailsWhenReadingBackupCodes = value;
+    }
 
     // Simule une panne de la base au moment d'enregistrer une activation ou une désactivation.
-    public bool FailsWhenSavingSettings { get; set; } = false;
+    public bool FailsWhenSavingSettings
+    {
+        get => store.FailsWhenSavingSettings;
+        set => store.FailsWhenSavingSettings = value;
+    }
 
     // Les réglages qui suivent simulent une autre requête qui agit juste avant l'enregistrement de celle du test.
 
     // D'autres requêtes changent le compte juste avant l'enregistrement d'une activation : un conflit chacune.
-    public int ActivationConflicts { get; set; } = 0;
+    public int ActivationConflicts
+    {
+        get => store.ActivationConflicts;
+        set => store.ActivationConflicts = value;
+    }
 
     // D'autres requêtes changent le compte juste avant l'enregistrement d'une désactivation : un conflit chacune.
-    public int DeactivationConflicts { get; set; } = 0;
+    public int DeactivationConflicts
+    {
+        get => store.DeactivationConflicts;
+        set => store.DeactivationConflicts = value;
+    }
+
+    // Crée une fausse base vide, et sa première vue.
+    public FakeTwoFactorAuthenticationRepository()
+        : this(new Store())
+    {
+    }
+
+    // Crée une vue sur cette fausse base.
+    private FakeTwoFactorAuthenticationRepository(Store store)
+    {
+        this.store = store;
+        pendingChangesLock = store.Gate;
+    }
+
+    // Crée une autre vue sur la même fausse base, avec ses propres changements en attente.
+    public FakeTwoFactorAuthenticationRepository CreateView()
+    {
+        return new FakeTwoFactorAuthenticationRepository(store);
+    }
 
     // Cherche en mémoire les codes de secours de ce compte qui n'ont pas servi.
     public Task<List<BackupCode>> FindUnusedBackupCodesAsync(Guid accountId, CancellationToken cancellationToken = default)

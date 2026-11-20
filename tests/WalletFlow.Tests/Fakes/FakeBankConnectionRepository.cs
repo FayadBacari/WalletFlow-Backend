@@ -6,10 +6,40 @@ namespace WalletFlow.Tests.Fakes;
 
 // Remplace la vraie base dans les tests : garde les connexions bancaires et leurs comptes en mémoire.
 // Ce qui est préparé n'est gardé qu'avec les autres changements (voir FakeDatabaseUnitOfWork).
-// Les requêtes de la vraie base sont testées sur la vraie base (BankConnectionRepositoryTests).
+// Les requêtes de la vraie base sont testées sur la vraie base (BankConnectionRepositoryTests). Chaque vue (voir CreateView) a ses propres changements en attente, comme un DbContext, sur la même fausse base.
 public class FakeBankConnectionRepository : IBankConnectionRepository, ITransactionalFakeRepository
 {
-    private readonly object pendingChangesLock = new object();
+    private readonly Store store;
+    private readonly object pendingChangesLock;
+
+    // La fausse base, commune à toutes les vues : ce qui est enregistré, les comptes, ce que les tests vérifient, et les pannes et requêtes simulées.
+    private sealed class Store
+    {
+        public object Gate { get; } = new object();
+
+        public List<BankConnection> SavedConnections { get; set; } = new List<BankConnection>();
+
+        public List<BankAccount> SavedAccounts { get; set; } = new List<BankAccount>();
+
+        public int Conflicts { get; set; } = 0;
+
+        public bool DeleteReadConnectionBeforeSave { get; set; } = false;
+
+        public string? RenewalBeforeDeletion { get; set; } = null;
+
+        public int StoppedDeletions { get; set; } = 0;
+
+        public Action<BankConnection>? OtherRequestBeforeCheckedSave { get; set; } = null;
+
+        public List<BankConnection> CommittedChecks { get; set; } = new List<BankConnection>();
+
+        public Guid? FailingConnectionId { get; set; } = null;
+
+        public bool FailsWhenListingRevocations { get; set; } = false;
+
+        public List<User> Users { get; set; } = new List<User>();
+    }
+
     private readonly List<BankConnection> preparedConnections = new List<BankConnection>();
     private readonly List<BankAccount> preparedAccounts = new List<BankAccount>();
     private readonly ReadCopies<BankConnection> readConnections = new ReadCopies<BankConnection>();
@@ -18,33 +48,80 @@ public class FakeBankConnectionRepository : IBankConnectionRepository, ITransact
     private Action? concurrentChanges = null;
 
     // Ce que la fausse base contient.
-    public List<BankConnection> SavedConnections { get; } = new List<BankConnection>();
-    public List<BankAccount> SavedAccounts { get; } = new List<BankAccount>();
+    public List<BankConnection> SavedConnections => store.SavedConnections;
+    public List<BankAccount> SavedAccounts => store.SavedAccounts;
 
     // Simule d'autres requêtes qui écrivent les mêmes lignes juste avant chaque enregistrement : un conflit chacune.
-    public int Conflicts { get; set; } = 0;
+    public int Conflicts
+    {
+        get => store.Conflicts;
+        set => store.Conflicts = value;
+    }
 
     // Simule une autre requête qui supprime la connexion lue, juste avant l'enregistrement de son changement.
-    public bool DeleteReadConnectionBeforeSave { get; set; } = false;
+    public bool DeleteReadConnectionBeforeSave
+    {
+        get => store.DeleteReadConnectionBeforeSave;
+        set => store.DeleteReadConnectionBeforeSave = value;
+    }
 
     // Simule un renouvellement qui change la session de la connexion juste avant sa suppression : la valeur est la nouvelle session.
-    public string? RenewalBeforeDeletion { get; set; } = null;
+    public string? RenewalBeforeDeletion
+    {
+        get => store.RenewalBeforeDeletion;
+        set => store.RenewalBeforeDeletion = value;
+    }
 
     // Simule des suppressions arrêtées par PostgreSQL pour débloquer un interblocage : une chacune, rien n'est supprimé.
-    public int StoppedDeletions { get; set; } = 0;
+    public int StoppedDeletions
+    {
+        get => store.StoppedDeletions;
+        set => store.StoppedDeletions = value;
+    }
 
     // Simule une autre requête qui écrit une connexion contrôlée juste avant l'enregistrement, par exemple un renouvellement :
     // comme la version de la vraie ligne, l'enregistrement échoue, et le passage suivant relit ce que l'autre a écrit.
-    public Action<BankConnection>? OtherRequestBeforeCheckedSave { get; set; } = null;
+    public Action<BankConnection>? OtherRequestBeforeCheckedSave
+    {
+        get => store.OtherRequestBeforeCheckedSave;
+        set => store.OtherRequestBeforeCheckedSave = value;
+    }
 
     // Les connexions réécrites avec leur version par un enregistrement réussi.
-    public List<BankConnection> CommittedChecks { get; } = new List<BankConnection>();
+    public List<BankConnection> CommittedChecks => store.CommittedChecks;
 
     // Simule une panne de la base pour cette connexion : la lire par son identifiant échoue.
-    public Guid? FailingConnectionId { get; set; } = null;
+    public Guid? FailingConnectionId
+    {
+        get => store.FailingConnectionId;
+        set => store.FailingConnectionId = value;
+    }
 
     // Simule une panne de la base au moment de lister les connexions à révoquer.
-    public bool FailsWhenListingRevocations { get; set; } = false;
+    public bool FailsWhenListingRevocations
+    {
+        get => store.FailsWhenListingRevocations;
+        set => store.FailsWhenListingRevocations = value;
+    }
+
+    // Crée une fausse base vide, et sa première vue.
+    public FakeBankConnectionRepository()
+        : this(new Store())
+    {
+    }
+
+    // Crée une vue sur cette fausse base.
+    private FakeBankConnectionRepository(Store store)
+    {
+        this.store = store;
+        pendingChangesLock = store.Gate;
+    }
+
+    // Crée une autre vue sur la même fausse base, avec ses propres changements en attente.
+    public FakeBankConnectionRepository CreateView()
+    {
+        return new FakeBankConnectionRepository(store);
+    }
 
     // Donne les connexions gardées pour cet utilisateur.
     public Task<List<BankConnection>> FindConnectionsAsync(Guid userId, CancellationToken cancellationToken = default)
@@ -106,7 +183,11 @@ public class FakeBankConnectionRepository : IBankConnectionRepository, ITransact
     }
 
     // Les comptes de la fausse base, pour savoir lesquels sont en suppression. Sans eux, aucun compte ne l'est.
-    public List<User> Users { get; set; } = new List<User>();
+    public List<User> Users
+    {
+        get => store.Users;
+        set => store.Users = value;
+    }
 
     // Donne les connexions qui ne sont pas expirées, sauf celles des comptes en suppression.
     public Task<List<Guid>> FindConnectionIdsToUpdateAsync(CancellationToken cancellationToken = default)

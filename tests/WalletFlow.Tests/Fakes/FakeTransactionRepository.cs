@@ -8,9 +8,24 @@ namespace WalletFlow.Tests.Fakes;
 // Les comptes et les connexions viennent du faux dépôt des connexions : une opération est à l'utilisateur de sa connexion.
 // Ce qui est préparé n'est gardé qu'avec les autres changements (voir FakeDatabaseUnitOfWork).
 // La vraie recherche, avec ILIKE et l'ordre de PostgreSQL, est testée sur la vraie base (TransactionRepositoryTests).
+// Chaque vue (voir CreateView) a ses propres changements en attente, comme un DbContext, sur la même fausse base.
 public class FakeTransactionRepository : ITransactionRepository, ITransactionalFakeRepository
 {
-    private readonly object pendingChangesLock = new object();
+    private readonly Store store;
+    private readonly object pendingChangesLock;
+
+    // La fausse base, commune à toutes les vues : les autres requêtes simulées. Les opérations et les règles sont dans celle des catégories.
+    private sealed class Store
+    {
+        public object Gate { get; } = new object();
+
+        public int Conflicts { get; set; } = 0;
+
+        public List<BankTransaction>? TransactionsAddedBeforeSave { get; set; } = null;
+
+        public CategorizationRule? RuleCreatedBeforeSave { get; set; } = null;
+    }
+
     private readonly FakeBankConnectionRepository bankRepository;
     private readonly FakeCategoryRepository categoryRepository;
     private readonly List<BankTransaction> preparedTransactions = new List<BankTransaction>();
@@ -21,9 +36,23 @@ public class FakeTransactionRepository : ITransactionRepository, ITransactionalF
 
     // Reçoit les faux dépôts des connexions et des catégories, dont les listes forment la même fausse base.
     public FakeTransactionRepository(FakeBankConnectionRepository bankRepository, FakeCategoryRepository categoryRepository)
+        : this(new Store(), bankRepository, categoryRepository)
     {
+    }
+
+    // Crée une vue sur cette fausse base.
+    private FakeTransactionRepository(Store store, FakeBankConnectionRepository bankRepository, FakeCategoryRepository categoryRepository)
+    {
+        this.store = store;
+        pendingChangesLock = store.Gate;
         this.bankRepository = bankRepository;
         this.categoryRepository = categoryRepository;
+    }
+
+    // Crée une autre vue sur la même fausse base, avec ses propres changements en attente.
+    public FakeTransactionRepository CreateView()
+    {
+        return new FakeTransactionRepository(store, bankRepository, categoryRepository);
     }
 
     // Ce que la fausse base contient.
@@ -31,14 +60,26 @@ public class FakeTransactionRepository : ITransactionRepository, ITransactionalF
     public List<CategorizationRule> SavedRules => categoryRepository.SavedRules;
 
     // Simule d'autres requêtes qui écrivent les mêmes lignes juste avant chaque enregistrement : un conflit chacune.
-    public int Conflicts { get; set; } = 0;
+    public int Conflicts
+    {
+        get => store.Conflicts;
+        set => store.Conflicts = value;
+    }
 
     // Simule une autre mise à jour qui ajoute ces opérations juste avant l'enregistrement : comme la contrainte d'unicité
     // de la vraie base, l'enregistrement échoue, et le passage suivant les voit déjà gardées.
-    public List<BankTransaction>? TransactionsAddedBeforeSave { get; set; } = null;
+    public List<BankTransaction>? TransactionsAddedBeforeSave
+    {
+        get => store.TransactionsAddedBeforeSave;
+        set => store.TransactionsAddedBeforeSave = value;
+    }
 
     // Simule une autre requête qui crée cette règle juste avant l'enregistrement d'une règle : « Autres » a changé de version.
-    public CategorizationRule? RuleCreatedBeforeSave { get; set; } = null;
+    public CategorizationRule? RuleCreatedBeforeSave
+    {
+        get => store.RuleCreatedBeforeSave;
+        set => store.RuleCreatedBeforeSave = value;
+    }
 
     // Donne la date de la dernière opération gardée pour ce compte.
     public Task<DateOnly?> FindLatestDateAsync(Guid accountId, CancellationToken cancellationToken = default)

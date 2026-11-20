@@ -7,10 +7,40 @@ namespace WalletFlow.Tests.Fakes;
 // Remplace la vraie base dans les tests : garde les sacs et leurs mouvements en mémoire. Ce qui est préparé n'est gardé
 // qu'avec les autres changements (voir FakeDatabaseUnitOfWork). La suppression d'un sac suit les règles de la vraie base :
 // ses mouvements avec l'argent disponible disparaissent, et ceux avec un autre sac gardent l'autre sac.
-// Les requêtes SQL elles-mêmes sont testées sur la vraie base (BagRepositoryTests).
+// Les requêtes SQL elles-mêmes sont testées sur la vraie base (BagRepositoryTests). Chaque vue (voir CreateView) a ses propres changements en attente, comme un DbContext, sur la même fausse base.
 public class FakeBagRepository : IBagRepository, ITransactionalFakeRepository
 {
-    private readonly object pendingChangesLock = new object();
+    private readonly Store store;
+    private readonly object pendingChangesLock;
+
+    // La fausse base, commune à toutes les vues : ce qui est enregistré, la version de la ligne de l'utilisateur, ce que les tests vérifient, et les autres requêtes simulées.
+    private sealed class Store
+    {
+        public object Gate { get; } = new object();
+
+        public List<User> SavedUsers { get; set; } = new List<User>();
+
+        public List<Bag> SavedBags { get; set; } = new List<Bag>();
+
+        public List<BagMovement> SavedMovements { get; set; } = new List<BagMovement>();
+
+        public List<User> CommittedUserChecks { get; set; } = new List<User>();
+
+        public BagMovement? MovementSavedBeforeSave { get; set; } = null;
+
+        public Bag? BagCreatedBeforeSave { get; set; } = null;
+
+        public Guid? BagDeletedBeforeSave { get; set; } = null;
+
+        public int Conflicts { get; set; } = 0;
+
+        public BagMovement? MovementSavedAfterBalancesRead { get; set; } = null;
+
+        public Bag? BagCreatedAfterCount { get; set; } = null;
+
+        public int UserRowVersion { get; set; } = 0;
+    }
+
     private readonly List<Bag> preparedBags = new List<Bag>();
     private readonly List<BagMovement> preparedMovements = new List<BagMovement>();
     private readonly List<Bag> preparedDeletions = new List<Bag>();
@@ -19,50 +49,87 @@ public class FakeBagRepository : IBagRepository, ITransactionalFakeRepository
     private readonly ReadCopies<User> readUsers = new ReadCopies<User>();
     private Action? concurrentChanges = null;
 
-    // La version de la ligne de l'utilisateur, comme xmin dans la vraie base : elle change quand une autre requête simulée
-    // enregistre un mouvement ou un sac. Le contrôle de la ligne échoue si elle a changé depuis sa lecture.
-    private int userRowVersion = 0;
+    // La version de la ligne de l'utilisateur lue par cette vue. Celle de la base (Store.UserRowVersion), comme xmin dans la vraie
+    // base, change quand une autre requête simulée enregistre un mouvement ou un sac. Le contrôle de la ligne échoue si elle a
+    // changé depuis sa lecture.
     private int? userRowVersionAtRead = null;
 
     // Ce que la fausse base contient. La liste des comptes peut être celle du faux dépôt des comptes, où l'inscription écrit.
-    public List<User> SavedUsers { get; }
-    public List<Bag> SavedBags { get; } = new List<Bag>();
-    public List<BagMovement> SavedMovements { get; } = new List<BagMovement>();
+    public List<User> SavedUsers => store.SavedUsers;
+    public List<Bag> SavedBags => store.SavedBags;
+    public List<BagMovement> SavedMovements => store.SavedMovements;
 
     // Ce que les tests vérifient : les comptes dont la ligne a été réécrite par un enregistrement réussi.
-    public List<User> CommittedUserChecks { get; } = new List<User>();
+    public List<User> CommittedUserChecks => store.CommittedUserChecks;
 
     // Simule une autre requête qui enregistre ce mouvement juste avant l'enregistrement d'un déplacement ou d'une création :
     // elle a réécrit la ligne de l'utilisateur, dont la version a changé.
-    public BagMovement? MovementSavedBeforeSave { get; set; } = null;
+    public BagMovement? MovementSavedBeforeSave
+    {
+        get => store.MovementSavedBeforeSave;
+        set => store.MovementSavedBeforeSave = value;
+    }
 
     // Simule une autre requête qui crée ce sac juste avant l'enregistrement d'un déplacement ou d'une création.
-    public Bag? BagCreatedBeforeSave { get; set; } = null;
+    public Bag? BagCreatedBeforeSave
+    {
+        get => store.BagCreatedBeforeSave;
+        set => store.BagCreatedBeforeSave = value;
+    }
 
     // Simule une autre requête qui supprime ce sac juste avant le prochain enregistrement qui écrit quelque chose.
-    public Guid? BagDeletedBeforeSave { get; set; } = null;
+    public Guid? BagDeletedBeforeSave
+    {
+        get => store.BagDeletedBeforeSave;
+        set => store.BagDeletedBeforeSave = value;
+    }
 
     // Simule d'autres requêtes qui écrivent les mêmes lignes juste avant chaque enregistrement : un conflit chacune.
-    public int Conflicts { get; set; } = 0;
+    public int Conflicts
+    {
+        get => store.Conflicts;
+        set => store.Conflicts = value;
+    }
 
     // Simule une autre requête qui enregistre ce mouvement juste après la lecture des soldes : les soldes lus sont déjà anciens,
     // et la ligne de l'utilisateur change de version.
-    public BagMovement? MovementSavedAfterBalancesRead { get; set; } = null;
+    public BagMovement? MovementSavedAfterBalancesRead
+    {
+        get => store.MovementSavedAfterBalancesRead;
+        set => store.MovementSavedAfterBalancesRead = value;
+    }
 
     // Simule une autre requête qui crée ce sac juste après le compte des sacs : le nombre lu est déjà ancien,
     // et la ligne de l'utilisateur change de version.
-    public Bag? BagCreatedAfterCount { get; set; } = null;
-
-    // Crée une fausse base sans compte.
-    public FakeBagRepository()
+    public Bag? BagCreatedAfterCount
     {
-        SavedUsers = new List<User>();
+        get => store.BagCreatedAfterCount;
+        set => store.BagCreatedAfterCount = value;
     }
 
-    // Crée une fausse base qui partage cette liste de comptes, par exemple avec le faux dépôt des comptes.
-    public FakeBagRepository(List<User> savedUsers)
+    // Crée une fausse base sans compte, et sa première vue.
+    public FakeBagRepository()
+        : this(new Store())
     {
-        SavedUsers = savedUsers;
+    }
+
+    // Crée une fausse base qui partage cette liste de comptes, par exemple avec le faux dépôt des comptes, et sa première vue.
+    public FakeBagRepository(List<User> savedUsers)
+        : this(new Store { SavedUsers = savedUsers })
+    {
+    }
+
+    // Crée une vue sur cette fausse base.
+    private FakeBagRepository(Store store)
+    {
+        this.store = store;
+        pendingChangesLock = store.Gate;
+    }
+
+    // Crée une autre vue sur la même fausse base, avec ses propres changements en attente.
+    public FakeBagRepository CreateView()
+    {
+        return new FakeBagRepository(store);
     }
 
     // Donne les sacs gardés pour cet utilisateur.
@@ -109,7 +176,7 @@ public class FakeBagRepository : IBagRepository, ITransactionalFakeRepository
             {
                 BagCreatedAfterCount = null;
                 SavedBags.Add(createdBag);
-                userRowVersion = userRowVersion + 1;
+                store.UserRowVersion = store.UserRowVersion + 1;
             }
 
             return Task.FromResult(count);
@@ -133,7 +200,7 @@ public class FakeBagRepository : IBagRepository, ITransactionalFakeRepository
             {
                 MovementSavedAfterBalancesRead = null;
                 SavedMovements.Add(savedMovement);
-                userRowVersion = userRowVersion + 1;
+                store.UserRowVersion = store.UserRowVersion + 1;
             }
 
             return Task.FromResult(balances);
@@ -189,7 +256,7 @@ public class FakeBagRepository : IBagRepository, ITransactionalFakeRepository
     {
         lock (pendingChangesLock)
         {
-            userRowVersionAtRead = userRowVersion;
+            userRowVersionAtRead = store.UserRowVersion;
             var user = SavedUsers.SingleOrDefault(saved => saved.Id == userId);
 
             // Une transaction annulée remet aussi le compte comme il était, par exemple le dernier mois des suggestions.
@@ -264,7 +331,7 @@ public class FakeBagRepository : IBagRepository, ITransactionalFakeRepository
                 || changedBag != null;
 
             // Le contrôle de la ligne de l'utilisateur échoue si une autre requête l'a écrite depuis sa lecture.
-            if (isUserWritten && userRowVersionAtRead != userRowVersion)
+            if (isUserWritten && userRowVersionAtRead != store.UserRowVersion)
             {
                 return true;
             }

@@ -7,50 +7,98 @@ namespace WalletFlow.Tests.Fakes;
 // Remplace la vraie base dans les tests : garde les demandes de support et leurs réponses en mémoire. Ce qui est préparé
 // n'est gardé qu'avec les autres changements (voir FakeDatabaseUnitOfWork). La ligne de l'utilisateur a une version, comme
 // xmin dans la vraie base : son contrôle échoue si une autre requête l'a écrite depuis sa lecture. Les vraies requêtes SQL
-// sont testées sur la vraie base (SupportRequestRepositoryTests).
+// sont testées sur la vraie base (SupportRequestRepositoryTests). Chaque vue (voir CreateView) a ses propres changements en attente, comme un DbContext, sur la même fausse base.
 public class FakeSupportRequestRepository : ISupportRequestRepository, ITransactionalFakeRepository
 {
     public const string FailureDetail = "detail-technique-de-la-panne-du-support";
 
-    private readonly object pendingChangesLock = new object();
+    private readonly Store store;
+    private readonly object pendingChangesLock;
+
+    // La fausse base, commune à toutes les vues : ce qui est enregistré, la version de la ligne de l'utilisateur, ce que les tests vérifient, et la panne et les requêtes simulées.
+    private sealed class Store
+    {
+        public object Gate { get; } = new object();
+
+        public List<User> SavedUsers { get; set; } = new List<User>();
+
+        public List<SupportRequest> SavedRequests { get; set; } = new List<SupportRequest>();
+
+        public List<SupportResponse> SavedResponses { get; set; } = new List<SupportResponse>();
+
+        public List<User> CommittedUserChecks { get; set; } = new List<User>();
+
+        public SupportRequest? RequestSavedAfterCount { get; set; } = null;
+
+        public int Conflicts { get; set; } = 0;
+
+        public bool IsDown { get; set; } = false;
+
+        public int UserRowVersion { get; set; } = 0;
+    }
+
     private readonly List<SupportRequest> preparedRequests = new List<SupportRequest>();
     private readonly List<User> checkedUsers = new List<User>();
     private readonly ReadCopies<User> readUsers = new ReadCopies<User>();
     private Action? concurrentChanges = null;
 
-    // La version de la ligne de l'utilisateur, comme xmin dans la vraie base : elle change à chaque enregistrement qui écrit
-    // cette ligne, et quand une autre requête simulée enregistre une demande.
-    private int userRowVersion = 0;
+    // La version de la ligne de l'utilisateur lue par cette vue. Celle de la base (Store.UserRowVersion), comme xmin dans la vraie
+    // base, change à chaque enregistrement qui écrit cette ligne, et quand une autre requête simulée enregistre une demande.
     private int? userRowVersionAtRead = null;
 
     // Ce que la fausse base contient.
-    public List<User> SavedUsers { get; }
-    public List<SupportRequest> SavedRequests { get; } = new List<SupportRequest>();
-    public List<SupportResponse> SavedResponses { get; } = new List<SupportResponse>();
+    public List<User> SavedUsers => store.SavedUsers;
+    public List<SupportRequest> SavedRequests => store.SavedRequests;
+    public List<SupportResponse> SavedResponses => store.SavedResponses;
 
     // Ce que les tests vérifient : les comptes dont la ligne a été réécrite par un enregistrement réussi.
-    public List<User> CommittedUserChecks { get; } = new List<User>();
+    public List<User> CommittedUserChecks => store.CommittedUserChecks;
 
     // Simule une autre requête qui enregistre cette demande juste après le compte des demandes : le nombre lu est déjà
     // ancien, et la ligne de l'utilisateur change de version.
-    public SupportRequest? RequestSavedAfterCount { get; set; } = null;
-
-    // Simule d'autres requêtes qui écrivent les mêmes lignes juste avant chaque enregistrement : un conflit chacune.
-    public int Conflicts { get; set; } = 0;
-
-    // Simule une panne de la base : lire ou écrire les demandes échoue.
-    public bool IsDown { get; set; } = false;
-
-    // Crée une fausse base sans compte.
-    public FakeSupportRequestRepository()
+    public SupportRequest? RequestSavedAfterCount
     {
-        SavedUsers = new List<User>();
+        get => store.RequestSavedAfterCount;
+        set => store.RequestSavedAfterCount = value;
     }
 
-    // Crée une fausse base qui partage cette liste de comptes, par exemple avec le faux dépôt des comptes.
-    public FakeSupportRequestRepository(List<User> savedUsers)
+    // Simule d'autres requêtes qui écrivent les mêmes lignes juste avant chaque enregistrement : un conflit chacune.
+    public int Conflicts
     {
-        SavedUsers = savedUsers;
+        get => store.Conflicts;
+        set => store.Conflicts = value;
+    }
+
+    // Simule une panne de la base : lire ou écrire les demandes échoue.
+    public bool IsDown
+    {
+        get => store.IsDown;
+        set => store.IsDown = value;
+    }
+
+    // Crée une fausse base sans compte, et sa première vue.
+    public FakeSupportRequestRepository()
+        : this(new Store())
+    {
+    }
+
+    // Crée une fausse base qui partage cette liste de comptes, par exemple avec le faux dépôt des comptes, et sa première vue.
+    public FakeSupportRequestRepository(List<User> savedUsers)
+        : this(new Store { SavedUsers = savedUsers })
+    {
+    }
+
+    // Crée une vue sur cette fausse base.
+    private FakeSupportRequestRepository(Store store)
+    {
+        this.store = store;
+        pendingChangesLock = store.Gate;
+    }
+
+    // Crée une autre vue sur la même fausse base, avec ses propres changements en attente.
+    public FakeSupportRequestRepository CreateView()
+    {
+        return new FakeSupportRequestRepository(store);
     }
 
     // Lit la ligne de l'utilisateur, et note sa version.
@@ -60,7 +108,7 @@ public class FakeSupportRequestRepository : ISupportRequestRepository, ITransact
 
         lock (pendingChangesLock)
         {
-            userRowVersionAtRead = userRowVersion;
+            userRowVersionAtRead = store.UserRowVersion;
             var user = SavedUsers.SingleOrDefault(saved => saved.Id == userId);
 
             if (user != null)
@@ -95,7 +143,7 @@ public class FakeSupportRequestRepository : ISupportRequestRepository, ITransact
             {
                 RequestSavedAfterCount = null;
                 SavedRequests.Add(otherRequest);
-                userRowVersion = userRowVersion + 1;
+                store.UserRowVersion = store.UserRowVersion + 1;
             }
 
             return Task.FromResult(count);
@@ -218,7 +266,7 @@ public class FakeSupportRequestRepository : ISupportRequestRepository, ITransact
             var isWriting = preparedRequests.Count > 0 || isUserWritten;
 
             // Le contrôle de la ligne de l'utilisateur échoue si une autre requête l'a écrite depuis sa lecture.
-            if (isUserWritten && userRowVersionAtRead != userRowVersion)
+            if (isUserWritten && userRowVersionAtRead != store.UserRowVersion)
             {
                 return true;
             }
@@ -273,7 +321,7 @@ public class FakeSupportRequestRepository : ISupportRequestRepository, ITransact
             if (checkedUsers.Count > 0)
             {
                 CommittedUserChecks.AddRange(checkedUsers);
-                userRowVersion = userRowVersion + 1;
+                store.UserRowVersion = store.UserRowVersion + 1;
             }
 
             ClearTracking();
