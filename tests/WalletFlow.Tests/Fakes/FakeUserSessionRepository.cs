@@ -5,11 +5,40 @@ namespace WalletFlow.Tests.Fakes;
 
 // Remplace la vraie base dans les tests : garde les sessions et les appareils en mémoire.
 // Les sessions et les appareils préparés ne sont gardés qu'avec les autres changements (voir FakeDatabaseUnitOfWork).
+// Chaque vue (voir CreateView) a ses propres changements en attente, comme un DbContext, sur la même fausse base.
 public class FakeUserSessionRepository : IUserSessionRepository, ITransactionalFakeRepository
 {
     public const string FailureDetail = "detail-technique-de-la-panne-des-sessions";
 
-    private readonly object pendingChangesLock = new object();
+    private readonly Store store;
+    private readonly object pendingChangesLock;
+
+    // La fausse base, commune à toutes les vues : ce qui est enregistré, ce que les tests vérifient, et les pannes et conflits simulés.
+    private sealed class Store
+    {
+        public object Gate { get; } = new object();
+
+        public List<UserSession> SavedSessions { get; set; } = new List<UserSession>();
+
+        public List<Device> SavedDevices { get; set; } = new List<Device>();
+
+        public List<DateTime> CleanupDates { get; set; } = new List<DateTime>();
+
+        public List<DateTime> CreationCleanupDates { get; set; } = new List<DateTime>();
+
+        public List<DateTime> DeviceCleanupDates { get; set; } = new List<DateTime>();
+
+        public int SessionSearchCount { get; set; } = 0;
+
+        public bool IsDown { get; set; } = false;
+
+        public bool FailsWhenClosingAllSessions { get; set; } = false;
+
+        public bool FailsDuringCleanup { get; set; } = false;
+
+        public int LoginConflicts { get; set; } = 0;
+    }
+
     private readonly List<UserSession> preparedSessions = new List<UserSession>();
     private readonly List<Device> preparedDevices = new List<Device>();
     private readonly List<Guid> accountsLosingAllSessions = new List<Guid>();
@@ -18,26 +47,65 @@ public class FakeUserSessionRepository : IUserSessionRepository, ITransactionalF
     private readonly List<(Device Device, DateTime UsedAt)> preparedDeviceUses = new List<(Device Device, DateTime UsedAt)>();
 
     // Ce que la fausse base contient.
-    public List<UserSession> SavedSessions { get; } = new List<UserSession>();
-    public List<Device> SavedDevices { get; } = new List<Device>();
+    public List<UserSession> SavedSessions => store.SavedSessions;
+    public List<Device> SavedDevices => store.SavedDevices;
 
     // Ce que les tests vérifient : les passages du nettoyage et les recherches de session.
-    public List<DateTime> CleanupDates { get; } = new List<DateTime>();
-    public List<DateTime> CreationCleanupDates { get; } = new List<DateTime>();
-    public List<DateTime> DeviceCleanupDates { get; } = new List<DateTime>();
-    public int SessionSearchCount { get; private set; } = 0;
+    public List<DateTime> CleanupDates => store.CleanupDates;
+    public List<DateTime> CreationCleanupDates => store.CreationCleanupDates;
+    public List<DateTime> DeviceCleanupDates => store.DeviceCleanupDates;
+    public int SessionSearchCount
+    {
+        get => store.SessionSearchCount;
+        private set => store.SessionSearchCount = value;
+    }
 
     // Simule une panne de la base : enregistrer une connexion ou chercher une session échoue.
-    public bool IsDown { get; set; } = false;
+    public bool IsDown
+    {
+        get => store.IsDown;
+        set => store.IsDown = value;
+    }
 
     // Simule une panne de la base au moment de fermer toutes les sessions d'un compte.
-    public bool FailsWhenClosingAllSessions { get; set; } = false;
+    public bool FailsWhenClosingAllSessions
+    {
+        get => store.FailsWhenClosingAllSessions;
+        set => store.FailsWhenClosingAllSessions = value;
+    }
 
     // Simule une panne de la base pendant l'effacement des sessions expirées.
-    public bool FailsDuringCleanup { get; set; } = false;
+    public bool FailsDuringCleanup
+    {
+        get => store.FailsDuringCleanup;
+        set => store.FailsDuringCleanup = value;
+    }
 
     // Simule d'autres requêtes qui changent le compte juste avant l'enregistrement de la connexion : un conflit chacune.
-    public int LoginConflicts { get; set; } = 0;
+    public int LoginConflicts
+    {
+        get => store.LoginConflicts;
+        set => store.LoginConflicts = value;
+    }
+
+    // Crée une fausse base vide, et sa première vue.
+    public FakeUserSessionRepository()
+        : this(new Store())
+    {
+    }
+
+    // Crée une vue sur cette fausse base.
+    private FakeUserSessionRepository(Store store)
+    {
+        this.store = store;
+        pendingChangesLock = store.Gate;
+    }
+
+    // Crée une autre vue sur la même fausse base, avec ses propres changements en attente.
+    public FakeUserSessionRepository CreateView()
+    {
+        return new FakeUserSessionRepository(store);
+    }
 
     // Garde la session de côté : elle ne sera gardée qu'avec les autres changements.
     public void PrepareSession(UserSession session)

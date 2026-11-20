@@ -7,11 +7,68 @@ namespace WalletFlow.Tests.Fakes;
 // Remplace la vraie base dans les tests : garde les comptes et leurs liens en mémoire.
 // Comme EF Core, il rend les objets gardés, que les règles des entités changent directement. Il garde aussi une copie
 // de chaque objet lu : si l'enregistrement échoue, tout reprend ses valeurs, comme après une transaction annulée.
+// Chaque vue (voir CreateView) a ses propres changements en attente, comme un DbContext, sur la même fausse base.
 public class FakeUserAccountRepository : IUserAccountRepository, ITransactionalFakeRepository
 {
     public const string FailureDetail = "detail-technique-de-la-panne-simulee";
 
-    private readonly object pendingChangesLock = new object();
+    private readonly Store store;
+    private readonly object pendingChangesLock;
+
+    // La fausse base, commune à toutes les vues : ce qui est enregistré, ce que les tests vérifient, et les pannes et requêtes simulées.
+    private sealed class Store
+    {
+        public object Gate { get; } = new object();
+
+        public List<User> SavedUsers { get; set; } = new List<User>();
+
+        public List<Category> SavedCategories { get; set; } = new List<Category>();
+
+        public List<EmailToken> SavedEmailTokens { get; set; } = new List<EmailToken>();
+
+        public List<DateTime> CleanupDates { get; set; } = new List<DateTime>();
+
+        public int EmailSearchCount { get; set; } = 0;
+
+        public int LoginCounterSaveCount { get; set; } = 0;
+
+        public bool IsDown { get; set; } = false;
+
+        public bool FailsDuringCleanup { get; set; } = false;
+
+        public bool FailsWhenReadingLinks { get; set; } = false;
+
+        public Action<Guid>? BeforeFindById { get; set; } = null;
+
+        public Action? BeforeListingErasures { get; set; } = null;
+
+        public User? ConcurrentAccount { get; set; } = null;
+
+        public bool ConfirmBeforePasswordChange { get; set; } = false;
+
+        public bool ReplaceTokenBeforeConfirmation { get; set; } = false;
+
+        public bool UseLinkBeforeSave { get; set; } = false;
+
+        public int LinkUseConflicts { get; set; } = 0;
+
+        public int LoginCounterConflicts { get; set; } = 0;
+
+        public int SupportLinkTryConflicts { get; set; } = 0;
+
+        public int? SearchesBeforeAccountDisappears { get; set; } = null;
+
+        public bool DeletionCancelledBeforeCheckedSave { get; set; } = false;
+
+        public User? AccountTakingNewEmailBeforeSave { get; set; } = null;
+
+        public string? PasswordChangedBeforeCheckedSave { get; set; } = null;
+
+        public long? AuthenticatorStepUsedBeforeSave { get; set; } = null;
+
+        public int ChannelChangeConflicts { get; set; } = 0;
+    }
+
     private readonly ReadCopies<User> readAccounts = new ReadCopies<User>();
     private readonly ReadCopies<EmailToken> readTokens = new ReadCopies<EmailToken>();
     private readonly List<User> accountsUnderCheck = new List<User>();
@@ -22,75 +79,174 @@ public class FakeUserAccountRepository : IUserAccountRepository, ITransactionalF
     private Action? concurrentChanges = null;
 
     // Ce que la fausse base contient.
-    public List<User> SavedUsers { get; } = new List<User>();
-    public List<Category> SavedCategories { get; } = new List<Category>();
-    public List<EmailToken> SavedEmailTokens { get; } = new List<EmailToken>();
+    public List<User> SavedUsers => store.SavedUsers;
+    public List<Category> SavedCategories => store.SavedCategories;
+    public List<EmailToken> SavedEmailTokens => store.SavedEmailTokens;
 
     // Ce que les tests vérifient : les passages du nettoyage, les recherches par adresse et les essais enregistrés.
-    public List<DateTime> CleanupDates { get; } = new List<DateTime>();
-    public int EmailSearchCount { get; private set; } = 0;
-    public int LoginCounterSaveCount { get; private set; } = 0;
+    public List<DateTime> CleanupDates => store.CleanupDates;
+    public int EmailSearchCount
+    {
+        get => store.EmailSearchCount;
+        private set => store.EmailSearchCount = value;
+    }
+    public int LoginCounterSaveCount
+    {
+        get => store.LoginCounterSaveCount;
+        private set => store.LoginCounterSaveCount = value;
+    }
 
     // Simule une panne de la base : chaque recherche d'adresse échoue avec ce détail technique.
-    public bool IsDown { get; set; } = false;
+    public bool IsDown
+    {
+        get => store.IsDown;
+        set => store.IsDown = value;
+    }
 
     // Simule une panne de la base pendant l'effacement des comptes non confirmés.
-    public bool FailsDuringCleanup { get; set; } = false;
+    public bool FailsDuringCleanup
+    {
+        get => store.FailsDuringCleanup;
+        set => store.FailsDuringCleanup = value;
+    }
 
     // Simule une panne de la base au moment de lire un lien.
-    public bool FailsWhenReadingLinks { get; set; } = false;
+    public bool FailsWhenReadingLinks
+    {
+        get => store.FailsWhenReadingLinks;
+        set => store.FailsWhenReadingLinks = value;
+    }
 
     // Agit juste avant chaque lecture d'un compte par son identifiant : simule une panne de la base pour ce compte, ou l'arrêt de
     // l'API pendant la lecture.
-    public Action<Guid>? BeforeFindById { get; set; } = null;
+    public Action<Guid>? BeforeFindById
+    {
+        get => store.BeforeFindById;
+        set => store.BeforeFindById = value;
+    }
 
     // Agit juste avant la liste des comptes à effacer : simule une panne de la base, ou l'arrêt de l'API pendant la lecture.
-    public Action? BeforeListingErasures { get; set; } = null;
+    public Action? BeforeListingErasures
+    {
+        get => store.BeforeListingErasures;
+        set => store.BeforeListingErasures = value;
+    }
 
     // Les réglages qui suivent simulent une autre requête qui agit juste avant l'enregistrement de celle du test.
 
     // Une autre inscription prend la même adresse juste après la recherche.
-    public User? ConcurrentAccount { get; set; } = null;
+    public User? ConcurrentAccount
+    {
+        get => store.ConcurrentAccount;
+        set => store.ConcurrentAccount = value;
+    }
 
     // Une confirmation arrive juste avant le remplacement du mot de passe.
-    public bool ConfirmBeforePasswordChange { get; set; } = false;
+    public bool ConfirmBeforePasswordChange
+    {
+        get => store.ConfirmBeforePasswordChange;
+        set => store.ConfirmBeforePasswordChange = value;
+    }
 
     // Une nouvelle inscription remplace le lien juste avant la confirmation.
-    public bool ReplaceTokenBeforeConfirmation { get; set; } = false;
+    public bool ReplaceTokenBeforeConfirmation
+    {
+        get => store.ReplaceTokenBeforeConfirmation;
+        set => store.ReplaceTokenBeforeConfirmation = value;
+    }
 
     // Une autre requête utilise le même lien juste avant l'enregistrement.
-    public bool UseLinkBeforeSave { get; set; } = false;
+    public bool UseLinkBeforeSave
+    {
+        get => store.UseLinkBeforeSave;
+        set => store.UseLinkBeforeSave = value;
+    }
 
     // D'autres requêtes changent le compte juste avant l'utilisation d'un lien de déblocage ou de récupération : un conflit chacune.
-    public int LinkUseConflicts { get; set; } = 0;
+    public int LinkUseConflicts
+    {
+        get => store.LinkUseConflicts;
+        set => store.LinkUseConflicts = value;
+    }
 
     // D'autres requêtes comptent leur essai juste avant l'enregistrement : un conflit chacune.
-    public int LoginCounterConflicts { get; set; } = 0;
+    public int LoginCounterConflicts
+    {
+        get => store.LoginCounterConflicts;
+        set => store.LoginCounterConflicts = value;
+    }
 
     // D'autres requêtes comptent leur propre essai du mot de passe sur le même lien du support juste avant l'enregistrement :
     // un conflit chacune, et un essai de plus sur le lien (DD §4.2).
-    public int SupportLinkTryConflicts { get; set; } = 0;
+    public int SupportLinkTryConflicts
+    {
+        get => store.SupportLinkTryConflicts;
+        set => store.SupportLinkTryConflicts = value;
+    }
 
     // Le compte est effacé pendant la connexion : au-delà de ce nombre de recherches par identifiant, il n'existe plus.
-    public int? SearchesBeforeAccountDisappears { get; set; } = null;
+    public int? SearchesBeforeAccountDisappears
+    {
+        get => store.SearchesBeforeAccountDisappears;
+        set => store.SearchesBeforeAccountDisappears = value;
+    }
 
     // Une connexion annule la suppression d'un compte que cet enregistrement contrôle, ou efface, juste avant lui.
-    public bool DeletionCancelledBeforeCheckedSave { get; set; } = false;
+    public bool DeletionCancelledBeforeCheckedSave
+    {
+        get => store.DeletionCancelledBeforeCheckedSave;
+        set => store.DeletionCancelledBeforeCheckedSave = value;
+    }
 
     // Un autre compte prend la nouvelle adresse juste avant l'enregistrement d'un changement d'adresse.
-    public User? AccountTakingNewEmailBeforeSave { get; set; } = null;
+    public User? AccountTakingNewEmailBeforeSave
+    {
+        get => store.AccountTakingNewEmailBeforeSave;
+        set => store.AccountTakingNewEmailBeforeSave = value;
+    }
 
     // Une récupération donne ce nouveau mot de passe à un compte juste avant un enregistrement qui le contrôle
     // (voir PrepareUnchangedCheck). Un compte qui n'est ni changé ni contrôlé n'est pas réécrit : il ne voit pas ce conflit.
-    public string? PasswordChangedBeforeCheckedSave { get; set; } = null;
+    public string? PasswordChangedBeforeCheckedSave
+    {
+        get => store.PasswordChangedBeforeCheckedSave;
+        set => store.PasswordChangedBeforeCheckedSave = value;
+    }
 
     // Une autre requête se sert du même code de l'application, de ce pas de temps, juste avant un enregistrement qui contrôle le
     // compte, ou qui note ou oublie le pas de son dernier code : la version du compte a changé.
-    public long? AuthenticatorStepUsedBeforeSave { get; set; } = null;
+    public long? AuthenticatorStepUsedBeforeSave
+    {
+        get => store.AuthenticatorStepUsedBeforeSave;
+        set => store.AuthenticatorStepUsedBeforeSave = value;
+    }
 
     // Une autre requête change le compte dont cet enregistrement change le canal des alertes : la version du compte a changé.
     // Le nombre d'essais qui verront ce conflit.
-    public int ChannelChangeConflicts { get; set; } = 0;
+    public int ChannelChangeConflicts
+    {
+        get => store.ChannelChangeConflicts;
+        set => store.ChannelChangeConflicts = value;
+    }
+
+    // Crée une fausse base vide, et sa première vue.
+    public FakeUserAccountRepository()
+        : this(new Store())
+    {
+    }
+
+    // Crée une vue sur cette fausse base.
+    private FakeUserAccountRepository(Store store)
+    {
+        this.store = store;
+        pendingChangesLock = store.Gate;
+    }
+
+    // Crée une autre vue sur la même fausse base, avec ses propres changements en attente.
+    public FakeUserAccountRepository CreateView()
+    {
+        return new FakeUserAccountRepository(store);
+    }
 
     // Cherche en mémoire le compte qui utilise cette adresse.
     public Task<User?> FindByEmailAsync(string email, CancellationToken cancellationToken = default)
