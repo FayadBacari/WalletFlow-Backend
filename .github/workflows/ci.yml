@@ -40,7 +40,8 @@ jobs:
       postgres:
         image: postgres:18
         env:
-          POSTGRES_DB: walletflow
+          # La base des tests : les tests refusent toute base dont le nom ne finit pas par « _tests » (voir LocalTestDatabase).
+          POSTGRES_DB: walletflow_tests
           # Base jetable, joignable seulement depuis la machine de la vérification : aucun mot de passe n'est nécessaire.
           POSTGRES_HOST_AUTH_METHOD: trust
         ports:
@@ -56,7 +57,7 @@ jobs:
       # Les messages de dotnet en anglais, quelle que soit la machine : l'étape des paquets lit leur résultat.
       DOTNET_CLI_UI_LANGUAGE: en
       # Les tests C# utilisent cette base, avec le rôle de l'API (voir LocalTestDatabase).
-      WALLETFLOW_TEST_DATABASE: Host=localhost;Port=5432;Database=walletflow;Username=walletflow_app
+      WALLETFLOW_TEST_DATABASE: Host=localhost;Port=5432;Database=walletflow_tests;Username=walletflow_app
 
     steps:
       - name: Récupérer le code
@@ -68,10 +69,10 @@ jobs:
           dotnet-version: 10.0.x
 
       - name: Créer la base avec le script du MPD
-        run: psql -h localhost -U postgres -d walletflow -v ON_ERROR_STOP=1 -f database/001_create_walletflow_schema.sql
+        run: psql -h localhost -U postgres -d walletflow_tests -v ON_ERROR_STOP=1 -f database/001_create_walletflow_schema.sql
 
       - name: Lancer les tests SQL du script
-        run: psql -h localhost -U walletflow_app -d walletflow -v ON_ERROR_STOP=1 -f database/tests/test_001_create_walletflow_schema.sql
+        run: psql -h localhost -U walletflow_app -d walletflow_tests -v ON_ERROR_STOP=1 -f database/tests/test_001_create_walletflow_schema.sql
 
       - name: Restaurer les paquets avec leurs versions verrouillées
         run: dotnet restore --locked-mode
@@ -344,6 +345,18 @@ jobs:
             exit 1
           fi
           echo "Aucune exception imprévue pendant l'attaque."
+
+      # L'API coupe le chiffrement GSS de la connexion à la base (voir DatabaseConnectionString) : l'image, qui n'a pas Kerberos,
+      # n'écrit donc plus le faux message d'erreur de Npgsql sur libgssapi_krb5.
+      - name: Vérifier que le journal n'a aucun message sur Kerberos
+        if: success() || failure()
+        run: |
+          if docker logs walletflow 2>&1 | grep --quiet 'libgssapi'; then
+            echo "Npgsql a essayé le chiffrement GSS :"
+            docker logs walletflow 2>&1 | grep -B2 -A2 'libgssapi'
+            exit 1
+          fi
+          echo "Aucun message sur Kerberos au journal."
 
       - name: Afficher le journal de l'API en cas d'échec
         if: failure()

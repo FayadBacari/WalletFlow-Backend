@@ -20,6 +20,13 @@ public class ApiFactoryWithRealDatabase : WebApplicationFactory<Program>
     // Le prestataire bancaire est remplacé aussi : les tests n'appellent jamais une vraie banque.
     public FakeBankDataProvider BankProvider { get; } = new FakeBankDataProvider();
 
+    // Les clients de test parlent à l'API en HTTPS, comme le site : en HTTP simple, ses routes refusent toute requête (voir
+    // HttpsOnlyMiddleware).
+    public ApiFactoryWithRealDatabase()
+    {
+        ClientOptions.BaseAddress = new Uri("https://localhost");
+    }
+
     // Branche l'API sur la base de test avant son démarrage (nom imposé par le framework).
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {

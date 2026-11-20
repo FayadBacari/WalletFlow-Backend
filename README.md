@@ -125,16 +125,23 @@ Vérifier la base restaurée, puis y diriger la chaîne de connexion de l'API. L
 
 ## Tests et vérifications
 
+Les tests utilisent leur propre base, `walletflow_tests`, jamais la base de développement : ils y écrivent et y effacent des lignes. Elle se crée une fois :
+
+```bash
+createdb walletflow_tests
+PGDATABASE=walletflow_tests database/migrate.sh
+```
+
 Les tests SQL vérifient les contraintes, les déclencheurs, les cascades et les droits du script de la base. Ils tournent dans une seule transaction, annulée à la fin :
 
 ```bash
-psql -h localhost -U walletflow_app -d walletflow -v ON_ERROR_STOP=1 -f database/tests/test_001_create_walletflow_schema.sql
+psql -h localhost -U walletflow_app -d walletflow_tests -v ON_ERROR_STOP=1 -f database/tests/test_001_create_walletflow_schema.sql
 ```
 
-Les tests .NET comprennent des parcours de bout en bout et des courses de concurrence sur une vraie base PostgreSQL. Ils se connectent en `walletflow_app` à la base `walletflow` sur `localhost`, sans mot de passe (authentification `trust` en local). Pour une autre base ou avec un mot de passe, donner une chaîne de connexion complète :
+Les tests .NET comprennent des parcours de bout en bout et des courses de concurrence sur une vraie base PostgreSQL. Ils se connectent en `walletflow_app` à la base `walletflow_tests` sur `localhost`, sans mot de passe (authentification `trust` en local). Ils refusent toute base dont le nom ne finit pas par `_tests`. Pour une autre base des tests ou avec un mot de passe, donner une chaîne de connexion complète :
 
 ```bash
-export WALLETFLOW_TEST_DATABASE="Host=localhost;Port=5432;Database=walletflow;Username=walletflow_app;Password=<mot de passe>"
+export WALLETFLOW_TEST_DATABASE="Host=localhost;Port=5432;Database=walletflow_tests;Username=walletflow_app;Password=<mot de passe>"
 ```
 
 Puis lancer les mêmes vérifications que la CI :
@@ -146,7 +153,7 @@ dotnet format --verify-no-changes --no-restore
 dotnet test --no-build
 ```
 
-La CI construit aussi l'image Docker (`src/WalletFlow.Api/Dockerfile`) comme en production, vérifie qu'elle contient le fuseau horaire de Paris et qu'elle tourne avec un utilisateur sans droits, la scanne avec Trivy (failles connues et secrets oubliés), la démarre en mode production avec des secrets jetables, sonde `/health/live`, `/health/ready` et `/health/tasks`, puis attaque l'API en marche avec OWASP ZAP, route par route, d'après sa description OpenAPI. ZAP se connecte comme un administrateur jetable, avec sa double authentification (`.zap/session-admin.py`), et ses requêtes viennent d'adresses IP tirées au hasard : il atteint ainsi toutes les routes sauf la déconnexion, sans être arrêté par les limites de débit par adresse. Après l'attaque, la CI vérifie que la session a tenu et qu'aucune exception imprévue n'est arrivée. Le conteneur ne sert que du HTTP, sur le port 8080 : le HTTPS revient au proxy inverse placé devant lui.
+La CI construit aussi l'image Docker (`src/WalletFlow.Api/Dockerfile`) comme en production, vérifie qu'elle contient le fuseau horaire de Paris et qu'elle tourne avec un utilisateur sans droits, la scanne avec Trivy (failles connues et secrets oubliés), la démarre en mode production avec des secrets jetables, sonde `/health/live`, `/health/ready` et `/health/tasks`, puis attaque l'API en marche avec OWASP ZAP, route par route, d'après sa description OpenAPI. ZAP se connecte comme un administrateur jetable, avec sa double authentification (`.zap/session-admin.py`), et ses requêtes viennent d'adresses IP tirées au hasard : il atteint ainsi toutes les routes sauf la déconnexion, sans être arrêté par les limites de débit par adresse. Après l'attaque, la CI vérifie que la session a tenu, qu'aucune exception imprévue n'est arrivée, et que le journal n'a aucun message sur Kerberos (`libgssapi_krb5`). Le conteneur ne sert que du HTTP, sur le port 8080 : le HTTPS revient au proxy inverse placé devant lui.
 
 Chaque test nettoie les lignes qu'il écrit. Ses événements du journal de sécurité restent, rendus anonymes, car le rôle de l'application ne peut qu'ajouter des événements au journal.
 

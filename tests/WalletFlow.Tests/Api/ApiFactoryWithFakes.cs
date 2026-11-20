@@ -54,9 +54,12 @@ public class ApiFactoryWithFakes : WebApplicationFactory<Program>
 
     // Relie les faux accès à la fausse unité de travail, qui garde leurs changements ensemble.
     // Les catégories créées à l'inscription sont celles que le faux accès aux catégories lit, et les comptes inscrits
-    // sont ceux que le faux accès aux sacs lit.
+    // sont ceux que le faux accès aux sacs lit. Les clients de test parlent en HTTPS.
     public ApiFactoryWithFakes()
     {
+        // Les clients de test parlent à l'API en HTTPS, comme le site : en HTTP simple, ses routes refusent toute requête (voir
+        // HttpsOnlyMiddleware). Un test d'HTTP le demande lui-même.
+        ClientOptions.BaseAddress = new Uri("https://localhost");
         CategoryRepository = new FakeCategoryRepository(AccountRepository.SavedCategories);
         TransactionRepository = new FakeTransactionRepository(BankRepository, CategoryRepository);
         BagRepository = new FakeBagRepository(AccountRepository.SavedUsers);
