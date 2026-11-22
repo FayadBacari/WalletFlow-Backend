@@ -136,21 +136,10 @@ public class AccountLoginEndpointTests
         SecurityHeadersAssertions.AssertExactSecurityHeaders(response);
     }
 
-    // Lit tout ce qui compte dans une réponse d'erreur : son code, son titre et sa forme.
-    private static async Task<string> DescribeErrorWithoutTraceIdAsync(HttpResponseMessage response)
+    // Lit une réponse d'erreur telle que le visiteur la reçoit : code, type et corps, au caractère près.
+    private static async Task<string> DescribeErrorAsync(HttpResponseMessage response)
     {
-        var jsonDocument = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
-        var description = (int)response.StatusCode + "|";
-
-        foreach (var property in jsonDocument.RootElement.EnumerateObject())
-        {
-            if (property.Name != "traceId")
-            {
-                description = description + property.Name + "=" + property.Value + "|";
-            }
-        }
-
-        return description;
+        return (int)response.StatusCode + " " + response.Content.Headers.ContentType + " " + await response.Content.ReadAsStringAsync();
     }
 
     // Une adresse inconnue, un mauvais mot de passe et un compte bloqué doivent donner exactement la même réponse.
@@ -166,9 +155,9 @@ public class AccountLoginEndpointTests
         var wrongPasswordResponse = await SendLoginRequestAsync(browserClient, "compte-ouvert@exemple.test", WrongPassword);
         var lockedAccountResponse = await SendLoginRequestAsync(browserClient, "compte-bloque@exemple.test", ValidPassword);
 
-        var unknownAddressDescription = await DescribeErrorWithoutTraceIdAsync(unknownAddressResponse);
-        Assert.Equal(unknownAddressDescription, await DescribeErrorWithoutTraceIdAsync(wrongPasswordResponse));
-        Assert.Equal(unknownAddressDescription, await DescribeErrorWithoutTraceIdAsync(lockedAccountResponse));
+        var unknownAddressDescription = await DescribeErrorAsync(unknownAddressResponse);
+        Assert.Equal(unknownAddressDescription, await DescribeErrorAsync(wrongPasswordResponse));
+        Assert.Equal(unknownAddressDescription, await DescribeErrorAsync(lockedAccountResponse));
     }
 
     [Fact]

@@ -20,6 +20,9 @@ public static class ApiErrorConfiguration
     public const string CsrfRefusalMessage = "Le jeton anti-CSRF manque ou n'est pas valide. Demande un nouveau jeton, puis réessaie.";
     public const string HttpsRequiredMessage = "L'API ne répond qu'en HTTPS. Envoie la requête à son adresse en https://.";
 
+    // Le nom de l'extension qu'ASP.NET Core ajoute à toute erreur.
+    private const string TraceIdKey = "traceId";
+
     // Remplace les messages d'ASP.NET Core pour une valeur illisible, comme un nombre écrit en lettres dans l'adresse.
     // Ceux d'origine sont en anglais, et recopient la valeur envoyée par le visiteur : chacun devient le même message en français.
     public static void TranslateBindingMessages(DefaultModelBindingMessageProvider messages)
@@ -39,8 +42,11 @@ public static class ApiErrorConfiguration
 
     // Prépare toute erreur avant son envoi : un titre en français, un lien qui décrit son code, et des clés de champ écrites
     // comme dans le JSON. Les erreurs des règles de validation et celles des contrôleurs passent toutes les deux par ici.
+    // Le traceId qu'ASP.NET Core ajoute est retiré : ce code tiré au hasard n'est écrit dans aucun journal, il ne sert donc à
+    // retrouver aucune panne, et OWASP ZAP y prenait parfois une suite de chiffres pour un numéro de carte bancaire.
     public static void PrepareProblem(ProblemDetailsContext context)
     {
+        context.ProblemDetails.Extensions.Remove(TraceIdKey);
         TranslateTitle(context.ProblemDetails);
         context.ProblemDetails.Type ??= FindMissingType(context.ProblemDetails.Status);
 
