@@ -2,7 +2,6 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
-using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using Microsoft.AspNetCore.Mvc.Infrastructure;
 using Microsoft.AspNetCore.Routing;
@@ -396,18 +395,10 @@ public class ForeignIdRequestTests
         return view.ToString();
     }
 
-    // Lit la réponse telle que le visiteur la reçoit : code, type et corps, sans le traceId propre à chaque requête.
+    // Lit la réponse telle que le visiteur la reçoit : code, type et corps, au caractère près.
     private static async Task<string> ReadVisibleAnswerAsync(HttpResponseMessage response)
     {
-        var body = await response.Content.ReadAsStringAsync();
-
-        if (body.Length > 0 && JsonNode.Parse(body) is JsonObject json)
-        {
-            json.Remove("traceId");
-            body = json.ToJsonString();
-        }
-
-        return (int)response.StatusCode + " " + response.Content.Headers.ContentType + " " + body;
+        return (int)response.StatusCode + " " + response.Content.Headers.ContentType + " " + await response.Content.ReadAsStringAsync();
     }
 
     // Compte les accès refusés notés au journal pour ce compte (SS §11).

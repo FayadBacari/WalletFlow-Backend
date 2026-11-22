@@ -76,6 +76,20 @@ public static class ResponseContractCheck
         return documentedCodes;
     }
 
+    // Dit si une réponse est une erreur au format « problem details ».
+    private static bool IsProblem(HttpResponse response)
+    {
+        return response.ContentType?.StartsWith("application/problem+json", StringComparison.Ordinal) == true;
+    }
+
+    // Dit si le corps JSON gardé en mémoire porte un traceId.
+    private static bool HasTraceId(MemoryStream buffer)
+    {
+        using var body = JsonDocument.Parse(buffer.ToArray());
+
+        return body.RootElement.ValueKind == JsonValueKind.Object && body.RootElement.TryGetProperty("traceId", out _);
+    }
+
     // Garde la réponse en mémoire, puis la vérifie avant de l'envoyer.
     private sealed class CheckStartupFilter : IStartupFilter
     {
@@ -129,6 +143,14 @@ public static class ResponseContractCheck
                     throw new InvalidOperationException(
                         "La réponse " + context.Response.StatusCode + " de " + key + " n'est pas décrite dans OpenAPI.");
                 }
+            }
+
+            // Aucune erreur, sur aucune adresse, ne porte de traceId (voir ApiErrorConfiguration.PrepareProblem).
+            if (IsProblem(context.Response) && HasTraceId(buffer))
+            {
+                throw new InvalidOperationException(
+                    "La réponse " + context.Response.StatusCode + " de " + context.Request.Method + " " + context.Request.Path
+                    + " porte un traceId.");
             }
 
             buffer.Position = 0;
